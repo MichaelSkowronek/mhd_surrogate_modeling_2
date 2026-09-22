@@ -12,11 +12,6 @@ dependencies = [
     "matplotlib>=3.9",
 ]
 
-[dependency-groups]
-dev = [
-    "ipykernel>=6.29",
-]
-
 [build-system]
 requires = ["uv_build>=0.12.17,<0.13.0"]
 build-backend = "uv_build"
