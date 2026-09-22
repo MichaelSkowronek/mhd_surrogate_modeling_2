@@ -216,3 +216,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project data (large DNS simulation outputs, kept out of git)
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+*.npy
+
+# Generated exploration/report figures
+reports/figures/*
+!reports/figures/.gitkeep
