@@ -63,18 +63,17 @@ def summarize(array: np.ndarray, name: str) -> None:
 def plot_preview(array: np.ndarray, name: str, out_dir: Path) -> None:
     """Best-effort preview: plot the first, middle, and last frame along axis 0.
 
-    Assumes axis 0 is time. If the array has more than 3 dimensions, any
-    trailing axes beyond the first two spatial axes are shown as separate
-    channels (e.g. velocity components).
+    Assumes axis 0 is time and, for a 4D array, axis 1 is a small channel
+    axis (channel-first, i.e. `(T, C, H, W)`) with axes 2 and 3 the spatial
+    grid. A 3D array is treated as a single-channel `(T, H, W)` series.
     """
-    if array.ndim < 3:
-        print(f"skipping plot for {name}: ndim={array.ndim} < 3, not a time series of 2D fields")
+    if array.ndim not in (3, 4):
+        print(f"skipping plot for {name}: ndim={array.ndim}, expected 3 (T,H,W) or 4 (T,C,H,W)")
         return
 
     n_steps = array.shape[0]
     step_indices = sorted({0, n_steps // 2, n_steps - 1})
-    channel_axes = array.shape[3:]
-    n_channels = int(np.prod(channel_axes)) if channel_axes else 1
+    n_channels = array.shape[1] if array.ndim == 4 else 1
 
     fig, axes = plt.subplots(
         n_channels,
@@ -83,11 +82,11 @@ def plot_preview(array: np.ndarray, name: str, out_dir: Path) -> None:
         squeeze=False,
     )
 
-    frames = array.reshape(n_steps, array.shape[1], array.shape[2], n_channels)
     for row in range(n_channels):
         for col, t in enumerate(step_indices):
+            frame = array[t, row] if array.ndim == 4 else array[t]
             ax = axes[row][col]
-            im = ax.imshow(frames[t, :, :, row], origin="lower", cmap="viridis")
+            im = ax.imshow(frame, origin="lower", cmap="viridis")
             ax.set_title(f"t={t}" + (f", channel={row}" if n_channels > 1 else ""))
             fig.colorbar(im, ax=ax, shrink=0.8)
 
@@ -105,7 +104,10 @@ def main() -> None:
     args = parse_args()
 
     if args.file:
-        paths = [args.data_dir / args.file]
+        file_path = Path(args.file)
+        if not file_path.exists():
+            file_path = args.data_dir / file_path.name
+        paths = [file_path]
     else:
         paths = sorted(args.data_dir.glob("*.npy"))
 
