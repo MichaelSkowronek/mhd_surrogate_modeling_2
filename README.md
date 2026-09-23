@@ -82,12 +82,24 @@ uv run scripts/split_data.py   # writes data/processed/splits/split_manifest.jso
 uv run scripts/check_split.py  # sanity-checks train vs. test statistics
 ```
 
-`check_split.py` computes the per-timestep spatial mean/std/min/max of each
-channel, compares train vs. test aggregate statistics, and produces two
-plots per dataset: the series over time with the split boundary marked
-(`<name>_split_check.png`), and a train-vs-test value histogram per channel
-(`<name>_split_hist.png`) — so a drift, trend, or distribution shift
-concentrated in the held-out tail would be visible rather than hidden inside
-a single aggregate number. For `re16k_t400_0` the trailing 20% looks
-statistically representative of the rest (mean shift ~0 std devs, std
-within ~3%, near-identical histograms, no visible trend).
+`check_split.py` computes, per time step, the spatial mean/std/min/max of
+each channel plus (when there are 2 channels, i.e. velocity components) a
+kinetic energy proxy `0.5*(u_x^2+u_y^2)` and the spatial `u_x`-`u_y`
+correlation. It compares train vs. test aggregate statistics for all of
+these and produces two plots per dataset: every series over time with the
+split boundary marked (`<name>_split_check.png`), and a train-vs-test value
+histogram per channel (`<name>_split_hist.png`) — so a drift, trend, or
+distribution shift concentrated in the held-out tail would be visible
+rather than hidden inside a single aggregate number.
+
+For `re16k_t400_0`, the raw channel means/std/histograms match closely
+between train and test (mean shift ~0 std devs, std within ~3%). The energy
+proxy, however, is flagged (mean shift ~1.5 std devs, std ~34% lower in
+test): the flow has a slow oscillation (period ~500-700 steps) with a
+pronounced high-energy excursion around t=600-700 that falls inside the
+training region; the trailing test region sits at a lower point of that
+cycle, though it matches the last third of train (t=700-998) reasonably
+well. This is a real feature of the dynamics, not a computation artifact —
+worth keeping in mind when interpreting test-set performance later, since
+the current trailing split under-represents that higher-energy regime.
+`u_x`-`u_y` correlation is not flagged (~0.03 std devs shift).

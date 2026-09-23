@@ -30,6 +30,12 @@ REL_DIFF_WARN_THRESHOLD = 0.1  # flag std ratio changes larger than this fractio
 N_HIST_BINS = 60
 
 
+def channel_labels(n_channels: int) -> list[str]:
+    if n_channels == len(CHANNEL_NAMES):
+        return CHANNEL_NAMES
+    return [f"channel={i}" for i in range(n_channels)]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
@@ -40,13 +46,24 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def per_timestep_stats(arr, chunk_t: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Spatial mean, std, min and max per time step and channel, shape (T, C)."""
+def per_timestep_stats(arr, chunk_t: int):
+    """Spatial mean, std, min and max per time step and channel, shape (T, C).
+
+    When there are exactly 2 channels (velocity components u_x, u_y), also
+    returns, per time step:
+    - a kinetic energy proxy 0.5*(u_x^2 + u_y^2), spatial mean, shape (T,)
+    - the spatial Pearson correlation between the two channels, shape (T,)
+    (both None otherwise).
+    """
     n_steps, n_channels = arr.shape[0], arr.shape[1]
     means = np.empty((n_steps, n_channels), dtype=np.float64)
     stds = np.empty((n_steps, n_channels), dtype=np.float64)
     mins = np.empty((n_steps, n_channels), dtype=np.float64)
     maxs = np.empty((n_steps, n_channels), dtype=np.float64)
+    has_velocity_pair = n_channels == 2
+    energy = np.empty(n_steps, dtype=np.float64) if has_velocity_pair else None
+    correlation = np.empty(n_steps, dtype=np.float64) if has_velocity_pair else None
+
     for start in range(0, n_steps, chunk_t):
         end = min(start + chunk_t, n_steps)
         block = arr[start:end]
@@ -54,7 +71,18 @@ def per_timestep_stats(arr, chunk_t: int) -> tuple[np.ndarray, np.ndarray, np.nd
         stds[start:end] = block.std(axis=(2, 3))
         mins[start:end] = block.min(axis=(2, 3))
         maxs[start:end] = block.max(axis=(2, 3))
-    return means, stds, mins, maxs
+
+        if has_velocity_pair:
+            ux = block[:, 0].reshape(end - start, -1)
+            uy = block[:, 1].reshape(end - start, -1)
+            energy[start:end] = 0.5 * (ux**2 + uy**2).mean(axis=1)
+
+            ux_centered = ux - ux.mean(axis=1, keepdims=True)
+            uy_centered = uy - uy.mean(axis=1, keepdims=True)
+            cov = (ux_centered * uy_centered).mean(axis=1)
+            correlation[start:end] = cov / (ux.std(axis=1) * uy.std(axis=1) + 1e-12)
+
+    return means, stds, mins, maxs, energy, correlation
 
 
 def train_test_histograms(
@@ -100,10 +128,7 @@ def print_region_comparison(
     means: np.ndarray, stds: np.ndarray, mins: np.ndarray, maxs: np.ndarray, train_end: int
 ) -> None:
     n_channels = means.shape[1]
-    channel_names = CHANNEL_NAMES if n_channels == len(CHANNEL_NAMES) else [
-        f"channel={i}" for i in range(n_channels)
-    ]
-    for c, cname in enumerate(channel_names):
+    for c, cname in enumerate(channel_labels(n_channels)):
         train_mean = means[:train_end, c].mean()
         test_mean = means[train_end:, c].mean()
         train_std = stds[:train_end, c].mean()
@@ -129,23 +154,37 @@ def print_region_comparison(
         )
 
 
-def plot_over_time(name: str, means: np.ndarray, train_end: int, out_dir: Path) -> Path:
-    n_steps, n_channels = means.shape
-    channel_names = CHANNEL_NAMES if n_channels == len(CHANNEL_NAMES) else [
-        f"channel={i}" for i in range(n_channels)
-    ]
+def print_scalar_comparison(label: str, series: np.ndarray, train_end: int) -> None:
+    train_vals, test_vals = series[:train_end], series[train_end:]
+    train_mean, test_mean = train_vals.mean(), test_vals.mean()
+    train_std, test_std = train_vals.std(), test_vals.std()
+    mean_diff_in_std = abs(test_mean - train_mean) / (train_std + 1e-8)
+    std_rel_diff = abs(test_std - train_std) / (abs(train_std) + 1e-8)
+    flag = (
+        " <-- check this"
+        if mean_diff_in_std > STD_DIFF_WARN_THRESHOLD or std_rel_diff > REL_DIFF_WARN_THRESHOLD
+        else ""
+    )
+    print(
+        f"  {label}: train mean={train_mean:.4g} std={train_std:.4g} | "
+        f"test mean={test_mean:.4g} std={test_std:.4g} | "
+        f"mean shift={mean_diff_in_std:.2f} std devs, std rel diff={std_rel_diff:.1%}{flag}"
+    )
+
+
+def plot_series_over_time(name: str, series: dict[str, np.ndarray], train_end: int, out_dir: Path) -> Path:
+    n_steps = next(iter(series.values())).shape[0]
     window = max(n_steps // 50, 1)
 
-    fig, axes = plt.subplots(n_channels, 1, figsize=(12, 4 * n_channels), squeeze=False)
-    for c in range(n_channels):
-        ax = axes[c][0]
-        series = means[:, c]
-        ax.plot(series, alpha=0.3, label="per-step spatial mean")
-        smoothed = rolling_mean(series, window)
+    fig, axes = plt.subplots(len(series), 1, figsize=(12, 4 * len(series)), squeeze=False)
+    for i, (label, values) in enumerate(series.items()):
+        ax = axes[i][0]
+        ax.plot(values, alpha=0.3, label="per-step value")
+        smoothed = rolling_mean(values, window)
         offset = (n_steps - len(smoothed)) // 2
         ax.plot(range(offset, offset + len(smoothed)), smoothed, label=f"rolling mean (w={window})")
         ax.axvline(train_end, color="red", linestyle="--", label="train/test boundary")
-        ax.set_title(f"{name}: {channel_names[c]} spatial mean over time")
+        ax.set_title(f"{name}: {label} over time")
         ax.set_xlabel("time step")
         ax.legend()
 
@@ -164,12 +203,9 @@ def plot_histograms(
     out_dir: Path,
 ) -> Path:
     n_channels = train_counts.shape[0]
-    channel_names = CHANNEL_NAMES if n_channels == len(CHANNEL_NAMES) else [
-        f"channel={i}" for i in range(n_channels)
-    ]
 
     fig, axes = plt.subplots(n_channels, 1, figsize=(10, 4 * n_channels), squeeze=False)
-    for c in range(n_channels):
+    for c, cname in enumerate(channel_labels(n_channels)):
         ax = axes[c][0]
         centers = (bin_edges[c, :-1] + bin_edges[c, 1:]) / 2
         width = bin_edges[c, 1] - bin_edges[c, 0]
@@ -179,7 +215,7 @@ def plot_histograms(
         test_density = test_counts[c] / (test_counts[c].sum() * width)
         ax.bar(centers, train_density, width=width, alpha=0.5, label="train")
         ax.bar(centers, test_density, width=width, alpha=0.5, label="test")
-        ax.set_title(f"{name}: {channel_names[c]} value distribution, train vs. test")
+        ax.set_title(f"{name}: {cname} value distribution, train vs. test")
         ax.set_xlabel("value")
         ax.set_ylabel("density")
         ax.legend()
@@ -200,11 +236,22 @@ def main() -> None:
     for name, split in manifest["splits"].items():
         train_end = split["train"][1]
         arr = root[name]
-        means, stds, mins, maxs = per_timestep_stats(arr, args.chunk_t)
+        means, stds, mins, maxs, energy, correlation = per_timestep_stats(arr, args.chunk_t)
 
         print(f"\n=== {name} (train: [0,{train_end}), test: [{train_end},{split['n_steps']})) ===")
         print_region_comparison(means, stds, mins, maxs, train_end)
-        out_path = plot_over_time(name, means, train_end, args.out_dir)
+
+        series = {
+            f"{cname} spatial mean": means[:, c] for c, cname in enumerate(channel_labels(means.shape[1]))
+        }
+        if energy is not None:
+            print_scalar_comparison("kinetic energy 0.5*(u_x^2+u_y^2), spatial mean", energy, train_end)
+            series["kinetic energy 0.5*(u_x^2+u_y^2), spatial mean"] = energy
+        if correlation is not None:
+            print_scalar_comparison("u_x-u_y spatial correlation", correlation, train_end)
+            series["u_x-u_y spatial correlation"] = correlation
+
+        out_path = plot_series_over_time(name, series, train_end, args.out_dir)
         print(f"  plot: {out_path}")
 
         value_range = np.stack([mins.min(axis=0), maxs.max(axis=0)], axis=1)
