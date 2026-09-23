@@ -51,3 +51,20 @@ uv run scripts/explore_data.py
 
 Prints shape, dtype, value range, and NaN/Inf counts for each `.npy` file in
 `data/raw/`, and saves a preview plot per file to `reports/figures/`.
+
+## Converting to zarr
+
+```bash
+uv run scripts/convert_to_zarr.py
+```
+
+Writes all simulations in `data/raw/` into a single zarr store at
+`data/processed/re16k_t400.zarr` (also gitignored). Since each simulation has
+a different number of time steps on the same spatial grid, they are stored as
+separate arrays within one group rather than stacked into one array:
+
+```python
+import zarr
+root = zarr.open_group("data/processed/re16k_t400.zarr", mode="r")
+root["re16k_t400_0"]  # shape (1248, 2, 1151, 127)
+```
