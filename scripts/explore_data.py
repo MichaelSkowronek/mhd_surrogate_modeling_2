@@ -93,7 +93,7 @@ def plot_preview(array: np.ndarray, name: str, out_dir: Path) -> None:
         for col, t in enumerate(step_indices):
             frame = array[t, row] if array.ndim == 4 else array[t]
             ax = axes[row][col]
-            im = ax.imshow(frame, origin="lower", cmap="viridis")
+            im = ax.imshow(np.rot90(frame), cmap="viridis")
             title = f"t={t}"
             if n_channels > 1:
                 title += f", {channel_names[row]}"
