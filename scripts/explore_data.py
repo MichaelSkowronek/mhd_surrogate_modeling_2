@@ -82,23 +82,24 @@ def plot_preview(array: np.ndarray, name: str, out_dir: Path) -> None:
         f"channel={i}" for i in range(n_channels)
     ]
 
+    panels = [(t, row) for row in range(n_channels) for t in step_indices]
+
     fig, axes = plt.subplots(
-        n_channels,
-        len(step_indices),
-        figsize=(4 * len(step_indices), 4 * n_channels),
+        len(panels),
+        1,
+        figsize=(14, 4 * len(panels)),
         squeeze=False,
     )
 
-    for row in range(n_channels):
-        for col, t in enumerate(step_indices):
-            frame = array[t, row] if array.ndim == 4 else array[t]
-            ax = axes[row][col]
-            im = ax.imshow(np.rot90(frame), cmap="viridis")
-            title = f"t={t}"
-            if n_channels > 1:
-                title += f", {channel_names[row]}"
-            ax.set_title(title)
-            fig.colorbar(im, ax=ax, shrink=0.8)
+    for i, (t, row) in enumerate(panels):
+        frame = array[t, row] if array.ndim == 4 else array[t]
+        ax = axes[i][0]
+        im = ax.imshow(np.rot90(frame), cmap="viridis")
+        title = f"t={t}"
+        if n_channels > 1:
+            title += f", {channel_names[row]}"
+        ax.set_title(title)
+        fig.colorbar(im, ax=ax, shrink=0.8)
 
     fig.suptitle(name)
     fig.tight_layout()
