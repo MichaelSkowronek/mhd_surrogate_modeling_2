@@ -82,10 +82,12 @@ uv run scripts/split_data.py   # writes data/processed/splits/split_manifest.jso
 uv run scripts/check_split.py  # sanity-checks train vs. test statistics
 ```
 
-`check_split.py` computes the per-timestep spatial mean of each channel,
-compares train vs. test aggregate mean/std, and plots the series over time
-with the split boundary marked, so a drift or regime change concentrated in
-the held-out tail would be visible rather than hidden inside a single
-aggregate number. For `re16k_t400_0` the trailing 20% looks statistically
-representative of the rest (mean shift ~0 std devs, std within ~3%, no
-visible trend in `reports/figures/re16k_t400_0_split_check.png`).
+`check_split.py` computes the per-timestep spatial mean/std/min/max of each
+channel, compares train vs. test aggregate statistics, and produces two
+plots per dataset: the series over time with the split boundary marked
+(`<name>_split_check.png`), and a train-vs-test value histogram per channel
+(`<name>_split_hist.png`) — so a drift, trend, or distribution shift
+concentrated in the held-out tail would be visible rather than hidden inside
+a single aggregate number. For `re16k_t400_0` the trailing 20% looks
+statistically representative of the rest (mean shift ~0 std devs, std
+within ~3%, near-identical histograms, no visible trend).
