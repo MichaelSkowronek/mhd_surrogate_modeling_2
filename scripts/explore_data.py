@@ -17,6 +17,10 @@ import numpy as np
 DEFAULT_DATA_DIR = Path("data/raw")
 DEFAULT_FIGURE_DIR = Path("reports/figures")
 
+# Known channel semantics for the re16k_t400_*.npy dataset: (T, 2, H, W)
+# with velocity components u_x, u_y along axis 1.
+CHANNEL_NAMES = ["u_x", "u_y"]
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -74,6 +78,9 @@ def plot_preview(array: np.ndarray, name: str, out_dir: Path) -> None:
     n_steps = array.shape[0]
     step_indices = sorted({0, n_steps // 2, n_steps - 1})
     n_channels = array.shape[1] if array.ndim == 4 else 1
+    channel_names = CHANNEL_NAMES if n_channels == len(CHANNEL_NAMES) else [
+        f"channel={i}" for i in range(n_channels)
+    ]
 
     fig, axes = plt.subplots(
         n_channels,
@@ -87,7 +94,10 @@ def plot_preview(array: np.ndarray, name: str, out_dir: Path) -> None:
             frame = array[t, row] if array.ndim == 4 else array[t]
             ax = axes[row][col]
             im = ax.imshow(frame, origin="lower", cmap="viridis")
-            ax.set_title(f"t={t}" + (f", channel={row}" if n_channels > 1 else ""))
+            title = f"t={t}"
+            if n_channels > 1:
+                title += f", {channel_names[row]}"
+            ax.set_title(title)
             fig.colorbar(im, ax=ax, shrink=0.8)
 
     fig.suptitle(name)

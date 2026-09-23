@@ -33,6 +33,16 @@ Raw `.npy` files are not tracked in git (see `.gitignore`). Copy them into
 data/raw/re16k_t400_0.npy
 ```
 
+Each file is a single time series of shape `(T, 2, H, W)`, channel-first
+float32:
+
+- axis 0: time steps (`re16k_t400_0.npy` has 1248)
+- axis 1: velocity components, `u_x` then `u_y`
+- axes 2, 3: the 2D spatial grid (`re16k_t400_0.npy` is 1151 x 127)
+
+`re16k_t400_7.npy` and `re16k_t400_8.npy` are excluded from the dataset
+(known data quality issues) — only indices 0-6, 9, and 10 exist.
+
 ## Exploring the data
 
 ```bash
