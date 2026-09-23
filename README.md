@@ -68,3 +68,24 @@ import zarr
 root = zarr.open_group("data/processed/re16k_t400.zarr", mode="r")
 root["re16k_t400_0"]  # shape (1248, 2, 1151, 127)
 ```
+
+## Train/test split
+
+Split parameters live in `configs/split.yaml` (which datasets, test fraction).
+The split is time-based (trailing): the last `test_fraction` of each
+dataset's time steps become the test set, since these are temporally
+autocorrelated snapshots and a random split would leak information between
+train and test.
+
+```bash
+uv run scripts/split_data.py   # writes data/processed/splits/split_manifest.json
+uv run scripts/check_split.py  # sanity-checks train vs. test statistics
+```
+
+`check_split.py` computes the per-timestep spatial mean of each channel,
+compares train vs. test aggregate mean/std, and plots the series over time
+with the split boundary marked, so a drift or regime change concentrated in
+the held-out tail would be visible rather than hidden inside a single
+aggregate number. For `re16k_t400_0` the trailing 20% looks statistically
+representative of the rest (mean shift ~0 std devs, std within ~3%, no
+visible trend in `reports/figures/re16k_t400_0_split_check.png`).

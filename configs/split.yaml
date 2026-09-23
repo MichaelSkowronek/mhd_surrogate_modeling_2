@@ -1,0 +1,12 @@
+# Train/test split configuration.
+#
+# Splitting is time-based (trailing): the last `test_fraction` of each
+# dataset's time steps become the test set, the rest is train. A random
+# split would leak information between temporally autocorrelated snapshots.
+
+zarr_store: data/processed/re16k_t400.zarr
+
+datasets:
+  - re16k_t400_0
+
+test_fraction: 0.2

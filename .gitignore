@@ -222,6 +222,7 @@ data/raw/*
 !data/raw/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
+!data/processed/splits/
 *.npy
 
 # Generated exploration/report figures

@@ -262,6 +262,7 @@ source = { editable = "." }
 dependencies = [
     { name = "matplotlib" },
     { name = "numpy" },
+    { name = "pyyaml" },
     { name = "zarr" },
 ]
 
@@ -269,6 +270,7 @@ dependencies = [
 requires-dist = [
     { name = "matplotlib", specifier = ">=3.9" },
     { name = "numpy", specifier = ">=2.0" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "zarr", specifier = ">=3.4.0" },
 ]
 

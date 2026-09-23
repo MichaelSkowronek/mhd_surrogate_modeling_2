@@ -1,0 +1,22 @@
+{
+  "config": {
+    "zarr_store": "data/processed/re16k_t400.zarr",
+    "datasets": [
+      "re16k_t400_0"
+    ],
+    "test_fraction": 0.2
+  },
+  "splits": {
+    "re16k_t400_0": {
+      "n_steps": 1248,
+      "train": [
+        0,
+        998
+      ],
+      "test": [
+        998,
+        1248
+      ]
+    }
+  }
+}
