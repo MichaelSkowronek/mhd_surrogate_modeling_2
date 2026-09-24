@@ -390,3 +390,9 @@ Encoding uses the static ffmpeg binary bundled by the `imageio-ffmpeg`
 package, so no system ffmpeg install is required. The default vorticity video
 for `re16k_t400_0` (1248 frames, 24 fps) is ~52s and ~19.5 MB, taking about a
 minute to render.
+
+Watching the full vorticity video, the flow looks visually consistent across
+the train/test boundary — no obvious change in structure, scale, or activity
+level. This is a subjective, qualitative check, not a measurement, but it
+lines up with the quantitative train-vs-test comparisons in the sections
+above.
