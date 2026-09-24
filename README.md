@@ -43,6 +43,21 @@ float32:
 `re16k_t400_7.npy` and `re16k_t400_8.npy` are excluded from the dataset
 (known data quality issues) — only indices 0-6, 9, and 10 exist.
 
+### Grid
+
+The domain lengths are in `configs/grid.yaml` and are used by every
+derivative-based or wavenumber-based analysis: `Lx = 12*pi` (~37.70, the DNS
+specifies the x size as 12 in units of pi) along axis 2 and `Ly = 2` along
+axis 3, with uniform spacing `dx = 12*pi/1150` (~0.03278) and
+`dy = 2/126` (~0.01587).
+
+The DNS grid is uniform in x but **non-uniform in y**. The values in the data
+were mapped onto the uniform y grid with a linear (k = 1) spline
+interpolation. Consequences to keep in mind: y-derivatives (divergence,
+vorticity) are piecewise-constant approximations, and small scales in y,
+especially near the walls where the DNS is presumably refined, are smoothed
+or lost by the interpolation.
+
 ## Exploring the data
 
 ```bash
@@ -126,24 +141,30 @@ Computes `div(u) = du_x/dx + du_y/dy` per time step (second-order central
 differences, layout assumed `(T, 2, Nx, Ny)` with `x` = axis 2) and plots the
 RMS divergence, the RMS normalized by the RMS of the two derivative terms,
 and divergence maps at the first/middle/last step. The long axis (axis 2) is
-the streamwise x direction. Grid spacing is not stored in the data, so it is
-derived from the domain lengths in `configs/grid.yaml` (`lx: 30`, `ly: 2`,
-both **provisional**; see below), giving `dx = 30/1150`, `dy = 2/126`.
-`--dx/--dy` override the config (e.g. `--dx 1 --dy 1` for grid units).
+the streamwise x direction. Grid spacing is derived from the domain lengths
+in `configs/grid.yaml` (see the Grid section): `dx = 12*pi/1150`,
+`dy = 2/126`. `--dx/--dy` override the config (e.g. `--dx 1 --dy 1` for grid
+units).
 
-For `re16k_t400_0` the normalized divergence is then ~0.37 (train and test
-alike, stationary in time; ~0.53 in unit grid spacing). The x length of 30 is
-not known independently: a least-squares fit of the `dx/dy` ratio on 13
-snapshots implies `Lx` ~ 30 for `Ly` = 2, which is consistent but not
-confirmed. Swapping the axes is much worse (~0.93). The divergence maps show
-large-scale structure tied to the flow features rather than grid-scale noise.
+For `re16k_t400_0` the normalized divergence is ~0.36 (train and test alike,
+stationary in time; RMS divergence ~0.72). In grid units (`dx = dy = 1`) it
+was ~0.53, and swapping the two axes was much worse (~0.93 in grid units),
+confirming `x` = axis 2. The divergence maps show large-scale structure tied
+to the flow features rather than grid-scale noise.
+
+The result is not sensitive to the exact spacing ratio: a least-squares fit
+of `dx/dy` on 13 snapshots (best-fit ~1.66) gave ~0.37, versus ~0.36 with the
+true ratio (~2.07). Consequently that fit is not a reliable way to infer the
+grid spacing; an earlier note here that it implied `Lx` ~ 30 was wrong (the
+true `Lx` is `12*pi` ~ 37.7).
 
 So the 2D field is not exactly incompressible, which is expected: the
 quasi-2D hypothesis is only approximate, so `du_z/dz` in the slice does not
-vanish, and this residual (~37% of the derivative magnitude) is a rough
+vanish, and this residual (~36% of the derivative magnitude) is a rough
 measure of how far the slice is from ideal 2D. Whether it is "good enough"
-is a modeling judgement; a non-uniform grid or a discretization that differs
-from central differences would also contribute and cannot be separated here.
+is a modeling judgement. The linear interpolation in y (piecewise-constant
+`du_y/dy`, smoothed wall layers) and the DNS's own discretization would also
+contribute and cannot be separated from `du_z/dz` here.
 
 ## Vorticity and enstrophy
 
@@ -160,21 +181,22 @@ statistics for the mean vorticity and the enstrophy, plots both over time
 with the train/test boundary, and maps the vorticity at the first/middle/last
 step.
 
-**Provisional:** vorticity scales with 1/length and enstrophy with 1/length^2,
-so the absolute values below depend on the unconfirmed `lx`/`ly` in
-`configs/grid.yaml`; a non-uniform grid (e.g. refined near the walls) would
-also affect them. Rerun once the real grid is known.
+Vorticity scales with 1/length and enstrophy with 1/length^2, so the absolute
+values below depend on the domain lengths in `configs/grid.yaml`. The
+`du_x/dy` term inherits the y-interpolation caveat (see the Grid section):
+the thin wall layers, which dominate the vorticity extremes, are the part of
+the field most affected by the linear interpolation onto the uniform y grid.
 
-For `re16k_t400_0` (with `lx=30`, `ly=2`) the maps show shear layers and jets
+For `re16k_t400_0` the maps show shear layers and jets
 near the inlet (x < ~150), large coherent vortices of roughly channel-width
 size downstream, and thin high-vorticity layers along both y walls, which
-dominate the extremes. Mean enstrophy is ~26.2 in train and ~25.5 in test
+dominate the extremes. Mean enstrophy is ~25.1 in train and ~24.4 in test
 (~3% lower), with slow variations over time. The spatially averaged
 vorticity is a regular oscillation (period ~25-30 steps, amplitude ~0.03; see
 the autocorrelation section)
 with a small mean (~0.012 train, ~0.005 test), tiny compared with the local
 vorticity magnitude of order 10-20. Both quantities are flagged using the
-same thresholds as `check_split.py` (mean shifts of 0.45 and 0.33 std devs),
+same thresholds as `check_split.py` (mean shifts of 0.48 and 0.33 std devs),
 but those thresholds are tight because the temporal fluctuations of these
 spatial means are small relative to their level, so the actual differences
 are small. The enstrophy is consistent with the milder end of the
@@ -197,34 +219,39 @@ verified on synthetic sine waves (integral 0.500 for a unit-amplitude sine,
 peak at the expected wavenumber). Output: a log-log plot
 (`<name>_spectrum.png`) and a train-vs-test summary.
 
-**Provisional:** wavenumber labels use the unconfirmed `lx`/`ly` in
-`configs/grid.yaml`. Fitted slopes are unaffected by the length scale (only
-the k axis shifts). Because the flow is not homogeneous in x (the inlet
-region differs from the developed region), the x spectrum averages over a
-non-stationary signal.
+Wavenumbers use the domain lengths in `configs/grid.yaml` (`k = 2*pi /
+wavelength` in physical units; see the Grid section). Because the flow is not
+homogeneous in x (the inlet region differs from the developed region), the x
+spectrum averages over a non-stationary signal. In y the data was linearly
+interpolated from a non-uniform DNS grid, which acts as a smoothing filter
+and gives a piecewise-linear profile, so the high-k part of the y spectrum
+cannot be attributed purely to the flow.
 
 For `re16k_t400_0`:
 
-- **x direction:** the spectrum peaks at k ~ 1.7-1.9 (wavelength ~3.4-3.75,
-  about 1.7-1.9 channel widths for `ly=2`), matching the size of the coherent
-  vortices in the vorticity maps. Above the peak it decays as a power law
-  with slope ~ -3 over k ~ 3-60 (log-log fit: -3.0 for `u_x`, -2.5 to -2.9 for
-  `u_y` depending on the range). It flattens at k > ~100; the cause was not
-  investigated (grid-scale content, leakage from the wall layers, or
+- **x direction:** the spectrum peaks at k ~ 1.3 (wavelength ~4.7, about 2.4
+  channel widths for `ly=2`), on the scale of the large coherent vortices seen
+  in the vorticity maps (a rough visual match, not measured). Above the peak
+  it decays as a power law with slope ~ -2.9 over k ~ 3-60 for `u_x` (log-log
+  fit; -2.9 for `u_y` over k ~ 10-60 and -2.7 over k ~ 3-10). It flattens at
+  the highest wavenumbers (k >~ 60-90; the axis ends at k ~ 96); the cause
+  was not investigated (grid-scale content, leakage from the wall layers, or
   numerical noise are all possible).
 - **y direction:** no interior peak; the spectrum decreases monotonically
   from the lowest resolved wavenumber (dominated by the cross-stream
   profile and wall layers), with slope ~ -3.6 for `u_x` and ~ -3.2 for `u_y`
-  over k ~ 10-60. `u_x` has roughly 10x the power of `u_y` at low k, closing
-  to a factor of a few at high k (read from the plot).
-- The slope of ~ -3 in x is the classic 2D enstrophy-cascade value, but it
+  over k ~ 10-60, flattening above k ~ 130. `u_x` has roughly 10x the power
+  of `u_y` at low k, closing to a factor of a few at high k (read from the
+  plot). Given the interpolation, these y slopes and the high-k flattening
+  are probably not clean flow properties.
+- The slope of ~ -3 in x (-2.9 measured) is the classic 2D enstrophy-cascade value, but it
   is also what smooth fields dominated by isolated vortices and shear layers
   give, and the 1D spectra of a bounded, inhomogeneous domain are not a
   clean test, so this is consistent with rather than evidence for such a
   cascade.
 - **Train vs. test:** y spectra agree within ~1-7% at all scales, and the
   fitted slopes agree within ~0.1. The x spectra differ mainly at the lowest
-  wavenumbers (test/train power 0.65 for `u_x` and 0.59 for `u_y` in the
+  wavenumbers (test/train power 0.66 for `u_x` and 0.59 for `u_y` in the
   lowest band, ~1.2-1.3 in the next band), where the test peak appears
   slightly shifted toward higher k. These bands contain few wavenumber bins
   and ~8-10 structures per domain length, so with ~250 temporally correlated

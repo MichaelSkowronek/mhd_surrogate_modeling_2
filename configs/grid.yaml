@@ -1,11 +1,16 @@
 # Physical domain lengths of the 2D slice, used to turn grid indices into
 # derivatives (dx = lx / (nx - 1), dy = ly / (ny - 1), endpoints included).
 #
-# PROVISIONAL: neither the lengths nor the grid layout are confirmed.
-# - ly = 2 is the assumed wall-normal/cross-stream length.
-# - lx = 30 was inferred from a least-squares fit that minimizes the
-#   divergence (see README), not taken from the DNS setup.
-# The grid may also be non-uniform. Update these once the DNS grid is known.
+# Provided by the DNS setup:
+# - lx = 12*pi (the DNS specifies the x size as ratiox = 12.0 "in pi units"),
+#   uniform spacing dx = 12*pi / 1150 ~ 0.03278.
+# - ly = 2, uniform spacing dy = 2 / 126 ~ 0.01587.
+#
+# Caveat for y: the DNS grid is NON-uniform in y. The values in the data were
+# mapped onto this uniform grid with a linear (k=1) spline interpolation, so
+# y-derivatives are piecewise-constant approximations and small scales in y
+# (especially near the walls, where the DNS is presumably refined) are
+# smoothed or lost.
 
-lx: 30.0  # axis 2 (long axis, streamwise x)
-ly: 2.0   # axis 3 (y)
+lx: 37.69911184307752  # axis 2 (long axis, streamwise x) = 12 * pi
+ly: 2.0                # axis 3 (y)

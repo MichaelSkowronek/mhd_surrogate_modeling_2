@@ -9,8 +9,9 @@ so this is a 2D enstrophy, not the full 3D one.
 Assumes the array layout (T, 2, Nx, Ny): axis 2 is x (streamwise), axis 3 is
 y, channel 0 is u_x and channel 1 is u_y. Derivatives use second-order
 central differences (one-sided at the boundaries) with uniform spacing
-taken from the (provisional) domain lengths in configs/grid.yaml; --dx/--dy
-override it. The absolute values depend on those lengths.
+taken from the domain lengths in configs/grid.yaml; --dx/--dy override it.
+In y the data was linearly interpolated onto a uniform grid from a non-uniform
+DNS grid, so y-derivatives are piecewise-constant approximations. The absolute values depend on those lengths.
 
 It prints train vs. test statistics for the mean vorticity and the
 enstrophy, plots both over time with the train/test boundary marked, and

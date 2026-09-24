@@ -8,9 +8,10 @@ The domain is not periodic (inlet region, walls in y), so each line has its
 mean removed and a Hann window applied before the FFT to limit spectral
 leakage. Spectra are one-sided and normalized so that E(k) integrated over
 the angular wavenumber k = 2*pi/wavelength equals the window-weighted
-variance of the signal. Because the grid is a provisional assumption
-(configs/grid.yaml), the absolute wavenumbers depend on it; --dx/--dy
-override the spacing.
+variance of the signal. The grid spacing comes from the domain lengths in
+configs/grid.yaml; --dx/--dy override it. Note that y was interpolated onto
+a uniform grid from a non-uniform DNS grid (see configs/grid.yaml), which
+smooths small scales in y.
 
 Because the flow is not homogeneous in x (the inlet region differs from the
 developed region), the x spectrum is an average over a non-stationary signal.
