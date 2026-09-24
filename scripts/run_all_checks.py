@@ -65,6 +65,17 @@ def count_flags(data: Any) -> int:
     return 0
 
 
+def discover_dataset_names(summary_dir: Path) -> list[str]:
+    """Dataset names with at least one summary on disk, from `<dataset>__<script>.json`.
+
+    Used for the comparison table so a partial/subset run (e.g. re-checking
+    one dataset) extends the table with fresh numbers for that dataset
+    rather than silently dropping every other dataset's row.
+    """
+    names = {path.name.split("__", 1)[0] for path in summary_dir.glob("*__*.json")}
+    return sorted(names)
+
+
 def build_comparison_table(dataset_names: list[str], summary_dir: Path) -> list[dict[str, Any]]:
     """One row per dataset, pulling headline scalars out of each check's
     summary; the full nested detail stays in the JSON files themselves.
@@ -166,7 +177,9 @@ def main() -> None:
     print(f"\n{len(results) - len(failures)}/{len(results)} jobs ok in {elapsed:.1f}s")
 
     print("\n=== comparison table ===")
-    rows = build_comparison_table(dataset_names, args.summary_dir)
+    # Every dataset with a summary on disk, not just this run's (possibly a
+    # subset): a partial run refreshes its rows without dropping the rest.
+    rows = build_comparison_table(discover_dataset_names(args.summary_dir), args.summary_dir)
     print_table(rows)
     csv_path = args.summary_dir / "comparison.csv"
     write_csv(rows, csv_path)
