@@ -43,6 +43,36 @@ float32:
 `re16k_t400_7.npy` and `re16k_t400_8.npy` are excluded from the dataset
 (known data quality issues) — only indices 0-6, 9, and 10 exist.
 
+### Origin: from the 3D DNS to this dataset
+
+The data comes from a 3D direct numerical simulation (DNS) of an MHD flow on
+a grid of 2301 x 121 x 481 points (x, y, z), uniform in x and non-uniform in
+y and z. The 2D dataset used here is derived from it as follows:
+
+| axis | DNS points | DNS spacing | processing | this dataset |
+|------|-----------:|-------------|------------|-------------:|
+| x    | 2301 | uniform | subsampled (1151 = every second point of 2301, i.e. a stride of 2) | 1151 |
+| y    | 121  | non-uniform | linear (k = 1) spline interpolation onto a uniform grid | 127 |
+| z    | 481  | non-uniform | central slice taken, axis removed | (single plane) |
+
+The domain size of the DNS is `Lx = 12*pi` (~37.70), `Ly = 2` and `Lz = 7`.
+Only `Lx` and `Ly` enter the analyses (see the Grid section), since z is not
+part of the dataset.
+
+- **z (slice):** the flow varies little along z, the axis along which the
+  magnetic field keeps it close to uniform, except in the thin Hartmann
+  layers at the z boundaries. Taking the central slice avoids those layers
+  and is the basis of the 2D (quasi-2D) hypothesis of this project. Hartmann
+  layers, and any variation along z, are therefore not represented.
+- **y (interpolation):** the uniform grid has slightly more points (127) than
+  the DNS (121), so the interpolation adds no information. Where the DNS
+  spacing is finer than `dy` (presumably near the walls) information is lost,
+  and y-derivatives are piecewise constant.
+- **x (subsampling):** the stride of 2 halves the x resolution and the
+  Nyquist wavenumber. Whether a low-pass filter was applied first is not
+  known; without one, energy above the new Nyquist wavenumber is aliased into
+  the resolved range.
+
 ### Grid
 
 The domain lengths are in `configs/grid.yaml` and are used by every
@@ -164,7 +194,11 @@ vanish, and this residual (~36% of the derivative magnitude) is a rough
 measure of how far the slice is from ideal 2D. Whether it is "good enough"
 is a modeling judgement. The linear interpolation in y (piecewise-constant
 `du_y/dy`, smoothed wall layers) and the DNS's own discretization would also
-contribute and cannot be separated from `du_z/dz` here.
+contribute and cannot be separated from `du_z/dz` here. Since the flow varies
+little along z away from the Hartmann layers (see the Origin section), a
+large `du_z/dz` alone would be somewhat surprising, so the interpolation and
+discretization may account for more of this residual than first assumed; this
+was not tested.
 
 ## Vorticity and enstrophy
 
@@ -235,8 +269,9 @@ For `re16k_t400_0`:
   it decays as a power law with slope ~ -2.9 over k ~ 3-60 for `u_x` (log-log
   fit; -2.9 for `u_y` over k ~ 10-60 and -2.7 over k ~ 3-10). It flattens at
   the highest wavenumbers (k >~ 60-90; the axis ends at k ~ 96); the cause
-  was not investigated (grid-scale content, leakage from the wall layers, or
-  numerical noise are all possible).
+  was not investigated (grid-scale content, leakage from the wall layers,
+  numerical noise, or aliasing from the factor-2 x subsampling if no filter
+  was applied are all possible).
 - **y direction:** no interior peak; the spectrum decreases monotonically
   from the lowest resolved wavenumber (dominated by the cross-stream
   profile and wall layers), with slope ~ -3.6 for `u_x` and ~ -3.2 for `u_y`
