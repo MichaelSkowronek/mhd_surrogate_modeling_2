@@ -1,0 +1,28 @@
+name: pre-commit
+
+on:
+  push:
+
+jobs:
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+
+      # uv sync auto-provisions the pinned Python version (.python-version);
+      # no separate Python setup step needed. Installs the dev dependency
+      # group (pre-commit, ruff) by default.
+      - run: uv sync
+
+      # Caches the isolated environments pre-commit builds for each hook
+      # (keyed on the hook versions/revs, not the tool's own version).
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - run: uv run pre-commit run --all-files
