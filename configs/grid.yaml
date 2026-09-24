@@ -1,0 +1,11 @@
+# Physical domain lengths of the 2D slice, used to turn grid indices into
+# derivatives (dx = lx / (nx - 1), dy = ly / (ny - 1), endpoints included).
+#
+# PROVISIONAL: neither the lengths nor the grid layout are confirmed.
+# - ly = 2 is the assumed wall-normal/cross-stream length.
+# - lx = 30 was inferred from a least-squares fit that minimizes the
+#   divergence (see README), not taken from the DNS setup.
+# The grid may also be non-uniform. Update these once the DNS grid is known.
+
+lx: 30.0  # axis 2 (long axis, streamwise x)
+ly: 2.0   # axis 3 (y)

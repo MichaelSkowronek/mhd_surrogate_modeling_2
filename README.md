@@ -115,14 +115,11 @@ uv run scripts/check_divergence.py [--dx DX --dy DY]
 Computes `div(u) = du_x/dx + du_y/dy` per time step (second-order central
 differences, layout assumed `(T, 2, Nx, Ny)` with `x` = axis 2) and plots the
 RMS divergence, the RMS normalized by the RMS of the two derivative terms,
-and divergence maps at the first/middle/last step. Grid spacing is not stored
-in the data, so it defaults to 1 (grid units); pass `--dx/--dy` if known.
-The long axis (axis 2) is the streamwise x direction. Assuming a y length of
-2 (`dy = 2/126`) and an x length of 30 (`dx = 30/1150`):
-
-```bash
-uv run scripts/check_divergence.py --dx 0.026086956522 --dy 0.015873015873
-```
+and divergence maps at the first/middle/last step. The long axis (axis 2) is
+the streamwise x direction. Grid spacing is not stored in the data, so it is
+derived from the domain lengths in `configs/grid.yaml` (`lx: 30`, `ly: 2`,
+both **provisional**; see below), giving `dx = 30/1150`, `dy = 2/126`.
+`--dx/--dy` override the config (e.g. `--dx 1 --dy 1` for grid units).
 
 For `re16k_t400_0` the normalized divergence is then ~0.37 (train and test
 alike, stationary in time; ~0.53 in unit grid spacing). The x length of 30 is
@@ -137,3 +134,38 @@ vanish, and this residual (~37% of the derivative magnitude) is a rough
 measure of how far the slice is from ideal 2D. Whether it is "good enough"
 is a modeling judgement; a non-uniform grid or a discretization that differs
 from central differences would also contribute and cannot be separated here.
+
+## Vorticity and enstrophy
+
+```bash
+uv run scripts/check_vorticity.py [--dx DX --dy DY]
+```
+
+Computes the out-of-plane vorticity `w = du_y/dx - du_x/dy` (same central
+differences, layout and `configs/grid.yaml` spacing as the divergence check)
+and the enstrophy proxy `0.5*w^2` (spatial mean per time step, matching the
+`0.5*u^2` energy convention). Only the z-component exists in a 2D slice, so
+this is a 2D enstrophy, not the full 3D one. It prints train vs. test
+statistics for the mean vorticity and the enstrophy, plots both over time
+with the train/test boundary, and maps the vorticity at the first/middle/last
+step.
+
+**Provisional:** vorticity scales with 1/length and enstrophy with 1/length^2,
+so the absolute values below depend on the unconfirmed `lx`/`ly` in
+`configs/grid.yaml`; a non-uniform grid (e.g. refined near the walls) would
+also affect them. Rerun once the real grid is known.
+
+For `re16k_t400_0` (with `lx=30`, `ly=2`) the maps show shear layers and jets
+near the inlet (x < ~150), large coherent vortices of roughly channel-width
+size downstream, and thin high-vorticity layers along both y walls, which
+dominate the extremes. Mean enstrophy is ~26.2 in train and ~25.5 in test
+(~3% lower), with slow variations over time. The spatially averaged
+vorticity is a regular oscillation (period ~30-40 steps, amplitude ~0.03)
+with a small mean (~0.012 train, ~0.005 test), tiny compared with the local
+vorticity magnitude of order 10-20. Both quantities are flagged using the
+same thresholds as `check_split.py` (mean shifts of 0.46 and 0.33 std devs),
+but those thresholds are tight because the temporal fluctuations of these
+spatial means are small relative to their level, so the actual differences
+are small. The enstrophy is consistent with the milder end of the
+energy finding in the split check: higher in the ~400-700 stretch, lower in
+the trailing test region.

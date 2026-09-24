@@ -8,8 +8,8 @@ informative rather than necessarily a data error.
 Assumes the array layout (T, 2, Nx, Ny): axis 2 is x (streamwise), axis 3 is
 y, channel 0 is u_x and channel 1 is u_y. Derivatives use second-order
 central differences (one-sided at the boundaries) with uniform spacing
---dx/--dy (default 1.0, i.e. grid units; the grid spacing is not stored in
-the data).
+taken from the (provisional) domain lengths in configs/grid.yaml; --dx/--dy
+override it.
 
 Per time step it reports the RMS divergence and that RMS normalized by the
 RMS of the two derivative terms (a scale-free measure: ~0 for a
@@ -19,7 +19,7 @@ first, middle and last time step.
 
 Usage:
     uv run scripts/check_divergence.py
-    uv run scripts/check_divergence.py --dx 0.05 --dy 0.05
+    uv run scripts/check_divergence.py --dx 1 --dy 1   # grid units
 """
 
 from __future__ import annotations
@@ -32,6 +32,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import zarr
 
+from mhd_surrogate.grid import grid_spacing
+
 DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
 DEFAULT_OUT_DIR = Path("reports/figures")
 
@@ -40,8 +42,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
-    parser.add_argument("--dx", type=float, default=1.0, help="Grid spacing along axis 2")
-    parser.add_argument("--dy", type=float, default=1.0, help="Grid spacing along axis 3")
+    parser.add_argument("--dx", type=float, default=None, help="Override spacing along axis 2")
+    parser.add_argument("--dy", type=float, default=None, help="Override spacing along axis 3")
     parser.add_argument(
         "--chunk-t", type=int, default=32, help="Time steps per read (default: %(default)s)"
     )
@@ -127,11 +129,12 @@ def main() -> None:
 
         n_steps, train_end = split["n_steps"], split["train"][1]
         snapshot_steps = sorted({0, n_steps // 2, n_steps - 1})
-        rms_div, rel_div, snapshots = divergence_stats(
-            arr, args.dx, args.dy, args.chunk_t, snapshot_steps
-        )
+        dx, dy = grid_spacing(arr.shape[2], arr.shape[3])
+        dx = args.dx if args.dx is not None else dx
+        dy = args.dy if args.dy is not None else dy
+        rms_div, rel_div, snapshots = divergence_stats(arr, dx, dy, args.chunk_t, snapshot_steps)
 
-        print(f"\n=== {name} (dx={args.dx}, dy={args.dy}) ===")
+        print(f"\n=== {name} (dx={dx:.5g}, dy={dy:.5g}) ===")
         for region, sl in [("train", slice(0, train_end)), ("test", slice(train_end, n_steps))]:
             print(
                 f"  {region}: RMS divergence mean={rms_div[sl].mean():.4g} "
