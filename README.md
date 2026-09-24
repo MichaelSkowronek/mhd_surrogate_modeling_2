@@ -169,3 +169,53 @@ spatial means are small relative to their level, so the actual differences
 are small. The enstrophy is consistent with the milder end of the
 energy finding in the split check: higher in the ~400-700 stretch, lower in
 the trailing test region.
+
+## Spatial power spectrum
+
+```bash
+uv run scripts/check_spectrum.py [--dx DX --dy DY]
+```
+
+Computes 1D power spectra E(k) of `u_x` and `u_y` along x (axis 2) and along
+y (axis 3), each averaged over the other spatial axis and over time, for the
+train and test time steps separately. The domain is not periodic (inlet,
+walls in y), so each line has its mean removed and a Hann window applied
+before the FFT. Spectra are one-sided and normalized so that E(k) integrated
+over the angular wavenumber equals the window-weighted variance; this was
+verified on synthetic sine waves (integral 0.500 for a unit-amplitude sine,
+peak at the expected wavenumber). Output: a log-log plot
+(`<name>_spectrum.png`) and a train-vs-test summary.
+
+**Provisional:** wavenumber labels use the unconfirmed `lx`/`ly` in
+`configs/grid.yaml`. Fitted slopes are unaffected by the length scale (only
+the k axis shifts). Because the flow is not homogeneous in x (the inlet
+region differs from the developed region), the x spectrum averages over a
+non-stationary signal.
+
+For `re16k_t400_0`:
+
+- **x direction:** the spectrum peaks at k ~ 1.7-1.9 (wavelength ~3.4-3.75,
+  about 1.7-1.9 channel widths for `ly=2`), matching the size of the coherent
+  vortices in the vorticity maps. Above the peak it decays as a power law
+  with slope ~ -3 over k ~ 3-60 (log-log fit: -3.0 for `u_x`, -2.5 to -2.9 for
+  `u_y` depending on the range). It flattens at k > ~100; the cause was not
+  investigated (grid-scale content, leakage from the wall layers, or
+  numerical noise are all possible).
+- **y direction:** no interior peak; the spectrum decreases monotonically
+  from the lowest resolved wavenumber (dominated by the cross-stream
+  profile and wall layers), with slope ~ -3.6 for `u_x` and ~ -3.2 for `u_y`
+  over k ~ 10-60. `u_x` has roughly 10x the power of `u_y` at low k, closing
+  to a factor of a few at high k (read from the plot).
+- The slope of ~ -3 in x is the classic 2D enstrophy-cascade value, but it
+  is also what smooth fields dominated by isolated vortices and shear layers
+  give, and the 1D spectra of a bounded, inhomogeneous domain are not a
+  clean test, so this is consistent with rather than evidence for such a
+  cascade.
+- **Train vs. test:** y spectra agree within ~1-7% at all scales, and the
+  fitted slopes agree within ~0.1. The x spectra differ mainly at the lowest
+  wavenumbers (test/train power 0.65 for `u_x` and 0.59 for `u_y` in the
+  lowest band, ~1.2-1.3 in the next band), where the test peak appears
+  slightly shifted toward higher k. These bands contain few wavenumber bins
+  and ~8-10 structures per domain length, so with ~250 temporally correlated
+  test steps this is plausibly statistical noise plus the slow energy
+  variation found in the split check, though this was not tested.
