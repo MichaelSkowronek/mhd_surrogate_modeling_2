@@ -10,3 +10,11 @@ datasets:
   - re16k_t400_0
 
 test_fraction: 0.2
+
+# Snapshots dropped from the END of the training region, so the last training
+# snapshot is separated from the first test snapshot. The test set keeps its
+# full `test_fraction`. In snapshot steps (the physical time step is unknown).
+# 10 follows the autocorrelation check for re16k_t400_0: the pooled field
+# autocorrelation falls below 0.05 after ~8 steps. It does not remove the
+# recurring quasi-periodic correlation (period ~25 steps) at longer lags.
+buffer_steps: 10

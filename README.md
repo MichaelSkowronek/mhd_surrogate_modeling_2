@@ -71,11 +71,21 @@ root["re16k_t400_0"]  # shape (1248, 2, 1151, 127)
 
 ## Train/test split
 
-Split parameters live in `configs/split.yaml` (which datasets, test fraction).
-The split is time-based (trailing): the last `test_fraction` of each
+Split parameters live in `configs/split.yaml` (which datasets, test fraction,
+buffer). The split is time-based (trailing): the last `test_fraction` of each
 dataset's time steps become the test set, since these are temporally
 autocorrelated snapshots and a random split would leak information between
 train and test.
+
+`buffer_steps` (10) drops that many snapshots from the *end of the training
+region*, so the last training snapshot is separated from the first test
+snapshot; the test set keeps its full `test_fraction`. For `re16k_t400_0`
+(1248 steps) this gives train `[0, 988)`, buffer `[988, 998)`, test
+`[998, 1248)`. The value follows the autocorrelation check (the pooled field
+autocorrelation falls below 0.05 after ~8 steps) and is in snapshot steps.
+It does not remove the recurring quasi-periodic correlation at longer lags
+(see the autocorrelation section). All analysis scripts read the regions
+from the split manifest and exclude the buffer from both train and test.
 
 ```bash
 uv run scripts/split_data.py   # writes data/processed/splits/split_manifest.json
@@ -98,13 +108,13 @@ proxy, however, is flagged (mean shift ~1.5 std devs, std ~34% lower in
 test): the flow has a slow oscillation (period ~500-700 steps) with a
 pronounced high-energy excursion around t=600-700 that falls inside the
 training region; the trailing test region sits at a lower point of that
-cycle, though it matches the last third of train (t=700-998) reasonably
+cycle, though it matches the last third of train (t=700-988) reasonably
 well. This is a real feature of the dynamics, not a computation artifact —
 worth keeping in mind when interpreting test-set performance later, since
 the current trailing split under-represents that higher-energy regime. The
-per-direction energies show this comes entirely from `u_x` (~1.15 std devs
-shift); `u_y` energy is essentially unchanged (~0.08).
-`u_x`-`u_y` correlation is not flagged (~0.03 std devs shift).
+per-direction energies show this comes entirely from `u_x` (~1.17 std devs
+shift); `u_y` energy is essentially unchanged (~0.10).
+`u_x`-`u_y` correlation is not flagged (~0.04 std devs shift).
 
 ## Incompressibility check
 
@@ -164,7 +174,7 @@ vorticity is a regular oscillation (period ~25-30 steps, amplitude ~0.03; see
 the autocorrelation section)
 with a small mean (~0.012 train, ~0.005 test), tiny compared with the local
 vorticity magnitude of order 10-20. Both quantities are flagged using the
-same thresholds as `check_split.py` (mean shifts of 0.46 and 0.33 std devs),
+same thresholds as `check_split.py` (mean shifts of 0.45 and 0.33 std devs),
 but those thresholds are tight because the temporal fluctuations of these
 spatial means are small relative to their level, so the actual differences
 are small. The enstrophy is consistent with the milder end of the
@@ -269,7 +279,7 @@ For `re16k_t400_0`:
   effectively independent samples of the slow variation. As a
   back-of-envelope estimate, accounting for the autocorrelation puts the
   train/test `u_x` energy shift flagged in the split check at roughly 1.5
-  standard errors of the difference of means (the split check's 1.15 is in
+  standard errors of the difference of means (the split check's 1.17 is in
   units of the time series' own standard deviation, a different scale):
   suggestive, but not clearly distinguishable from sampling variability of
   a slowly varying signal. This
@@ -281,7 +291,7 @@ For `re16k_t400_0`:
   buffer of roughly 10 steps between train and test would remove it; the
   recurring oscillatory correlation at longer lags reflects a persistent
   periodic component of the dynamics and is not something a buffer removes.
-  No buffer is implemented yet.
+  A 10-step buffer is configured in `configs/split.yaml`.
 
 Only temporal autocorrelation is covered; spatial autocorrelation (integral
 length scales) and the enstrophy autocorrelation are not.

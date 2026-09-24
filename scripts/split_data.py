@@ -36,15 +36,17 @@ def main() -> None:
 
     for name in config["datasets"]:
         n_steps = root[name].shape[0]
-        split = trailing_split(n_steps, config["test_fraction"])
+        split = trailing_split(n_steps, config["test_fraction"], config["buffer_steps"])
         manifest["splits"][name] = {
             "n_steps": split.n_steps,
             "train": [split.train_start, split.train_end],
+            "buffer": [split.train_end, split.test_start],
             "test": [split.test_start, split.test_end],
         }
         print(
             f"{name}: n_steps={n_steps} "
-            f"train=[0,{split.train_end}) test=[{split.train_end},{n_steps})"
+            f"train=[0,{split.train_end}) buffer=[{split.train_end},{split.test_start}) "
+            f"test=[{split.test_start},{n_steps})"
         )
 
     args.out.parent.mkdir(parents=True, exist_ok=True)

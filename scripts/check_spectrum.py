@@ -70,8 +70,11 @@ def spectrum_sum(block: np.ndarray, axis: int, spacing: float) -> np.ndarray:
     return power.mean(axis=2).sum(axis=0)
 
 
-def compute_spectra(arr, train_end: int, dx: float, dy: float, chunk_t: int):
-    """Mean spectra per region and direction: {region: {direction: (C, K)}}."""
+def compute_spectra(arr, train_end: int, test_start: int, dx: float, dy: float, chunk_t: int):
+    """Mean spectra per region and direction: {region: {direction: (C, K)}}.
+
+    Buffer steps (train_end <= step < test_start) are excluded from both regions.
+    """
     n_steps = arr.shape[0]
     directions = {"x": (2, dx), "y": (3, dy)}
     sums = {r: {d: 0.0 for d in directions} for r in ("train", "test")}
@@ -80,8 +83,9 @@ def compute_spectra(arr, train_end: int, dx: float, dy: float, chunk_t: int):
     for start in range(0, n_steps, chunk_t):
         end = min(start + chunk_t, n_steps)
         block = arr[start:end].astype(np.float64)
-        split = max(0, min(train_end, end) - start)
-        for region, part in (("train", block[:split]), ("test", block[split:])):
+        train_n = max(0, min(train_end, end) - start)
+        test_from = min(max(test_start - start, 0), block.shape[0])
+        for region, part in (("train", block[:train_n]), ("test", block[test_from:])):
             if part.shape[0] == 0:
                 continue
             for direction, (axis, spacing) in directions.items():
@@ -163,9 +167,9 @@ def main() -> None:
         dx, dy = grid_spacing(arr.shape[2], arr.shape[3])
         dx = args.dx if args.dx is not None else dx
         dy = args.dy if args.dy is not None else dy
-        train_end = split["train"][1]
+        train_end, test_start = split["train"][1], split["test"][0]
 
-        spectra = compute_spectra(arr, train_end, dx, dy, args.chunk_t)
+        spectra = compute_spectra(arr, train_end, test_start, dx, dy, args.chunk_t)
         k_by_direction = {
             "x": wavenumbers(arr.shape[2], dx),
             "y": wavenumbers(arr.shape[3], dy),

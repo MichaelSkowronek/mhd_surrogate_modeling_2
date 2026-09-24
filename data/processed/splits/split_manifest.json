@@ -4,13 +4,18 @@
     "datasets": [
       "re16k_t400_0"
     ],
-    "test_fraction": 0.2
+    "test_fraction": 0.2,
+    "buffer_steps": 10
   },
   "splits": {
     "re16k_t400_0": {
       "n_steps": 1248,
       "train": [
         0,
+        988
+      ],
+      "buffer": [
+        988,
         998
       ],
       "test": [

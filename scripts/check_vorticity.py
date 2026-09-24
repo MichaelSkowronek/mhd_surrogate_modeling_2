@@ -77,8 +77,10 @@ def vorticity_stats(arr, dx: float, dy: float, chunk_t: int, snapshot_steps: lis
     return mean_vorticity, enstrophy, snapshots
 
 
-def print_scalar_comparison(label: str, series: np.ndarray, train_end: int) -> None:
-    train_vals, test_vals = series[:train_end], series[train_end:]
+def print_scalar_comparison(
+    label: str, series: np.ndarray, train_end: int, test_start: int
+) -> None:
+    train_vals, test_vals = series[:train_end], series[test_start:]
     train_mean, test_mean = train_vals.mean(), test_vals.mean()
     train_std, test_std = train_vals.std(), test_vals.std()
     mean_diff_in_std = abs(test_mean - train_mean) / (train_std + 1e-8)
@@ -96,12 +98,14 @@ def print_scalar_comparison(label: str, series: np.ndarray, train_end: int) -> N
 
 
 def plot_over_time(
-    name: str, series: dict[str, np.ndarray], train_end: int, out_dir: Path
+    name: str, series: dict[str, np.ndarray], train_end: int, test_start: int, out_dir: Path
 ) -> Path:
     fig, axes = plt.subplots(len(series), 1, figsize=(12, 4 * len(series)), squeeze=False)
     for (label, values), ax in zip(series.items(), axes[:, 0]):
         ax.plot(values)
-        ax.axvline(train_end, color="red", linestyle="--", label="train/test boundary")
+        if test_start > train_end:
+            ax.axvspan(train_end, test_start, color="grey", alpha=0.4, label="buffer")
+        ax.axvline(test_start, color="red", linestyle="--", label="train/test boundary")
         ax.set_title(f"{name}: {label} over time")
         ax.set_xlabel("time step")
         ax.legend()
@@ -142,7 +146,7 @@ def main() -> None:
             print(f"skipping {name}: expected shape (T, 2, Nx, Ny), got {arr.shape}")
             continue
 
-        n_steps, train_end = split["n_steps"], split["train"][1]
+        n_steps, train_end, test_start = split["n_steps"], split["train"][1], split["test"][0]
         snapshot_steps = sorted({0, n_steps // 2, n_steps - 1})
         dx, dy = grid_spacing(arr.shape[2], arr.shape[3])
         dx = args.dx if args.dx is not None else dx
@@ -152,14 +156,14 @@ def main() -> None:
         )
 
         print(f"\n=== {name} (dx={dx:.5g}, dy={dy:.5g}) ===")
-        print_scalar_comparison("mean vorticity", mean_vorticity, train_end)
-        print_scalar_comparison("enstrophy 0.5*w^2, spatial mean", enstrophy, train_end)
+        print_scalar_comparison("mean vorticity", mean_vorticity, train_end, test_start)
+        print_scalar_comparison("enstrophy 0.5*w^2, spatial mean", enstrophy, train_end, test_start)
 
         series = {
             "mean vorticity (spatial)": mean_vorticity,
             "enstrophy 0.5*w^2 (spatial mean)": enstrophy,
         }
-        print(f"  plot: {plot_over_time(name, series, train_end, args.out_dir)}")
+        print(f"  plot: {plot_over_time(name, series, train_end, test_start, args.out_dir)}")
         print(f"  maps: {plot_vorticity_maps(name, snapshots, args.out_dir)}")
 
 

@@ -86,13 +86,14 @@ def per_timestep_stats(arr, chunk_t: int):
 
 
 def train_test_histograms(
-    arr, train_end: int, value_range: np.ndarray, n_bins: int, chunk_t: int
+    arr, train_end: int, test_start: int, value_range: np.ndarray, n_bins: int, chunk_t: int
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Per-channel value histograms for the train and test regions.
 
     Reads the array in chunks and accumulates counts rather than loading
-    everything at once; a chunk straddling the train/test boundary is split
-    so both sides get the right counts regardless of chunk alignment.
+    everything at once; a chunk straddling a region boundary is split so each
+    region gets the right counts regardless of chunk alignment. Buffer steps
+    (train_end <= step < test_start) are excluded from both.
     Returns (train_counts, test_counts, bin_edges), each (n_channels, ...).
     """
     n_steps, n_channels = arr.shape[0], arr.shape[1]
@@ -105,13 +106,14 @@ def train_test_histograms(
     for start in range(0, n_steps, chunk_t):
         end = min(start + chunk_t, n_steps)
         block = arr[start:end]
-        split = max(0, min(train_end, end) - start)
+        train_n = max(0, min(train_end, end) - start)
+        test_from = min(max(test_start - start, 0), block.shape[0])
         for c in range(n_channels):
-            if split > 0:
-                counts, _ = np.histogram(block[:split, c], bins=bin_edges[c])
+            if train_n > 0:
+                counts, _ = np.histogram(block[:train_n, c], bins=bin_edges[c])
                 train_counts[c] += counts
-            if split < block.shape[0]:
-                counts, _ = np.histogram(block[split:, c], bins=bin_edges[c])
+            if test_from < block.shape[0]:
+                counts, _ = np.histogram(block[test_from:, c], bins=bin_edges[c])
                 test_counts[c] += counts
 
     return train_counts, test_counts, bin_edges
@@ -125,16 +127,21 @@ def rolling_mean(x: np.ndarray, window: int) -> np.ndarray:
 
 
 def print_region_comparison(
-    means: np.ndarray, stds: np.ndarray, mins: np.ndarray, maxs: np.ndarray, train_end: int
+    means: np.ndarray,
+    stds: np.ndarray,
+    mins: np.ndarray,
+    maxs: np.ndarray,
+    train_end: int,
+    test_start: int,
 ) -> None:
     n_channels = means.shape[1]
     for c, cname in enumerate(channel_labels(n_channels)):
         train_mean = means[:train_end, c].mean()
-        test_mean = means[train_end:, c].mean()
+        test_mean = means[test_start:, c].mean()
         train_std = stds[:train_end, c].mean()
-        test_std = stds[train_end:, c].mean()
+        test_std = stds[test_start:, c].mean()
         train_min, train_max = mins[:train_end, c].min(), maxs[:train_end, c].max()
-        test_min, test_max = mins[train_end:, c].min(), maxs[train_end:, c].max()
+        test_min, test_max = mins[test_start:, c].min(), maxs[test_start:, c].max()
         # Mean shift relative to the natural fluctuation scale (train std),
         # not relative to the mean itself -- a % diff is meaningless when
         # the baseline mean is near zero (e.g. a zero-mean fluctuation).
@@ -154,8 +161,10 @@ def print_region_comparison(
         )
 
 
-def print_scalar_comparison(label: str, series: np.ndarray, train_end: int) -> None:
-    train_vals, test_vals = series[:train_end], series[train_end:]
+def print_scalar_comparison(
+    label: str, series: np.ndarray, train_end: int, test_start: int
+) -> None:
+    train_vals, test_vals = series[:train_end], series[test_start:]
     train_mean, test_mean = train_vals.mean(), test_vals.mean()
     train_std, test_std = train_vals.std(), test_vals.std()
     mean_diff_in_std = abs(test_mean - train_mean) / (train_std + 1e-8)
@@ -172,7 +181,9 @@ def print_scalar_comparison(label: str, series: np.ndarray, train_end: int) -> N
     )
 
 
-def plot_series_over_time(name: str, series: dict[str, np.ndarray], train_end: int, out_dir: Path) -> Path:
+def plot_series_over_time(
+    name: str, series: dict[str, np.ndarray], train_end: int, test_start: int, out_dir: Path
+) -> Path:
     n_steps = next(iter(series.values())).shape[0]
     window = max(n_steps // 50, 1)
 
@@ -183,7 +194,9 @@ def plot_series_over_time(name: str, series: dict[str, np.ndarray], train_end: i
         smoothed = rolling_mean(values, window)
         offset = (n_steps - len(smoothed)) // 2
         ax.plot(range(offset, offset + len(smoothed)), smoothed, label=f"rolling mean (w={window})")
-        ax.axvline(train_end, color="red", linestyle="--", label="train/test boundary")
+        if test_start > train_end:
+            ax.axvspan(train_end, test_start, color="grey", alpha=0.4, label="buffer")
+        ax.axvline(test_start, color="red", linestyle="--", label="train/test boundary")
         ax.set_title(f"{name}: {label} over time")
         ax.set_xlabel("time step")
         ax.legend()
@@ -234,12 +247,15 @@ def main() -> None:
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     for name, split in manifest["splits"].items():
-        train_end = split["train"][1]
+        train_end, test_start = split["train"][1], split["test"][0]
         arr = root[name]
         means, stds, mins, maxs, energy, correlation = per_timestep_stats(arr, args.chunk_t)
 
-        print(f"\n=== {name} (train: [0,{train_end}), test: [{train_end},{split['n_steps']})) ===")
-        print_region_comparison(means, stds, mins, maxs, train_end)
+        print(
+            f"\n=== {name} (train: [0,{train_end}), buffer: [{train_end},{test_start}), "
+            f"test: [{test_start},{split['n_steps']})) ==="
+        )
+        print_region_comparison(means, stds, mins, maxs, train_end, test_start)
 
         labels = channel_labels(means.shape[1])
         series = {f"{cname} spatial mean": means[:, c] for c, cname in enumerate(labels)}
@@ -250,19 +266,21 @@ def main() -> None:
         }
         energy_series["total kinetic energy 0.5*sum(u^2), spatial mean"] = energy.sum(axis=1)
         for label, values in energy_series.items():
-            print_scalar_comparison(label, values, train_end)
+            print_scalar_comparison(label, values, train_end, test_start)
         series.update(energy_series)
 
         if correlation is not None:
-            print_scalar_comparison("u_x-u_y spatial correlation", correlation, train_end)
+            print_scalar_comparison(
+                "u_x-u_y spatial correlation", correlation, train_end, test_start
+            )
             series["u_x-u_y spatial correlation"] = correlation
 
-        out_path = plot_series_over_time(name, series, train_end, args.out_dir)
+        out_path = plot_series_over_time(name, series, train_end, test_start, args.out_dir)
         print(f"  plot: {out_path}")
 
         value_range = np.stack([mins.min(axis=0), maxs.max(axis=0)], axis=1)
         train_counts, test_counts, bin_edges = train_test_histograms(
-            arr, train_end, value_range, N_HIST_BINS, args.chunk_t
+            arr, train_end, test_start, value_range, N_HIST_BINS, args.chunk_t
         )
         hist_path = plot_histograms(name, train_counts, test_counts, bin_edges, args.out_dir)
         print(f"  histogram: {hist_path}")

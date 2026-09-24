@@ -98,7 +98,10 @@ def field_acf(data: np.ndarray, max_lag: int, slab: int) -> np.ndarray:
 
 
 def scalar_series(data: np.ndarray, chunk_t: int) -> np.ndarray:
-    """Spatial means of u_x, u_y and per-direction energy 0.5*u^2, shape (T, 4)."""
+    """Spatial means of u_x, u_y and per-direction energy 0.5*u^2, shape (T, 4).
+
+    `data` may be a zarr array; it is read in time chunks.
+    """
     n_steps = data.shape[0]
     out = np.empty((n_steps, 4), dtype=np.float64)
     for start in range(0, n_steps, chunk_t):
@@ -202,7 +205,6 @@ def main() -> None:
 
         regions = {"train": split["train"], "test": split["test"]}
         field: dict[str, np.ndarray] = {}
-        scalar_parts = []
         print(f"\n=== {name} (lags in snapshot steps) ===")
         print("field autocorrelation, fluctuations about each region's time-mean field:")
         for region, (start, end) in regions.items():
@@ -210,13 +212,12 @@ def main() -> None:
             n_steps = end - start
             max_lag = min(args.max_lag, n_steps // 2)
             field[region] = field_acf(data, max_lag, args.slab)
-            scalar_parts.append(scalar_series(data, args.chunk_t))
             del data
             for c, cname in enumerate(CHANNEL_NAMES):
                 metrics = decorrelation_metrics(field[region][c], n_steps)
                 print(f"  {cname} {region} (N={n_steps}): {format_metrics(metrics)}")
 
-        series = np.concatenate(scalar_parts, axis=0)
+        series = scalar_series(arr, args.chunk_t)
         total_steps = series.shape[0]
         scalar_lag = total_steps // 3
         scalars = series_acf(series, scalar_lag)
