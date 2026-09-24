@@ -22,9 +22,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import matplotlib
-
 import imageio_ffmpeg
+import matplotlib
 
 matplotlib.rcParams["animation.ffmpeg_path"] = imageio_ffmpeg.get_ffmpeg_exe()
 
@@ -51,7 +50,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--store", type=Path, default=DEFAULT_STORE)
     parser.add_argument("--dataset", required=True, help="Array name in the zarr store")
     parser.add_argument("--field", choices=sorted(FIELDS), default="vorticity")
-    parser.add_argument("--out", type=Path, default=None, help="Default: <out-dir>/<dataset>_<field>.mp4")
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Default: <out-dir>/<dataset>_<field>.mp4",
+    )
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument("--start", type=int, default=0)
     parser.add_argument("--end", type=int, default=None, help="Default: all time steps")
@@ -60,10 +64,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dx", type=float, default=None, help="Override spacing along axis 2")
     parser.add_argument("--dy", type=float, default=None, help="Override spacing along axis 3")
     parser.add_argument(
-        "--color-sample", type=int, default=30, help="Frames sampled to fix the color scale"
+        "--color-sample",
+        type=int,
+        default=30,
+        help="Frames sampled to fix the color scale",
     )
     parser.add_argument(
-        "--chunk-frames", type=int, default=32, help="Output frames per zarr read (default: %(default)s)"
+        "--chunk-frames",
+        type=int,
+        default=32,
+        help="Output frames per zarr read (default: %(default)s)",
     )
     return parser.parse_args()
 
@@ -109,13 +119,21 @@ def main() -> None:
 
     sample_stride = max(1, len(steps) // args.color_sample)
     vmin, vmax = color_limits(arr, steps[::sample_stride], args.field, dx, dy)
-    print(f"{args.dataset}: {len(steps)} frames, field={args.field}, color range [{vmin:.4g}, {vmax:.4g}]")
+    print(
+        f"{args.dataset}: {len(steps)} frames, field={args.field}, "
+        f"color range [{vmin:.4g}, {vmax:.4g}]"
+    )
 
     out_path = args.out or (args.out_dir / f"{args.dataset}_{args.field}.mp4")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     fig, ax = plt.subplots(figsize=(14, 3))
-    im = ax.imshow(np.zeros((arr.shape[3], arr.shape[2])), cmap=FIELDS[args.field]["cmap"], vmin=vmin, vmax=vmax)
+    im = ax.imshow(
+        np.zeros((arr.shape[3], arr.shape[2])),
+        cmap=FIELDS[args.field]["cmap"],
+        vmin=vmin,
+        vmax=vmax,
+    )
     fig.colorbar(im, ax=ax, shrink=0.8)
     title = ax.set_title("")
     fig.tight_layout()

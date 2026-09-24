@@ -53,13 +53,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument(
-        "--max-lag", type=int, default=150, help="Max field lag in steps (default: %(default)s)"
+        "--max-lag",
+        type=int,
+        default=150,
+        help="Max field lag in steps (default: %(default)s)",
     )
     parser.add_argument(
-        "--slab", type=int, default=64, help="x columns per FFT slab (default: %(default)s)"
+        "--slab",
+        type=int,
+        default=64,
+        help="x columns per FFT slab (default: %(default)s)",
     )
     parser.add_argument(
-        "--chunk-t", type=int, default=64, help="Time steps per scalar pass (default: %(default)s)"
+        "--chunk-t",
+        type=int,
+        default=64,
+        help="Time steps per scalar pass (default: %(default)s)",
     )
     return parser.parse_args()
 
@@ -165,7 +174,13 @@ def plot_acf(
     for region, style in (("train", "-"), ("test", "--")):
         for c, cname in enumerate(CHANNEL_NAMES):
             rho = field[region][c]
-            ax.plot(np.arange(len(rho)), rho, style, color=colors[c], label=f"{cname} {region}")
+            ax.plot(
+                np.arange(len(rho)),
+                rho,
+                style,
+                color=colors[c],
+                label=f"{cname} {region}",
+            )
     ax.axhline(1 / np.e, color="grey", linestyle=":", label="1/e")
     ax.axhline(0, color="black", linewidth=0.5)
     ax.set_title(f"{name}: field autocorrelation (pooled over space)")
@@ -223,7 +238,8 @@ def main() -> None:
         scalars = series_acf(series, scalar_lag)
         print("scalar diagnostics autocorrelation, all steps:")
         for s, sname in enumerate(SCALAR_NAMES):
-            print(f"  {sname} (N={total_steps}): {format_metrics(decorrelation_metrics(scalars[s], total_steps))}")
+            metrics = decorrelation_metrics(scalars[s], total_steps)
+            print(f"  {sname} (N={total_steps}): {format_metrics(metrics)}")
 
         print(f"  plot: {plot_acf(name, field, scalars, total_steps, args.out_dir)}")
 

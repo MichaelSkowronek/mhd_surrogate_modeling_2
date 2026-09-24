@@ -11,7 +11,8 @@ y, channel 0 is u_x and channel 1 is u_y. Derivatives use second-order
 central differences (one-sided at the boundaries) with uniform spacing
 taken from the domain lengths in configs/grid.yaml; --dx/--dy override it.
 In y the data was linearly interpolated onto a uniform grid from a non-uniform
-DNS grid, so y-derivatives are piecewise-constant approximations. The absolute values depend on those lengths.
+DNS grid, so y-derivatives are piecewise-constant approximations. The absolute
+values depend on those lengths.
 
 It prints train vs. test statistics for the mean vorticity and the
 enstrophy, plots both over time with the train/test boundary marked, and
@@ -48,7 +49,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dx", type=float, default=None, help="Override spacing along axis 2")
     parser.add_argument("--dy", type=float, default=None, help="Override spacing along axis 3")
     parser.add_argument(
-        "--chunk-t", type=int, default=32, help="Time steps per read (default: %(default)s)"
+        "--chunk-t",
+        type=int,
+        default=32,
+        help="Time steps per read (default: %(default)s)",
     )
     return parser.parse_args()
 
@@ -100,7 +104,11 @@ def print_scalar_comparison(
 
 
 def plot_over_time(
-    name: str, series: dict[str, np.ndarray], train_end: int, test_start: int, out_dir: Path
+    name: str,
+    series: dict[str, np.ndarray],
+    train_end: int,
+    test_start: int,
+    out_dir: Path,
 ) -> Path:
     fig, axes = plt.subplots(len(series), 1, figsize=(12, 4 * len(series)), squeeze=False)
     for (label, values), ax in zip(series.items(), axes[:, 0]):
@@ -148,7 +156,11 @@ def main() -> None:
             print(f"skipping {name}: expected shape (T, 2, Nx, Ny), got {arr.shape}")
             continue
 
-        n_steps, train_end, test_start = split["n_steps"], split["train"][1], split["test"][0]
+        n_steps, train_end, test_start = (
+            split["n_steps"],
+            split["train"][1],
+            split["test"][0],
+        )
         snapshot_steps = sorted({0, n_steps // 2, n_steps - 1})
         dx, dy = grid_spacing(arr.shape[2], arr.shape[3])
         dx = args.dx if args.dx is not None else dx

@@ -41,7 +41,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument(
-        "--chunk-t", type=int, default=32, help="Time steps per read (default: %(default)s)"
+        "--chunk-t",
+        type=int,
+        default=32,
+        help="Time steps per read (default: %(default)s)",
     )
     return parser.parse_args()
 
@@ -86,7 +89,12 @@ def per_timestep_stats(arr, chunk_t: int):
 
 
 def train_test_histograms(
-    arr, train_end: int, test_start: int, value_range: np.ndarray, n_bins: int, chunk_t: int
+    arr,
+    train_end: int,
+    test_start: int,
+    value_range: np.ndarray,
+    n_bins: int,
+    chunk_t: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Per-channel value histograms for the train and test regions.
 
@@ -182,7 +190,11 @@ def print_scalar_comparison(
 
 
 def plot_series_over_time(
-    name: str, series: dict[str, np.ndarray], train_end: int, test_start: int, out_dir: Path
+    name: str,
+    series: dict[str, np.ndarray],
+    train_end: int,
+    test_start: int,
+    out_dir: Path,
 ) -> Path:
     n_steps = next(iter(series.values())).shape[0]
     window = max(n_steps // 50, 1)
@@ -193,7 +205,11 @@ def plot_series_over_time(
         ax.plot(values, alpha=0.3, label="per-step value")
         smoothed = rolling_mean(values, window)
         offset = (n_steps - len(smoothed)) // 2
-        ax.plot(range(offset, offset + len(smoothed)), smoothed, label=f"rolling mean (w={window})")
+        ax.plot(
+            range(offset, offset + len(smoothed)),
+            smoothed,
+            label=f"rolling mean (w={window})",
+        )
         if test_start > train_end:
             ax.axvspan(train_end, test_start, color="grey", alpha=0.4, label="buffer")
         ax.axvline(test_start, color="red", linestyle="--", label="train/test boundary")

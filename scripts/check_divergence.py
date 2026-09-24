@@ -46,7 +46,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dx", type=float, default=None, help="Override spacing along axis 2")
     parser.add_argument("--dy", type=float, default=None, help="Override spacing along axis 3")
     parser.add_argument(
-        "--chunk-t", type=int, default=32, help="Time steps per read (default: %(default)s)"
+        "--chunk-t",
+        type=int,
+        default=32,
+        help="Time steps per read (default: %(default)s)",
     )
     return parser.parse_args()
 
@@ -89,7 +92,10 @@ def plot_divergence_over_time(
     out_dir: Path,
 ) -> Path:
     fig, axes = plt.subplots(2, 1, figsize=(12, 8), squeeze=False)
-    panels = [("RMS divergence", rms_div), ("RMS divergence / RMS of derivative terms", rel_div)]
+    panels = [
+        ("RMS divergence", rms_div),
+        ("RMS divergence / RMS of derivative terms", rel_div),
+    ]
     for (label, values), ax in zip(panels, axes[:, 0]):
         ax.plot(values)
         if test_start > train_end:
@@ -135,7 +141,11 @@ def main() -> None:
             print(f"skipping {name}: expected shape (T, 2, Nx, Ny), got {arr.shape}")
             continue
 
-        n_steps, train_end, test_start = split["n_steps"], split["train"][1], split["test"][0]
+        n_steps, train_end, test_start = (
+            split["n_steps"],
+            split["train"][1],
+            split["test"][0],
+        )
         snapshot_steps = sorted({0, n_steps // 2, n_steps - 1})
         dx, dy = grid_spacing(arr.shape[2], arr.shape[3])
         dx = args.dx if args.dx is not None else dx
@@ -143,13 +153,19 @@ def main() -> None:
         rms_div, rel_div, snapshots = divergence_stats(arr, dx, dy, args.chunk_t, snapshot_steps)
 
         print(f"\n=== {name} (dx={dx:.5g}, dy={dy:.5g}) ===")
-        for region, sl in [("train", slice(0, train_end)), ("test", slice(test_start, n_steps))]:
+        for region, sl in [
+            ("train", slice(0, train_end)),
+            ("test", slice(test_start, n_steps)),
+        ]:
             print(
                 f"  {region}: RMS divergence mean={rms_div[sl].mean():.4g} "
                 f"max={rms_div[sl].max():.4g} | "
                 f"normalized mean={rel_div[sl].mean():.4g} max={rel_div[sl].max():.4g}"
             )
-        print(f"  plot: {plot_divergence_over_time(name, rms_div, rel_div, train_end, test_start, args.out_dir)}")
+        plot_path = plot_divergence_over_time(
+            name, rms_div, rel_div, train_end, test_start, args.out_dir
+        )
+        print(f"  plot: {plot_path}")
         print(f"  maps: {plot_divergence_maps(name, snapshots, args.out_dir)}")
 
 

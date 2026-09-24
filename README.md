@@ -22,6 +22,16 @@ This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
 
 ```bash
 uv sync
+uv run pre-commit install
+```
+
+Pre-commit hooks ([pre-commit-hooks](https://github.com/pre-commit/pre-commit-hooks):
+whitespace/EOF/YAML-TOML-JSON/large-file/merge-conflict/case-conflict checks,
+plus [ruff](https://docs.astral.sh/ruff/) lint + format) run automatically on
+`git commit`. Run them on demand with:
+
+```bash
+uv run pre-commit run --all-files
 ```
 
 ## Data
@@ -122,6 +132,7 @@ separate arrays within one group rather than stacked into one array:
 
 ```python
 import zarr
+
 root = zarr.open_group("data/processed/re16k_t400.zarr", mode="r")
 root["re16k_t400_0"]  # shape (1248, 2, 1151, 127)
 ```

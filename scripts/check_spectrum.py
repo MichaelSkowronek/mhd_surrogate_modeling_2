@@ -45,7 +45,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dx", type=float, default=None, help="Override spacing along axis 2")
     parser.add_argument("--dy", type=float, default=None, help="Override spacing along axis 3")
     parser.add_argument(
-        "--chunk-t", type=int, default=32, help="Time steps per read (default: %(default)s)"
+        "--chunk-t",
+        type=int,
+        default=32,
+        help="Time steps per read (default: %(default)s)",
     )
     return parser.parse_args()
 
@@ -95,9 +98,7 @@ def compute_spectra(arr, train_end: int, test_start: int, dx: float, dy: float, 
                 )
             counts[region] += part.shape[0]
 
-    return {
-        region: {d: sums[region][d] / counts[region] for d in directions} for region in sums
-    }
+    return {region: {d: sums[region][d] / counts[region] for d in directions} for region in sums}
 
 
 def wavenumbers(n: int, spacing: float) -> np.ndarray:
@@ -135,9 +136,17 @@ def plot_spectra(name: str, spectra, k_by_direction: dict[str, np.ndarray], out_
     colors = ["tab:blue", "tab:orange"]
     for ax, (direction, k) in zip(np.atleast_1d(axes), k_by_direction.items()):
         for c, cname in enumerate(CHANNEL_NAMES):
-            ax.loglog(k[1:], spectra["train"][direction][c][1:], color=colors[c], label=f"{cname} train")
             ax.loglog(
-                k[1:], spectra["test"][direction][c][1:], color=colors[c], linestyle="--",
+                k[1:],
+                spectra["train"][direction][c][1:],
+                color=colors[c],
+                label=f"{cname} train",
+            )
+            ax.loglog(
+                k[1:],
+                spectra["test"][direction][c][1:],
+                color=colors[c],
+                linestyle="--",
                 label=f"{cname} test",
             )
         ax.set_title(f"{name}: power spectrum along {direction}")

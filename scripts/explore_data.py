@@ -78,9 +78,11 @@ def plot_preview(array: np.ndarray, name: str, out_dir: Path) -> None:
     n_steps = array.shape[0]
     step_indices = sorted({0, n_steps // 2, n_steps - 1})
     n_channels = array.shape[1] if array.ndim == 4 else 1
-    channel_names = CHANNEL_NAMES if n_channels == len(CHANNEL_NAMES) else [
-        f"channel={i}" for i in range(n_channels)
-    ]
+    channel_names = (
+        CHANNEL_NAMES
+        if n_channels == len(CHANNEL_NAMES)
+        else [f"channel={i}" for i in range(n_channels)]
+    )
 
     panels = [(t, row) for row in range(n_channels) for t in step_indices]
 

@@ -56,7 +56,12 @@ class WindowedDataset:
 
 
 def load_dataset(
-    manifest_path: Path, dataset: str, split: str, window: int, horizon: int, stride: int
+    manifest_path: Path,
+    dataset: str,
+    split: str,
+    window: int,
+    horizon: int,
+    stride: int,
 ) -> WindowedDataset:
     """Build a WindowedDataset for `dataset`'s `split` region ("train" or "test")."""
     manifest = json.loads(Path(manifest_path).read_text())
