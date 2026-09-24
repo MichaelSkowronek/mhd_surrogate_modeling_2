@@ -7,10 +7,13 @@ The data is a 2D slice of a 3D direct numerical simulation (DNS) of an MHD
 flow. Working with a 2D slice is itself a research hypothesis: the imposed
 magnetic field drives the flow toward a near-uniform state along one of the
 three spatial axes, so a 2D slice is treated as a reasonable stand-in for the
-full 3D field. The project currently focuses on a single dataset
-(`re16k_t400_0.npy`); companion datasets `re16k_t400_1.npy` through
-`re16k_t400_10.npy` (same setup, different simulation parameters) are planned
-for later robustness checks and comparisons, not part of the initial scope.
+full 3D field. There are 9 datasets (`re16k_t400_0.npy` through
+`re16k_t400_10.npy`, excluding two known-bad ones; same setup, different
+simulation parameters). The analysis suite (see "Running the suite across
+all datasets") now runs across all 9, to support the eventual decision on
+final test set size and which dataset(s) to train on; the training config
+(`configs/data/`) still targets just `re16k_t400_0` for now, since that
+decision hasn't been made yet.
 
 ## Status
 
@@ -41,8 +44,9 @@ uv run pytest
 ```
 
 Unit tests live in `tests/`, covering the pure computational logic: the
-`src/mhd_surrogate/` modules (`splitting`, `grid`, `fields`, `dataset`) plus
-the computational core functions inside the `check_*.py`/`make_video.py`
+`src/mhd_surrogate/` modules (`splitting`, `grid`, `fields`, `dataset`,
+`summary`) plus the computational core functions inside the
+`check_*.py`/`make_video.py`
 scripts (e.g. `per_timestep_stats`, `field_acf`, `spectrum_sum`,
 `divergence_stats`, `vorticity_stats`, `compute_field`) — the
 `scripts/*.py` files aren't part of the installed package, so
@@ -429,6 +433,55 @@ For `re16k_t400_0`:
 
 Only temporal autocorrelation is covered; spatial autocorrelation (integral
 length scales) and the enstrophy autocorrelation are not.
+
+## Running the suite across all datasets
+
+`configs/split.yaml` now lists all 9 available datasets (`re16k_t400_0`
+through `re16k_t400_10`, excluding the two known-bad ones), so
+`uv run scripts/split_data.py` builds a manifest covering all of them.
+
+Each of the five `check_*.py` scripts accepts `--dataset NAME` (repeatable;
+default: every dataset in the manifest) and now writes a JSON summary of its
+key numbers per dataset to `reports/summaries/<dataset>__<script>.json`
+(gitignored, like the figures), in addition to its existing printed output
+and plots — this is what makes cross-dataset comparison possible instead of
+having to read 45 separate walls of text.
+
+```bash
+uv run scripts/run_all_checks.py
+uv run scripts/run_all_checks.py --dataset re16k_t400_0 --dataset re16k_t400_1
+uv run scripts/run_all_checks.py --script check_split.py --workers 4
+```
+
+`scripts/run_all_checks.py` runs every (script, dataset) pair — 45 by
+default — and builds a comparison table (printed and written to
+`reports/summaries/comparison.csv`) from the resulting JSON summaries, with
+one row per dataset and a handful of headline numbers (step counts, how
+many things got flagged by `check_split`/`check_vorticity`, divergence
+residual, the `u_x` field decorrelation time and test-region effective
+sample size). The full detail stays in the individual JSON files; the table
+is meant for a quick side-by-side look, not the final word.
+
+**Parallelization:** each (script, dataset) pair is independent, so this
+dispatches them as separate `python check_*.py --dataset X` subprocesses via
+a thread pool (the threads just block on `subprocess.run`; the real
+numpy/FFT work happens in the child processes, on separate cores, with full
+process isolation). All 45 jobs (9 datasets) completed in ~113s wall time
+against ~15m13s of aggregate CPU time on a 12-core machine — about 8x, not
+a full 12x, since the slower scripts (`check_spectrum`, `check_autocorrelation`)
+become the tail once the faster ones finish. A distributed framework like
+Ray was considered but is not warranted for a workload this size (minutes,
+one machine); it would earn its keep once training actually needs a cluster,
+distributed GPUs, or data beyond single-machine scale.
+
+**First cross-dataset result:** across all 9 datasets, the divergence
+residual clusters tightly (0.40-0.43, both train and test), and each dataset
+gets 2-4 `check_split` flags and 1-2 `check_vorticity` flags in the same
+pattern seen for `re16k_t400_0` — consistent with the slow energy variation
+found there being a general feature of this simulation family rather than a
+fluke of one run. This is a first look to confirm the tooling works
+end-to-end, not the dataset-selection/test-size decision itself, which is a
+separate step from reviewing this table in full.
 
 ## Video
 

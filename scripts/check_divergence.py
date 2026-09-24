@@ -34,6 +34,7 @@ import numpy as np
 import zarr
 
 from mhd_surrogate.grid import grid_spacing
+from mhd_surrogate.summary import add_common_args, filter_datasets, write_summary
 
 DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
 DEFAULT_OUT_DIR = Path("reports/figures")
@@ -51,6 +52,7 @@ def parse_args() -> argparse.Namespace:
         default=32,
         help="Time steps per read (default: %(default)s)",
     )
+    add_common_args(parser)
     return parser.parse_args()
 
 
@@ -135,7 +137,8 @@ def main() -> None:
     root = zarr.open_group(store=manifest["config"]["zarr_store"], mode="r")
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    for name, split in manifest["splits"].items():
+    splits = filter_datasets(manifest["splits"], args.dataset)
+    for name, split in splits.items():
         arr = root[name]
         if arr.ndim != 4 or arr.shape[1] != 2:
             print(f"skipping {name}: expected shape (T, 2, Nx, Ny), got {arr.shape}")
@@ -153,6 +156,7 @@ def main() -> None:
         rms_div, rel_div, snapshots = divergence_stats(arr, dx, dy, args.chunk_t, snapshot_steps)
 
         print(f"\n=== {name} (dx={dx:.5g}, dy={dy:.5g}) ===")
+        region_summary = {}
         for region, sl in [
             ("train", slice(0, train_end)),
             ("test", slice(test_start, n_steps)),
@@ -162,11 +166,25 @@ def main() -> None:
                 f"max={rms_div[sl].max():.4g} | "
                 f"normalized mean={rel_div[sl].mean():.4g} max={rel_div[sl].max():.4g}"
             )
+            region_summary[region] = {
+                "rms_mean": rms_div[sl].mean(),
+                "rms_max": rms_div[sl].max(),
+                "normalized_mean": rel_div[sl].mean(),
+                "normalized_max": rel_div[sl].max(),
+            }
         plot_path = plot_divergence_over_time(
             name, rms_div, rel_div, train_end, test_start, args.out_dir
         )
         print(f"  plot: {plot_path}")
         print(f"  maps: {plot_divergence_maps(name, snapshots, args.out_dir)}")
+
+        summary_path = write_summary(
+            name,
+            "check_divergence",
+            {"dx": dx, "dy": dy, **region_summary},
+            args.summary_dir,
+        )
+        print(f"  summary: {summary_path}")
 
 
 if __name__ == "__main__":

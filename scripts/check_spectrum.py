@@ -31,6 +31,7 @@ import numpy as np
 import zarr
 
 from mhd_surrogate.grid import grid_spacing
+from mhd_surrogate.summary import add_common_args, filter_datasets, write_summary
 
 DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
 DEFAULT_OUT_DIR = Path("reports/figures")
@@ -50,6 +51,7 @@ def parse_args() -> argparse.Namespace:
         default=32,
         help="Time steps per read (default: %(default)s)",
     )
+    add_common_args(parser)
     return parser.parse_args()
 
 
@@ -105,18 +107,21 @@ def wavenumbers(n: int, spacing: float) -> np.ndarray:
     return 2 * np.pi * np.fft.rfftfreq(n, d=spacing)
 
 
-def print_summary(spectra, k_by_direction: dict[str, np.ndarray]) -> None:
+def print_summary(spectra, k_by_direction: dict[str, np.ndarray]) -> dict:
+    summary = {}
     for direction, k in k_by_direction.items():
         dk = k[1] - k[0]
+        summary[direction] = {}
         for c, cname in enumerate(CHANNEL_NAMES):
             train = spectra["train"][direction][c]
             test = spectra["test"][direction][c]
             peak = np.argmax(train[1:]) + 1
             variance_ratio = test[1:].sum() / train[1:].sum()
-            if peak == 1:
-                peak_text = "no interior peak (max at lowest k)"
-            else:
+            has_peak = peak != 1
+            if has_peak:
                 peak_text = f"peak k={k[peak]:.3g} (wavelength {2 * np.pi / k[peak]:.3g})"
+            else:
+                peak_text = "no interior peak (max at lowest k)"
 
             edges = np.logspace(np.log10(k[1]), np.log10(k[-1]), N_BANDS + 1)
             ratios = []
@@ -129,6 +134,14 @@ def print_summary(spectra, k_by_direction: dict[str, np.ndarray]) -> None:
                 f"{peak_text} | test/train power: total={variance_ratio:.2f}, "
                 f"by band (low->high k)=" + ", ".join(f"{r:.2f}" for r in ratios)
             )
+            summary[direction][cname] = {
+                "train_variance": train[1:].sum() * dk,
+                "peak_k": k[peak] if has_peak else None,
+                "peak_wavelength": 2 * np.pi / k[peak] if has_peak else None,
+                "test_train_power_total": variance_ratio,
+                "test_train_power_by_band": ratios,
+            }
+    return summary
 
 
 def plot_spectra(name: str, spectra, k_by_direction: dict[str, np.ndarray], out_dir: Path) -> Path:
@@ -168,7 +181,8 @@ def main() -> None:
     root = zarr.open_group(store=manifest["config"]["zarr_store"], mode="r")
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    for name, split in manifest["splits"].items():
+    splits = filter_datasets(manifest["splits"], args.dataset)
+    for name, split in splits.items():
         arr = root[name]
         if arr.ndim != 4 or arr.shape[1] != len(CHANNEL_NAMES):
             print(f"skipping {name}: expected shape (T, 2, Nx, Ny), got {arr.shape}")
@@ -186,8 +200,16 @@ def main() -> None:
         }
 
         print(f"\n=== {name} (dx={dx:.5g}, dy={dy:.5g}) ===")
-        print_summary(spectra, k_by_direction)
+        spectrum_summary = print_summary(spectra, k_by_direction)
         print(f"  plot: {plot_spectra(name, spectra, k_by_direction, args.out_dir)}")
+
+        summary_path = write_summary(
+            name,
+            "check_spectrum",
+            {"dx": dx, "dy": dy, **spectrum_summary},
+            args.summary_dir,
+        )
+        print(f"  summary: {summary_path}")
 
 
 if __name__ == "__main__":

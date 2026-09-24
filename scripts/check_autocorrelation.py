@@ -37,6 +37,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import zarr
 
+from mhd_surrogate.summary import add_common_args, filter_datasets, write_summary
+
 DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
 DEFAULT_OUT_DIR = Path("reports/figures")
 CHANNEL_NAMES = ["u_x", "u_y"]
@@ -70,6 +72,7 @@ def parse_args() -> argparse.Namespace:
         default=64,
         help="Time steps per scalar pass (default: %(default)s)",
     )
+    add_common_args(parser)
     return parser.parse_args()
 
 
@@ -212,7 +215,8 @@ def main() -> None:
     root = zarr.open_group(store=manifest["config"]["zarr_store"], mode="r")
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    for name, split in manifest["splits"].items():
+    splits = filter_datasets(manifest["splits"], args.dataset)
+    for name, split in splits.items():
         arr = root[name]
         if arr.ndim != 4 or arr.shape[1] != len(CHANNEL_NAMES):
             print(f"skipping {name}: expected shape (T, 2, Nx, Ny), got {arr.shape}")
@@ -220,6 +224,7 @@ def main() -> None:
 
         regions = {"train": split["train"], "test": split["test"]}
         field: dict[str, np.ndarray] = {}
+        field_summary: dict[str, dict] = {cname: {} for cname in CHANNEL_NAMES}
         print(f"\n=== {name} (lags in snapshot steps) ===")
         print("field autocorrelation, fluctuations about each region's time-mean field:")
         for region, (start, end) in regions.items():
@@ -231,17 +236,28 @@ def main() -> None:
             for c, cname in enumerate(CHANNEL_NAMES):
                 metrics = decorrelation_metrics(field[region][c], n_steps)
                 print(f"  {cname} {region} (N={n_steps}): {format_metrics(metrics)}")
+                field_summary[cname][region] = metrics
 
         series = scalar_series(arr, args.chunk_t)
         total_steps = series.shape[0]
         scalar_lag = total_steps // 3
         scalars = series_acf(series, scalar_lag)
         print("scalar diagnostics autocorrelation, all steps:")
+        scalar_summary = {}
         for s, sname in enumerate(SCALAR_NAMES):
             metrics = decorrelation_metrics(scalars[s], total_steps)
             print(f"  {sname} (N={total_steps}): {format_metrics(metrics)}")
+            scalar_summary[sname] = metrics
 
         print(f"  plot: {plot_acf(name, field, scalars, total_steps, args.out_dir)}")
+
+        summary_path = write_summary(
+            name,
+            "check_autocorrelation",
+            {"field": field_summary, "scalars": scalar_summary},
+            args.summary_dir,
+        )
+        print(f"  summary: {summary_path}")
 
 
 if __name__ == "__main__":

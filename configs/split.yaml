@@ -8,6 +8,14 @@ zarr_store: data/processed/re16k_t400.zarr
 
 datasets:
   - re16k_t400_0
+  - re16k_t400_1
+  - re16k_t400_2
+  - re16k_t400_3
+  - re16k_t400_4
+  - re16k_t400_5
+  - re16k_t400_6
+  - re16k_t400_9
+  - re16k_t400_10
 
 test_fraction: 0.2
 

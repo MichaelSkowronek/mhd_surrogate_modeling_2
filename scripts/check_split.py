@@ -22,6 +22,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import zarr
 
+from mhd_surrogate.summary import add_common_args, filter_datasets, write_summary
+
 DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
 DEFAULT_OUT_DIR = Path("reports/figures")
 CHANNEL_NAMES = ["u_x", "u_y"]
@@ -46,6 +48,7 @@ def parse_args() -> argparse.Namespace:
         default=32,
         help="Time steps per read (default: %(default)s)",
     )
+    add_common_args(parser)
     return parser.parse_args()
 
 
@@ -141,8 +144,9 @@ def print_region_comparison(
     maxs: np.ndarray,
     train_end: int,
     test_start: int,
-) -> None:
+) -> dict[str, dict]:
     n_channels = means.shape[1]
+    summary = {}
     for c, cname in enumerate(channel_labels(n_channels)):
         train_mean = means[:train_end, c].mean()
         test_mean = means[test_start:, c].mean()
@@ -155,38 +159,57 @@ def print_region_comparison(
         # the baseline mean is near zero (e.g. a zero-mean fluctuation).
         mean_diff_in_std = abs(test_mean - train_mean) / (train_std + 1e-8)
         std_rel_diff = abs(test_std - train_std) / (abs(train_std) + 1e-8)
-        flag = (
-            " <-- check this"
-            if mean_diff_in_std > STD_DIFF_WARN_THRESHOLD or std_rel_diff > REL_DIFF_WARN_THRESHOLD
-            else ""
+        flagged = (
+            mean_diff_in_std > STD_DIFF_WARN_THRESHOLD or std_rel_diff > REL_DIFF_WARN_THRESHOLD
         )
         print(
             f"  {cname}: train mean={train_mean:.4g} std={train_std:.4g} "
             f"min={train_min:.4g} max={train_max:.4g} | "
             f"test mean={test_mean:.4g} std={test_std:.4g} "
             f"min={test_min:.4g} max={test_max:.4g} | "
-            f"mean shift={mean_diff_in_std:.2f} std devs, std rel diff={std_rel_diff:.1%}{flag}"
+            f"mean shift={mean_diff_in_std:.2f} std devs, std rel diff={std_rel_diff:.1%}"
+            f"{' <-- check this' if flagged else ''}"
         )
+        summary[cname] = {
+            "train_mean": train_mean,
+            "test_mean": test_mean,
+            "train_std": train_std,
+            "test_std": test_std,
+            "train_min": train_min,
+            "train_max": train_max,
+            "test_min": test_min,
+            "test_max": test_max,
+            "mean_diff_in_std": mean_diff_in_std,
+            "std_rel_diff": std_rel_diff,
+            "flagged": bool(flagged),
+        }
+    return summary
 
 
 def print_scalar_comparison(
     label: str, series: np.ndarray, train_end: int, test_start: int
-) -> None:
+) -> dict:
     train_vals, test_vals = series[:train_end], series[test_start:]
     train_mean, test_mean = train_vals.mean(), test_vals.mean()
     train_std, test_std = train_vals.std(), test_vals.std()
     mean_diff_in_std = abs(test_mean - train_mean) / (train_std + 1e-8)
     std_rel_diff = abs(test_std - train_std) / (abs(train_std) + 1e-8)
-    flag = (
-        " <-- check this"
-        if mean_diff_in_std > STD_DIFF_WARN_THRESHOLD or std_rel_diff > REL_DIFF_WARN_THRESHOLD
-        else ""
-    )
+    flagged = mean_diff_in_std > STD_DIFF_WARN_THRESHOLD or std_rel_diff > REL_DIFF_WARN_THRESHOLD
     print(
         f"  {label}: train mean={train_mean:.4g} std={train_std:.4g} | "
         f"test mean={test_mean:.4g} std={test_std:.4g} | "
-        f"mean shift={mean_diff_in_std:.2f} std devs, std rel diff={std_rel_diff:.1%}{flag}"
+        f"mean shift={mean_diff_in_std:.2f} std devs, std rel diff={std_rel_diff:.1%}"
+        f"{' <-- check this' if flagged else ''}"
     )
+    return {
+        "train_mean": train_mean,
+        "test_mean": test_mean,
+        "train_std": train_std,
+        "test_std": test_std,
+        "mean_diff_in_std": mean_diff_in_std,
+        "std_rel_diff": std_rel_diff,
+        "flagged": bool(flagged),
+    }
 
 
 def plot_series_over_time(
@@ -262,7 +285,8 @@ def main() -> None:
     root = zarr.open_group(store=manifest["config"]["zarr_store"], mode="r")
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    for name, split in manifest["splits"].items():
+    splits = filter_datasets(manifest["splits"], args.dataset)
+    for name, split in splits.items():
         train_end, test_start = split["train"][1], split["test"][0]
         arr = root[name]
         means, stds, mins, maxs, energy, correlation = per_timestep_stats(arr, args.chunk_t)
@@ -271,7 +295,7 @@ def main() -> None:
             f"\n=== {name} (train: [0,{train_end}), buffer: [{train_end},{test_start}), "
             f"test: [{test_start},{split['n_steps']})) ==="
         )
-        print_region_comparison(means, stds, mins, maxs, train_end, test_start)
+        channel_summary = print_region_comparison(means, stds, mins, maxs, train_end, test_start)
 
         labels = channel_labels(means.shape[1])
         series = {f"{cname} spatial mean": means[:, c] for c, cname in enumerate(labels)}
@@ -281,12 +305,15 @@ def main() -> None:
             for c, cname in enumerate(labels)
         }
         energy_series["total kinetic energy 0.5*sum(u^2), spatial mean"] = energy.sum(axis=1)
-        for label, values in energy_series.items():
-            print_scalar_comparison(label, values, train_end, test_start)
+        energy_summary = {
+            label: print_scalar_comparison(label, values, train_end, test_start)
+            for label, values in energy_series.items()
+        }
         series.update(energy_series)
 
+        correlation_summary = None
         if correlation is not None:
-            print_scalar_comparison(
+            correlation_summary = print_scalar_comparison(
                 "u_x-u_y spatial correlation", correlation, train_end, test_start
             )
             series["u_x-u_y spatial correlation"] = correlation
@@ -300,6 +327,22 @@ def main() -> None:
         )
         hist_path = plot_histograms(name, train_counts, test_counts, bin_edges, args.out_dir)
         print(f"  histogram: {hist_path}")
+
+        summary_path = write_summary(
+            name,
+            "check_split",
+            {
+                "n_steps": split["n_steps"],
+                "train_range": [0, train_end],
+                "buffer_range": [train_end, test_start],
+                "test_range": [test_start, split["n_steps"]],
+                "channels": channel_summary,
+                "energy": energy_summary,
+                "correlation": correlation_summary,
+            },
+            args.summary_dir,
+        )
+        print(f"  summary: {summary_path}")
 
 
 if __name__ == "__main__":

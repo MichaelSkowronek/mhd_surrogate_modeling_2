@@ -35,6 +35,7 @@ import zarr
 
 from mhd_surrogate.fields import vorticity as compute_vorticity
 from mhd_surrogate.grid import grid_spacing
+from mhd_surrogate.summary import add_common_args, filter_datasets, write_summary
 
 DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
 DEFAULT_OUT_DIR = Path("reports/figures")
@@ -54,6 +55,7 @@ def parse_args() -> argparse.Namespace:
         default=32,
         help="Time steps per read (default: %(default)s)",
     )
+    add_common_args(parser)
     return parser.parse_args()
 
 
@@ -85,22 +87,28 @@ def vorticity_stats(arr, dx: float, dy: float, chunk_t: int, snapshot_steps: lis
 
 def print_scalar_comparison(
     label: str, series: np.ndarray, train_end: int, test_start: int
-) -> None:
+) -> dict:
     train_vals, test_vals = series[:train_end], series[test_start:]
     train_mean, test_mean = train_vals.mean(), test_vals.mean()
     train_std, test_std = train_vals.std(), test_vals.std()
     mean_diff_in_std = abs(test_mean - train_mean) / (train_std + 1e-8)
     std_rel_diff = abs(test_std - train_std) / (abs(train_std) + 1e-8)
-    flag = (
-        " <-- check this"
-        if mean_diff_in_std > STD_DIFF_WARN_THRESHOLD or std_rel_diff > REL_DIFF_WARN_THRESHOLD
-        else ""
-    )
+    flagged = mean_diff_in_std > STD_DIFF_WARN_THRESHOLD or std_rel_diff > REL_DIFF_WARN_THRESHOLD
     print(
         f"  {label}: train mean={train_mean:.4g} std={train_std:.4g} | "
         f"test mean={test_mean:.4g} std={test_std:.4g} | "
-        f"mean shift={mean_diff_in_std:.2f} std devs, std rel diff={std_rel_diff:.1%}{flag}"
+        f"mean shift={mean_diff_in_std:.2f} std devs, std rel diff={std_rel_diff:.1%}"
+        f"{' <-- check this' if flagged else ''}"
     )
+    return {
+        "train_mean": train_mean,
+        "test_mean": test_mean,
+        "train_std": train_std,
+        "test_std": test_std,
+        "mean_diff_in_std": mean_diff_in_std,
+        "std_rel_diff": std_rel_diff,
+        "flagged": bool(flagged),
+    }
 
 
 def plot_over_time(
@@ -150,7 +158,8 @@ def main() -> None:
     root = zarr.open_group(store=manifest["config"]["zarr_store"], mode="r")
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    for name, split in manifest["splits"].items():
+    splits = filter_datasets(manifest["splits"], args.dataset)
+    for name, split in splits.items():
         arr = root[name]
         if arr.ndim != 4 or arr.shape[1] != 2:
             print(f"skipping {name}: expected shape (T, 2, Nx, Ny), got {arr.shape}")
@@ -170,8 +179,12 @@ def main() -> None:
         )
 
         print(f"\n=== {name} (dx={dx:.5g}, dy={dy:.5g}) ===")
-        print_scalar_comparison("mean vorticity", mean_vorticity, train_end, test_start)
-        print_scalar_comparison("enstrophy 0.5*w^2, spatial mean", enstrophy, train_end, test_start)
+        vorticity_summary = print_scalar_comparison(
+            "mean vorticity", mean_vorticity, train_end, test_start
+        )
+        enstrophy_summary = print_scalar_comparison(
+            "enstrophy 0.5*w^2, spatial mean", enstrophy, train_end, test_start
+        )
 
         series = {
             "mean vorticity (spatial)": mean_vorticity,
@@ -179,6 +192,19 @@ def main() -> None:
         }
         print(f"  plot: {plot_over_time(name, series, train_end, test_start, args.out_dir)}")
         print(f"  maps: {plot_vorticity_maps(name, snapshots, args.out_dir)}")
+
+        summary_path = write_summary(
+            name,
+            "check_vorticity",
+            {
+                "dx": dx,
+                "dy": dy,
+                "mean_vorticity": vorticity_summary,
+                "enstrophy": enstrophy_summary,
+            },
+            args.summary_dir,
+        )
+        print(f"  summary: {summary_path}")
 
 
 if __name__ == "__main__":
