@@ -105,3 +105,35 @@ the current trailing split under-represents that higher-energy regime. The
 per-direction energies show this comes entirely from `u_x` (~1.15 std devs
 shift); `u_y` energy is essentially unchanged (~0.08).
 `u_x`-`u_y` correlation is not flagged (~0.03 std devs shift).
+
+## Incompressibility check
+
+```bash
+uv run scripts/check_divergence.py [--dx DX --dy DY]
+```
+
+Computes `div(u) = du_x/dx + du_y/dy` per time step (second-order central
+differences, layout assumed `(T, 2, Nx, Ny)` with `x` = axis 2) and plots the
+RMS divergence, the RMS normalized by the RMS of the two derivative terms,
+and divergence maps at the first/middle/last step. Grid spacing is not stored
+in the data, so it defaults to 1 (grid units); pass `--dx/--dy` if known.
+The long axis (axis 2) is the streamwise x direction. Assuming a y length of
+2 (`dy = 2/126`) and an x length of 30 (`dx = 30/1150`):
+
+```bash
+uv run scripts/check_divergence.py --dx 0.026086956522 --dy 0.015873015873
+```
+
+For `re16k_t400_0` the normalized divergence is then ~0.37 (train and test
+alike, stationary in time; ~0.53 in unit grid spacing). The x length of 30 is
+not known independently: a least-squares fit of the `dx/dy` ratio on 13
+snapshots implies `Lx` ~ 30 for `Ly` = 2, which is consistent but not
+confirmed. Swapping the axes is much worse (~0.93). The divergence maps show
+large-scale structure tied to the flow features rather than grid-scale noise.
+
+So the 2D field is not exactly incompressible, which is expected: the
+quasi-2D hypothesis is only approximate, so `du_z/dz` in the slice does not
+vanish, and this residual (~37% of the derivative magnitude) is a rough
+measure of how far the slice is from ideal 2D. Whether it is "good enough"
+is a modeling judgement; a non-uniform grid or a discretization that differs
+from central differences would also contribute and cannot be separated here.
