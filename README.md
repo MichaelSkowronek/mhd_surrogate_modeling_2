@@ -72,6 +72,17 @@ part of the dataset.
   Nyquist wavenumber. Whether a low-pass filter was applied first is not
   known; without one, energy above the new Nyquist wavenumber is aliased into
   the resolved range.
+- **t (warm-up):** the DNS was run for a warm-up (spin-up) phase of 400 time
+  steps before the saved time series begins; `t400` in the filenames refers
+  to this. The recorded snapshots (1248 for `re16k_t400_0.npy`) therefore
+  start after the warm-up, not at initialization. Whether "time steps" here
+  is the same unit as the snapshot spacing used elsewhere in this README
+  (autocorrelation lags, `buffer_steps`) is not known — it may be the DNS's
+  internal integration steps, which are not necessarily saved 1:1 with
+  snapshots. This is consistent with the stationarity found in the train/test
+  split and autocorrelation checks: no early-time transient is visible,
+  though a slower ~500-700 step oscillation is present (see Train/test
+  split).
 
 ### Grid
 
