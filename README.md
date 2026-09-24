@@ -409,14 +409,31 @@ The exploration/analysis scripts above stay on plain argparse + PyYAML
 tools and don't need config composition. New training/model code uses
 [Hydra](https://hydra.cc) instead, since that will need config groups (model,
 optimizer, trainer, ...) that compose, with CLI overrides and later multirun
-sweeps. `configs/config.yaml` is the root config (currently just a `data`
-group and `seed`); `configs/data/` holds dataset configs, selected via the
-`data` default.
+sweeps. `configs/config.yaml` is the root config (currently `data`, `dataset`
+and `seed`); `configs/data/` holds data-source configs (zarr store + array
+name), selected via the `data` default.
+
+Model code will be in [JAX](https://jax.readthedocs.io). `jax` runs on CPU
+here; there's an NVIDIA GPU on this machine but no CUDA-enabled `jaxlib`
+installed yet.
+
+`configs/dataset/` holds sample-windowing configs (`window`/`horizon`/
+`stride`/the split manifest path), selected via the `dataset` default.
+`src/mhd_surrogate/dataset.py`'s `WindowedDataset` turns one train/test
+region into fixed-size samples: `window` consecutive time steps as input,
+the following `horizon` steps as target, a new sample every `stride` steps.
+It reads directly from the zarr array (no data is preloaded into memory) and
+never lets a sample cross the train/test boundary, since it's built from one
+region's `[start, end)` range in the split manifest. `windowed.yaml`'s
+`window=4, horizon=1, stride=1` are placeholder defaults (short history,
+one-step-ahead prediction), not tied to any model yet. Values are returned
+as-is, float32; normalization is not implemented yet.
 
 No model exists yet, so `scripts/train.py` currently only resolves the
-config and confirms the configured dataset is reachable (shape/dtype), as a
-smoke test of the plumbing it will grow into the real training loop on top
-of. Each run's resolved config and logs are written to
+config, confirms the configured dataset is reachable (shape/dtype), and
+builds the train/test `WindowedDataset`s (sample count, one sample's
+shapes), as a smoke test of the plumbing it will grow into the real training
+loop on top of. Each run's resolved config and logs are written to
 `outputs/<date>/<time>/` (gitignored, like the other run artifacts).
 `hydra.job.chdir` is set to `false` so the working directory stays the repo
 root; without it, Hydra's default of chdir-ing into the run directory would

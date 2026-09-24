@@ -6,6 +6,7 @@
 
 defaults:
   - data: re16k
+  - dataset: windowed
   - _self_
 
 seed: 42

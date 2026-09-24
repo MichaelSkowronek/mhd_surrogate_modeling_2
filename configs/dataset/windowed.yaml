@@ -1,0 +1,11 @@
+# Sliding-window sampling over a train/test region.
+#
+# Each sample is `window` consecutive time steps as input and the following
+# `horizon` time steps as target. New samples start every `stride` steps.
+# These are placeholder defaults (short history, one-step-ahead prediction),
+# not tied to any model yet -- revisit once one exists.
+
+manifest: data/processed/splits/split_manifest.json
+window: 4
+horizon: 1
+stride: 1

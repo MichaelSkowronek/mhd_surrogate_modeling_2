@@ -17,6 +17,8 @@ import hydra
 import zarr
 from omegaconf import DictConfig, OmegaConf
 
+from mhd_surrogate.dataset import load_dataset
+
 log = logging.getLogger(__name__)
 
 
@@ -27,6 +29,18 @@ def main(cfg: DictConfig) -> None:
     root = zarr.open_group(store=cfg.data.zarr_store, mode="r")
     arr = root[cfg.data.dataset]
     log.info("dataset %s: shape=%s dtype=%s", cfg.data.dataset, arr.shape, arr.dtype)
+
+    for split in ("train", "test"):
+        ds = load_dataset(
+            cfg.dataset.manifest,
+            cfg.data.dataset,
+            split,
+            cfg.dataset.window,
+            cfg.dataset.horizon,
+            cfg.dataset.stride,
+        )
+        x, y = ds[0]
+        log.info("%s: %d samples, sample shapes x=%s y=%s", split, len(ds), x.shape, y.shape)
 
 
 if __name__ == "__main__":
