@@ -228,3 +228,5 @@ data/processed/*
 # Generated exploration/report figures
 reports/figures/*
 !reports/figures/.gitkeep
+reports/videos/*
+!reports/videos/.gitkeep

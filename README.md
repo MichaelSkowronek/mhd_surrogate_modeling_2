@@ -370,3 +370,23 @@ For `re16k_t400_0`:
 
 Only temporal autocorrelation is covered; spatial autocorrelation (integral
 length scales) and the enstrophy autocorrelation are not.
+
+## Video
+
+```bash
+uv run scripts/make_video.py --dataset re16k_t400_0
+uv run scripts/make_video.py --dataset re16k_t400_0 --field speed --stride 2 --fps 30
+```
+
+Renders an animation of the flow over time to `reports/videos/` (gitignored,
+like the figures). Fields: `vorticity` (default, same convention as
+`check_vorticity.py`), `u_x`, `u_y`, or `speed` (`sqrt(u_x^2+u_y^2)`). The
+color scale is fixed across the whole video, from the 1st/99th percentile of
+a strided subsample of frames, so brightness is comparable frame to frame.
+`--start/--end/--stride` select a sub-range or downsample in time; `--dx/--dy`
+override the grid spacing (relevant only for `vorticity`).
+
+Encoding uses the static ffmpeg binary bundled by the `imageio-ffmpeg`
+package, so no system ffmpeg install is required. The default vorticity video
+for `re16k_t400_0` (1248 frames, 24 fps) is ~52s and ~19.5 MB, taking about a
+minute to render.

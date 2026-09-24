@@ -32,6 +32,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import zarr
 
+from mhd_surrogate.fields import vorticity as compute_vorticity
 from mhd_surrogate.grid import grid_spacing
 
 DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
@@ -66,14 +67,14 @@ def vorticity_stats(arr, dx: float, dy: float, chunk_t: int, snapshot_steps: lis
     for start in range(0, n_steps, chunk_t):
         end = min(start + chunk_t, n_steps)
         block = arr[start:end].astype(np.float64)
-        vorticity = np.gradient(block[:, 1], dx, axis=1) - np.gradient(block[:, 0], dy, axis=2)
+        w = compute_vorticity(block, dx, dy)
 
-        mean_vorticity[start:end] = vorticity.mean(axis=(1, 2))
-        enstrophy[start:end] = 0.5 * (vorticity**2).mean(axis=(1, 2))
+        mean_vorticity[start:end] = w.mean(axis=(1, 2))
+        enstrophy[start:end] = 0.5 * (w**2).mean(axis=(1, 2))
 
         for t in snapshot_steps:
             if start <= t < end:
-                snapshots[t] = vorticity[t - start]
+                snapshots[t] = w[t - start]
 
     return mean_vorticity, enstrophy, snapshots
 
