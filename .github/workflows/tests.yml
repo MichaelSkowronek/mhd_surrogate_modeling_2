@@ -1,0 +1,21 @@
+name: tests
+
+on:
+  push:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+
+      # uv sync auto-provisions the pinned Python version (.python-version);
+      # no separate Python setup step needed. Installs the dev dependency
+      # group (pytest) by default.
+      - run: uv sync
+
+      - run: uv run pytest
