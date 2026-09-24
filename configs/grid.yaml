@@ -2,8 +2,9 @@
 # derivatives (dx = lx / (nx - 1), dy = ly / (ny - 1), endpoints included).
 #
 # Provided by the DNS setup:
-# - lx = 12*pi (the DNS specifies the x size as ratiox = 12.0 "in pi units"),
-#   uniform spacing dx = 12*pi / 1150 ~ 0.03278.
+# - lx = 25, uniform spacing dx = 25 / 1150 ~ 0.02174.
+#   (an earlier value of 12*pi ~ 37.70, from "ratiox = 12.0 in pi units",
+#   was corrected -- that reading of the DNS setup was inconsistent.)
 # - ly = 2, uniform spacing dy = 2 / 126 ~ 0.01587.
 #
 # Caveat for y: the DNS grid is NON-uniform in y. The values in the data were
@@ -12,5 +13,5 @@
 # (especially near the walls, where the DNS is presumably refined) are
 # smoothed or lost.
 
-lx: 37.69911184307752  # axis 2 (long axis, streamwise x) = 12 * pi
-ly: 2.0                # axis 3 (y)
+lx: 25.0  # axis 2 (long axis, streamwise x)
+ly: 2.0   # axis 3 (y)

@@ -55,7 +55,9 @@ y and z. The 2D dataset used here is derived from it as follows:
 | y    | 121  | non-uniform | linear (k = 1) spline interpolation onto a uniform grid | 127 |
 | z    | 481  | non-uniform | central slice taken, axis removed | (single plane) |
 
-The domain size of the DNS is `Lx = 12*pi` (~37.70), `Ly = 2` and `Lz = 7`.
+The domain size of the DNS is `Lx = 25`, `Ly = 2` and `Lz = 7` (an earlier
+value of `Lx = 12*pi` ~37.70, from "ratiox = 12.0 in pi units", was
+corrected -- that reading of the DNS setup was inconsistent).
 Only `Lx` and `Ly` enter the analyses (see the Grid section), since z is not
 part of the dataset.
 
@@ -87,9 +89,8 @@ part of the dataset.
 ### Grid
 
 The domain lengths are in `configs/grid.yaml` and are used by every
-derivative-based or wavenumber-based analysis: `Lx = 12*pi` (~37.70, the DNS
-specifies the x size as 12 in units of pi) along axis 2 and `Ly = 2` along
-axis 3, with uniform spacing `dx = 12*pi/1150` (~0.03278) and
+derivative-based or wavenumber-based analysis: `Lx = 25` along axis 2 and
+`Ly = 2` along axis 3, with uniform spacing `dx = 25/1150` (~0.02174) and
 `dy = 2/126` (~0.01587).
 
 The DNS grid is uniform in x but **non-uniform in y**. The values in the data
@@ -183,25 +184,26 @@ differences, layout assumed `(T, 2, Nx, Ny)` with `x` = axis 2) and plots the
 RMS divergence, the RMS normalized by the RMS of the two derivative terms,
 and divergence maps at the first/middle/last step. The long axis (axis 2) is
 the streamwise x direction. Grid spacing is derived from the domain lengths
-in `configs/grid.yaml` (see the Grid section): `dx = 12*pi/1150`,
-`dy = 2/126`. `--dx/--dy` override the config (e.g. `--dx 1 --dy 1` for grid
-units).
+in `configs/grid.yaml` (see the Grid section): `dx = 25/1150`, `dy = 2/126`.
+`--dx/--dy` override the config (e.g. `--dx 1 --dy 1` for grid units).
 
-For `re16k_t400_0` the normalized divergence is ~0.36 (train and test alike,
-stationary in time; RMS divergence ~0.72). In grid units (`dx = dy = 1`) it
+For `re16k_t400_0` the normalized divergence is ~0.41 (train and test alike,
+stationary in time; RMS divergence ~1.05). In grid units (`dx = dy = 1`) it
 was ~0.53, and swapping the two axes was much worse (~0.93 in grid units),
 confirming `x` = axis 2. The divergence maps show large-scale structure tied
 to the flow features rather than grid-scale noise.
 
-The result is not sensitive to the exact spacing ratio: a least-squares fit
-of `dx/dy` on 13 snapshots (best-fit ~1.66) gave ~0.37, versus ~0.36 with the
-true ratio (~2.07). Consequently that fit is not a reliable way to infer the
-grid spacing; an earlier note here that it implied `Lx` ~ 30 was wrong (the
-true `Lx` is `12*pi` ~ 37.7).
+The divergence is only mildly sensitive to the exact `dx/dy` ratio: a
+least-squares fit on 13 snapshots (best-fit ratio ~1.66) gives ~0.37, close
+to but not equal to the ~0.41 from the confirmed ratio (~1.37, i.e.
+`dx/dy = (25/1150)/(2/126)`). So that fit was never a reliable way to infer
+the grid spacing from the data alone -- it was a rough cross-check, not a
+source of truth, and the domain length has since been supplied directly
+(and corrected once already; see the Origin section).
 
 So the 2D field is not exactly incompressible, which is expected: the
 quasi-2D hypothesis is only approximate, so `du_z/dz` in the slice does not
-vanish, and this residual (~36% of the derivative magnitude) is a rough
+vanish, and this residual (~41% of the derivative magnitude) is a rough
 measure of how far the slice is from ideal 2D. Whether it is "good enough"
 is a modeling judgement. The linear interpolation in y (piecewise-constant
 `du_y/dy`, smoothed wall layers) and the DNS's own discretization would also
@@ -235,7 +237,7 @@ the field most affected by the linear interpolation onto the uniform y grid.
 For `re16k_t400_0` the maps show shear layers and jets
 near the inlet (x < ~150), large coherent vortices of roughly channel-width
 size downstream, and thin high-vorticity layers along both y walls, which
-dominate the extremes. Mean enstrophy is ~25.1 in train and ~24.4 in test
+dominate the extremes. Mean enstrophy is ~27.5 in train and ~26.8 in test
 (~3% lower), with slow variations over time. The spatially averaged
 vorticity is a regular oscillation (period ~25-30 steps, amplitude ~0.03; see
 the autocorrelation section)
@@ -274,15 +276,15 @@ cannot be attributed purely to the flow.
 
 For `re16k_t400_0`:
 
-- **x direction:** the spectrum peaks at k ~ 1.3 (wavelength ~4.7, about 2.4
+- **x direction:** the spectrum peaks at k ~ 2.0 (wavelength ~3.1, about 1.6
   channel widths for `ly=2`), on the scale of the large coherent vortices seen
   in the vorticity maps (a rough visual match, not measured). Above the peak
-  it decays as a power law with slope ~ -2.9 over k ~ 3-60 for `u_x` (log-log
-  fit; -2.9 for `u_y` over k ~ 10-60 and -2.7 over k ~ 3-10). It flattens at
-  the highest wavenumbers (k >~ 60-90; the axis ends at k ~ 96); the cause
-  was not investigated (grid-scale content, leakage from the wall layers,
-  numerical noise, or aliasing from the factor-2 x subsampling if no filter
-  was applied are all possible).
+  it decays as a power law with slope ~ -2.9 to -3.0 over k ~ 10-90 for `u_x`
+  (log-log fit; ~-2.9 for `u_y` over the same range, noisier at k ~ 3-10:
+  -2.6 to -3.1). It flattens at the highest wavenumbers (the axis ends at
+  k ~ 144); the cause was not investigated (grid-scale content, leakage from
+  the wall layers, numerical noise, or aliasing from the factor-2 x
+  subsampling if no filter was applied are all possible).
 - **y direction:** no interior peak; the spectrum decreases monotonically
   from the lowest resolved wavenumber (dominated by the cross-stream
   profile and wall layers), with slope ~ -3.6 for `u_x` and ~ -3.2 for `u_y`
