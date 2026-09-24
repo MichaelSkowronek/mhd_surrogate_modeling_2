@@ -2,6 +2,18 @@
 
 Guidance for Claude Code when working in this repository.
 
+## Project goal
+
+This is a portfolio project to demonstrate MLOps skills, not a project sized
+to only what the data strictly requires. When choosing between a minimal
+solution and a more "proper"/industry-standard MLOps tool or practice
+(orchestration, experiment tracking, CI/CD, containerization, distributed
+compute, etc.), prefer the latter even if it's arguably overkill for the
+current data size or team of one — as long as it's implemented correctly and
+its purpose is explained, not just bolted on for a résumé keyword. This
+doesn't override writing correct, working code, or the testing convention
+above; it shifts which tools are worth reaching for at all.
+
 ## Code style
 
 - Write Python code following PEP8.
