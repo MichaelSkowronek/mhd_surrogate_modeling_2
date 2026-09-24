@@ -230,3 +230,6 @@ reports/figures/*
 !reports/figures/.gitkeep
 reports/videos/*
 !reports/videos/.gitkeep
+
+# Hydra run outputs (scripts/train.py and later)
+outputs/

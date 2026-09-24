@@ -135,6 +135,18 @@ wheels = [
 ]
 
 [[package]]
+name = "hydra-core"
+version = "1.4.0.dev9"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "omegaconf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d1/6e/5281d13fdcb41ad5f2a70fa17eae7b1b15ab86e655619145683c0e0bfb81/hydra_core-1.4.0.dev9.tar.gz", hash = "sha256:74268ec950cdf810203973a8e2db055cf283d9e31dc1e2b222d85f7702483e41", size = 3318455, upload-time = "2026-08-30T07:55:06.334Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2a/94/d9b97caeda80697afdca340d0d2b387a4c733d5cb3c3076da3e5f3e58eb7/hydra_core-1.4.0.dev9-py3-none-any.whl", hash = "sha256:3b8bab7afe2a93764ae827fd1bead5a34b4ff862a42e68a3cbc8c2a590c97c13", size = 174051, upload-time = "2026-08-30T07:54:57.052Z" },
+]
+
+[[package]]
 name = "imageio-ffmpeg"
 version = "0.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -274,6 +286,7 @@ name = "mhd-surrogate"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "hydra-core" },
     { name = "imageio-ffmpeg" },
     { name = "matplotlib" },
     { name = "numpy" },
@@ -283,6 +296,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "hydra-core", specifier = "==1.4.0.dev9" },
     { name = "imageio-ffmpeg", specifier = ">=0.6.0" },
     { name = "matplotlib", specifier = ">=3.9" },
     { name = "numpy", specifier = ">=2.0" },
@@ -385,6 +399,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/a1/d2/4e1014173aa3c55e6a756e0e567290743a6ab33a288460374d7ef6bcd239/numpy-2.5.3-cp315-cp315t-win32.whl", hash = "sha256:f54660b0eb6b0b9f36e7fe1cdfdff472028dd0d14acd9b9b65098efbad059469", size = 6330292, upload-time = "2026-09-06T16:27:38.149Z" },
     { url = "https://files.pythonhosted.org/packages/6c/b0/ff5658a58199b7bcaad87bf260eef6713d9d42cca4e028f935b4fc5fbac6/numpy-2.5.3-cp315-cp315t-win_amd64.whl", hash = "sha256:1aad64d99730d013cfc6debafed22783b4fc5a7f4b8bc744d2d8cf7dcc880551", size = 12884918, upload-time = "2026-09-06T16:27:40.965Z" },
     { url = "https://files.pythonhosted.org/packages/fb/0b/b12a2df5d1b774bd9007a6fdff9381145b6223d37f11afc9c37ab0efd9a1/numpy-2.5.3-cp315-cp315t-win_arm64.whl", hash = "sha256:befa1ae5bd6030b3f512b43ff3fa5290bbed6b84411a44244b14adf835f5b89d", size = 10850807, upload-time = "2026-09-06T16:27:43.868Z" },
+]
+
+[[package]]
+name = "omegaconf"
+version = "2.4.0.dev15"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyyaml" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/62/8a/92db36ac7659bb9cb24ab108971ce3a2c78d467f815adf21f8d68ef3bb30/omegaconf-2.4.0.dev15.tar.gz", hash = "sha256:36b707ea4f0dd4289d004dee804dbd7c66c07fe7217cbcf039500e5cc9316a0a", size = 3495480, upload-time = "2026-08-07T21:23:16.201Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/36/ed/4f24634c3925b5262a1626e76b08a13dd00f1e743f1da2501580758dc027/omegaconf-2.4.0.dev15-py3-none-any.whl", hash = "sha256:2f2c12201d15230888d6e82ad0f3540bdf889d011c35f7f472b0e9286ce737af", size = 246202, upload-time = "2026-08-07T21:23:12.133Z" },
 ]
 
 [[package]]

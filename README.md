@@ -396,3 +396,39 @@ the train/test boundary — no obvious change in structure, scale, or activity
 level. This is a subjective, qualitative check, not a measurement, but it
 lines up with the quantitative train-vs-test comparisons in the sections
 above.
+
+## Training config (Hydra)
+
+```bash
+uv run scripts/train.py
+uv run scripts/train.py data=re16k seed=123
+```
+
+The exploration/analysis scripts above stay on plain argparse + PyYAML
+(`configs/split.yaml`, `configs/grid.yaml`) — they are finished, standalone
+tools and don't need config composition. New training/model code uses
+[Hydra](https://hydra.cc) instead, since that will need config groups (model,
+optimizer, trainer, ...) that compose, with CLI overrides and later multirun
+sweeps. `configs/config.yaml` is the root config (currently just a `data`
+group and `seed`); `configs/data/` holds dataset configs, selected via the
+`data` default.
+
+No model exists yet, so `scripts/train.py` currently only resolves the
+config and confirms the configured dataset is reachable (shape/dtype), as a
+smoke test of the plumbing it will grow into the real training loop on top
+of. Each run's resolved config and logs are written to
+`outputs/<date>/<time>/` (gitignored, like the other run artifacts).
+`hydra.job.chdir` is set to `false` so the working directory stays the repo
+root; without it, Hydra's default of chdir-ing into the run directory would
+break every relative path used throughout this project (`data/raw/...`,
+`configs/...`, etc.).
+
+**Dependency note:** `hydra-core` is pinned to the `1.4.0.dev9` pre-release.
+The latest stable release (1.3.7) is broken on Python 3.14 (this project's
+Python version) — an upstream bug
+([facebookresearch/hydra#3121](https://github.com/facebookresearch/hydra/issues/3121)):
+its CLI parser fails under Python 3.14's stricter `argparse` validation
+before any user code runs. `1.4.0.dev9` fixes it and was verified to resolve
+config and run cleanly via a plain `uv sync` (no `--prerelease` flag needed,
+since the version is pinned exactly). Swap for the stable 1.4.0 release once
+it ships.

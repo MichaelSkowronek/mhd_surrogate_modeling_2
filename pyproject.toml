@@ -13,6 +13,11 @@ dependencies = [
     "zarr>=3.4.0",
     "pyyaml>=6.0.3",
     "imageio-ffmpeg>=0.6.0",
+    # Pinned to a pre-release: stable hydra-core (<=1.3.7) is broken on
+    # Python 3.14 (upstream bug, facebookresearch/hydra#3121 -- its argparse
+    # setup fails under Python 3.14's stricter argparse validation). 1.4.0.dev9
+    # fixes it. Swap for the stable 1.4.0 release once it ships.
+    "hydra-core==1.4.0.dev9",
 ]
 
 [build-system]
