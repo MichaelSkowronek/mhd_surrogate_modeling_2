@@ -61,6 +61,27 @@ DNS data (e.g. "is a ~36% divergence residual acceptable for a quasi-2D
 slice?") — that's a human judgement call made by reading the printed stats
 and looking at the plots, not something to assert on in a test.
 
+### Data contract tests
+
+`tests/test_data_contract.py` is different from the rest of `tests/`: it
+runs against the real zarr store (the datasets and store path listed in
+`configs/split.yaml`) rather than synthetic data, checking objective,
+storage-agnostic structural invariants — every configured dataset exists,
+shape is `(T, 2, Nx, Ny)`, dtype is `float32`, all values are finite, values
+stay within a broad sanity bound (`MAX_ABS_VALUE = 100`, meant to catch
+corrupted data, not enforce a tight physical range), spatial shape is
+consistent across datasets, and there are enough time steps for the
+configured split (`test_fraction`/`buffer_steps`). It does **not** check
+statistical representativeness or physical plausibility — that stays with
+`check_split.py` and the other `check_*.py` scripts.
+
+It reads the zarr store path from config rather than a hardcoded local one,
+and reads in chunks rather than loading full arrays, so it keeps working
+unchanged if the store moves from local disk to object storage (S3/GCS)
+later — zarr supports both through the same API. Since the ~9GB store isn't
+checked into git, these tests skip themselves automatically when it isn't
+present locally, including in CI.
+
 ## Data
 
 Raw `.npy` files are not tracked in git (see `.gitignore`). Copy them into
