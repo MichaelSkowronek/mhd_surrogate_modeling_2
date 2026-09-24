@@ -45,7 +45,7 @@ uv run pytest
 
 Unit tests live in `tests/`, covering the pure computational logic: the
 `src/mhd_surrogate/` modules (`splitting`, `grid`, `fields`, `dataset`,
-`summary`) plus the computational core functions inside the
+`summary`, `parallel`) plus the computational core functions inside the
 `check_*.py`/`make_video.py`
 scripts (e.g. `per_timestep_stats`, `field_acf`, `spectrum_sum`,
 `divergence_stats`, `vorticity_stats`, `compute_field`) — the
@@ -464,15 +464,17 @@ is meant for a quick side-by-side look, not the final word.
 
 **Parallelization:** each (script, dataset) pair is independent, so this
 dispatches them as separate `python check_*.py --dataset X` subprocesses via
-a thread pool (the threads just block on `subprocess.run`; the real
-numpy/FFT work happens in the child processes, on separate cores, with full
-process isolation). All 45 jobs (9 datasets) completed in ~113s wall time
-against ~15m13s of aggregate CPU time on a 12-core machine — about 8x, not
-a full 12x, since the slower scripts (`check_spectrum`, `check_autocorrelation`)
-become the tail once the faster ones finish. A distributed framework like
-Ray was considered but is not warranted for a workload this size (minutes,
-one machine); it would earn its keep once training actually needs a cluster,
-distributed GPUs, or data beyond single-machine scale.
+`mhd_surrogate.parallel` (a thread pool where the threads just block on
+`subprocess.run`; the real numpy/FFT work happens in the child processes, on
+separate cores, with full process isolation — also used by
+`make_all_videos.py` below). All 45 jobs (9 datasets) completed in ~113s wall
+time against ~15m13s of aggregate CPU time on a 12-core machine — about 8x,
+not a full 12x, since the slower scripts (`check_spectrum`,
+`check_autocorrelation`) become the tail once the faster ones finish. A
+distributed framework like Ray was considered but is not warranted for a
+workload this size (minutes, one machine); it would earn its keep once
+training actually needs a cluster, distributed GPUs, or data beyond
+single-machine scale.
 
 **First cross-dataset result:** across all 9 datasets, the divergence
 residual clusters tightly (0.40-0.43, both train and test), and each dataset
@@ -508,6 +510,18 @@ the train/test boundary — no obvious change in structure, scale, or activity
 level. This is a subjective, qualitative check, not a measurement, but it
 lines up with the quantitative train-vs-test comparisons in the sections
 above.
+
+To render every dataset at once (same field/stride/fps for all of them):
+
+```bash
+uv run scripts/make_all_videos.py
+uv run scripts/make_all_videos.py --field speed --stride 2 --fps 30
+```
+
+Same parallel dispatch as `run_all_checks.py` (see "Running the suite across
+all datasets"): one `make_video.py --dataset X` subprocess per dataset,
+concurrently. All 9 default (vorticity) videos took ~157s wall time against
+~25 minutes of aggregate CPU time on this 12-core machine, ~133 MB total.
 
 ## Training config (Hydra)
 

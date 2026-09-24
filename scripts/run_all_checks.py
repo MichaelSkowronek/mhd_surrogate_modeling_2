@@ -1,14 +1,9 @@
 """Run the full analysis suite across datasets, in parallel, and build a
 cross-dataset comparison table from the JSON summaries each check writes.
 
-Each (script, dataset) pair is completely independent -- embarrassingly
-parallel -- so this dispatches them as separate `python check_*.py
---dataset X` subprocesses via a thread pool (the threads just block on
-`subprocess.run`; the actual numpy/FFT work runs in the child processes, on
-separate cores, with full isolation -- no shared matplotlib/zarr state to
-worry about). That is enough for this workload (single machine, a few
-minutes total); see the README for why a distributed framework like Ray
-isn't warranted yet.
+Each (script, dataset) pair is completely independent, so this dispatches
+them in parallel via mhd_surrogate.parallel (see its docstring for how, and
+the README for why a distributed framework like Ray isn't warranted yet).
 
 Usage:
     uv run scripts/run_all_checks.py
@@ -22,13 +17,11 @@ import argparse
 import csv
 import json
 import os
-import subprocess
-import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
+from mhd_surrogate.parallel import print_failures, run_parallel
 from mhd_surrogate.summary import DEFAULT_SUMMARY_DIR, filter_datasets
 
 SCRIPTS = [
@@ -39,7 +32,6 @@ SCRIPTS = [
     "check_autocorrelation.py",
 ]
 DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
-SCRIPTS_DIR = Path(__file__).resolve().parent
 
 
 def parse_args() -> argparse.Namespace:
@@ -61,31 +53,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--summary-dir", type=Path, default=DEFAULT_SUMMARY_DIR)
     parser.add_argument("--workers", type=int, default=None, help="Default: os.cpu_count()")
     return parser.parse_args()
-
-
-def run_one(script: str, dataset: str, manifest: Path, summary_dir: Path) -> dict[str, Any]:
-    start = time.monotonic()
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(SCRIPTS_DIR / script),
-            "--manifest",
-            str(manifest),
-            "--dataset",
-            dataset,
-            "--summary-dir",
-            str(summary_dir),
-        ],
-        capture_output=True,
-        text=True,
-    )
-    return {
-        "script": script,
-        "dataset": dataset,
-        "returncode": result.returncode,
-        "elapsed": time.monotonic() - start,
-        "stderr": result.stderr,
-    }
 
 
 def count_flags(data: Any) -> int:
@@ -170,31 +137,33 @@ def main() -> None:
     dataset_names = list(splits)
     workers = args.workers or os.cpu_count()
 
-    jobs = [(script, name) for script in scripts for name in dataset_names]
+    jobs = [
+        (
+            script,
+            [
+                "--manifest",
+                str(args.manifest),
+                "--dataset",
+                name,
+                "--summary-dir",
+                str(args.summary_dir),
+            ],
+            name,
+        )
+        for script in scripts
+        for name in dataset_names
+    ]
     print(
         f"running {len(jobs)} jobs ({len(scripts)} scripts x {len(dataset_names)} datasets) "
         f"with {workers} workers..."
     )
 
-    results = []
     start = time.monotonic()
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {
-            pool.submit(run_one, script, name, args.manifest, args.summary_dir): (script, name)
-            for script, name in jobs
-        }
-        for future in as_completed(futures):
-            result = future.result()
-            results.append(result)
-            status = "ok" if result["returncode"] == 0 else "FAILED"
-            print(f"  [{status}] {result['script']} {result['dataset']} ({result['elapsed']:.1f}s)")
-
+    results = run_parallel(jobs, workers)
     elapsed = time.monotonic() - start
-    failures = [r for r in results if r["returncode"] != 0]
+
+    failures = print_failures(results)
     print(f"\n{len(results) - len(failures)}/{len(results)} jobs ok in {elapsed:.1f}s")
-    for failure in failures:
-        print(f"\n--- {failure['script']} {failure['dataset']} stderr ---")
-        print(failure["stderr"])
 
     print("\n=== comparison table ===")
     rows = build_comparison_table(dataset_names, args.summary_dir)
