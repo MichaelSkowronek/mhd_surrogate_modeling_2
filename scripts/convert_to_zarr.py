@@ -12,10 +12,15 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 
 import numpy as np
 import zarr
+
+from mhd_surrogate.logging_config import add_log_level_arg, setup_logging
+
+log = logging.getLogger(__name__)
 
 DEFAULT_DATA_DIR = Path("data/raw")
 DEFAULT_OUT_PATH = Path("data/processed/re16k_t400.zarr")
@@ -40,13 +45,14 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Overwrite an existing store at --out",
     )
+    add_log_level_arg(parser)
     return parser.parse_args()
 
 
 def convert(data_dir: Path, out_path: Path, chunk_t: int, overwrite: bool) -> None:
     paths = sorted(data_dir.glob("*.npy"))
     if not paths:
-        print(f"No .npy files found in {data_dir}. Copy your data there first.")
+        log.warning("No .npy files found in %s. Copy your data there first.", data_dir)
         return
 
     root = zarr.open_group(store=str(out_path), mode="w" if overwrite else "a")
@@ -59,7 +65,7 @@ def convert(data_dir: Path, out_path: Path, chunk_t: int, overwrite: bool) -> No
         name = path.stem
         n_steps = src.shape[0]
 
-        print(f"{name}: {src.shape} {src.dtype} -> {out_path}/{name}")
+        log.info("%s: %s %s -> %s/%s", name, src.shape, src.dtype, out_path, name)
         arr = root.create_array(
             name=name,
             shape=src.shape,
@@ -74,11 +80,12 @@ def convert(data_dir: Path, out_path: Path, chunk_t: int, overwrite: bool) -> No
         arr.attrs["source_file"] = path.name
         arr.attrs["n_steps"] = n_steps
 
-    print(f"\nwrote {len(paths)} simulations to {out_path}")
+    log.info("wrote %d simulations to %s", len(paths), out_path)
 
 
 def main() -> None:
     args = parse_args()
+    setup_logging(args.log_level)
     convert(args.data_dir, args.out, args.chunk_t, args.overwrite)
 
 

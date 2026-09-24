@@ -9,11 +9,15 @@ from typing import Any
 
 import numpy as np
 
+from mhd_surrogate.logging_config import add_log_level_arg
+
 DEFAULT_SUMMARY_DIR = Path("reports/summaries")
 
 
 def add_common_args(parser: argparse.ArgumentParser) -> None:
-    """--dataset (repeatable, filters the manifest to run on) and --summary-dir."""
+    """--dataset (repeatable, filters the manifest to run on), --summary-dir
+    and --log-level, shared by all check_*.py scripts.
+    """
     parser.add_argument(
         "--dataset",
         action="append",
@@ -21,6 +25,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
         help="Limit to this dataset (repeatable); default: all datasets in the manifest",
     )
     parser.add_argument("--summary-dir", type=Path, default=DEFAULT_SUMMARY_DIR)
+    add_log_level_arg(parser)
 
 
 def filter_datasets(splits: dict[str, Any], only: list[str] | None) -> dict[str, Any]:

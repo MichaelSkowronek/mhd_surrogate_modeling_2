@@ -16,13 +16,17 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
 import os
 import time
 from pathlib import Path
 from typing import Any
 
-from mhd_surrogate.parallel import print_failures, run_parallel
+from mhd_surrogate.logging_config import add_log_level_arg, setup_logging
+from mhd_surrogate.parallel import log_failures, run_parallel
 from mhd_surrogate.summary import DEFAULT_SUMMARY_DIR, filter_datasets
+
+log = logging.getLogger(__name__)
 
 SCRIPTS = [
     "check_split.py",
@@ -52,6 +56,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--summary-dir", type=Path, default=DEFAULT_SUMMARY_DIR)
     parser.add_argument("--workers", type=int, default=None, help="Default: os.cpu_count()")
+    add_log_level_arg(parser)
     return parser.parse_args()
 
 
@@ -142,6 +147,7 @@ def write_csv(rows: list[dict[str, Any]], path: Path) -> None:
 
 def main() -> None:
     args = parse_args()
+    setup_logging(args.log_level)
     manifest = json.loads(args.manifest.read_text())
     splits = filter_datasets(manifest["splits"], args.dataset)
     scripts = args.script or SCRIPTS
@@ -164,17 +170,20 @@ def main() -> None:
         for script in scripts
         for name in dataset_names
     ]
-    print(
-        f"running {len(jobs)} jobs ({len(scripts)} scripts x {len(dataset_names)} datasets) "
-        f"with {workers} workers..."
+    log.info(
+        "running %d jobs (%d scripts x %d datasets) with %d workers...",
+        len(jobs),
+        len(scripts),
+        len(dataset_names),
+        workers,
     )
 
     start = time.monotonic()
     results = run_parallel(jobs, workers)
     elapsed = time.monotonic() - start
 
-    failures = print_failures(results)
-    print(f"\n{len(results) - len(failures)}/{len(results)} jobs ok in {elapsed:.1f}s")
+    failures = log_failures(results)
+    log.info("%d/%d jobs ok in %.1fs", len(results) - len(failures), len(results), elapsed)
 
     print("\n=== comparison table ===")
     # Every dataset with a summary on disk, not just this run's (possibly a
@@ -183,7 +192,7 @@ def main() -> None:
     print_table(rows)
     csv_path = args.summary_dir / "comparison.csv"
     write_csv(rows, csv_path)
-    print(f"\nwrote {csv_path}")
+    log.info("wrote %s", csv_path)
 
     if failures:
         raise SystemExit(1)

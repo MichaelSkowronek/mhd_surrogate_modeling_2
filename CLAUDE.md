@@ -11,8 +11,8 @@ solution and a more "proper"/industry-standard MLOps tool or practice
 compute, etc.), prefer the latter even if it's arguably overkill for the
 current data size or team of one — as long as it's implemented correctly and
 its purpose is explained, not just bolted on for a résumé keyword. This
-doesn't override writing correct, working code, or the testing convention
-above; it shifts which tools are worth reaching for at all.
+doesn't override writing correct, working code, or the testing/logging
+conventions below; it shifts which tools are worth reaching for at all.
 
 ## Code style
 
@@ -29,6 +29,21 @@ above; it shifts which tools are worth reaching for at all.
   reasonable for the real data — that stays a human judgement call from the
   printed output and plots.
 - See the README's "Tests" section for the full rationale and examples.
+
+## Logging
+
+- Use `logging` (via `src/mhd_surrogate/logging_config.py`'s `setup_logging`,
+  called once at the start of `main()`, plus `add_log_level_arg` for a
+  `--log-level` flag), not `print`, for status/progress/diagnostic messages
+  in `scripts/*.py`.
+- Keep the actual computed results (per-dataset stats, comparison tables) as
+  plain `print()` — they're formatted report output meant to be read
+  directly or piped, not log records.
+- Don't set the root logger's level directly (`logging.basicConfig(level=...)`
+  alone) — every third-party dependency inherits from it and leaks internal
+  logging as noise. Set the level on this project's own loggers instead
+  (`setup_logging` already does this).
+- See the README's "Logging" section for the full rationale.
 
 ## Licensing (Apache 2.0)
 

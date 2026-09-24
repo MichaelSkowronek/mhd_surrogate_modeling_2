@@ -235,3 +235,8 @@ reports/summaries/*
 
 # Hydra run outputs (scripts/train.py and later)
 outputs/
+
+# MLflow tracking data (scripts/train.py and later)
+mlruns.db
+mlruns/
+mlartifacts/

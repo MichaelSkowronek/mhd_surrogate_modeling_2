@@ -9,10 +9,15 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+
+from mhd_surrogate.logging_config import add_log_level_arg, setup_logging
+
+log = logging.getLogger(__name__)
 
 DEFAULT_DATA_DIR = Path("data/raw")
 DEFAULT_FIGURE_DIR = Path("reports/figures")
@@ -47,6 +52,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip generating preview plots, only print statistics",
     )
+    add_log_level_arg(parser)
     return parser.parse_args()
 
 
@@ -72,7 +78,9 @@ def plot_preview(array: np.ndarray, name: str, out_dir: Path) -> None:
     grid. A 3D array is treated as a single-channel `(T, H, W)` series.
     """
     if array.ndim not in (3, 4):
-        print(f"skipping plot for {name}: ndim={array.ndim}, expected 3 (T,H,W) or 4 (T,C,H,W)")
+        log.warning(
+            "skipping plot for %s: ndim=%d, expected 3 (T,H,W) or 4 (T,C,H,W)", name, array.ndim
+        )
         return
 
     n_steps = array.shape[0]
@@ -115,6 +123,7 @@ def plot_preview(array: np.ndarray, name: str, out_dir: Path) -> None:
 
 def main() -> None:
     args = parse_args()
+    setup_logging(args.log_level)
 
     if args.file:
         file_path = Path(args.file)
@@ -125,12 +134,12 @@ def main() -> None:
         paths = sorted(args.data_dir.glob("*.npy"))
 
     if not paths:
-        print(f"No .npy files found in {args.data_dir}. Copy your data there first.")
+        log.warning("No .npy files found in %s. Copy your data there first.", args.data_dir)
         return
 
     for path in paths:
         if not path.exists():
-            print(f"skipping {path}: file not found")
+            log.warning("skipping %s: file not found", path)
             continue
 
         array = np.load(path)

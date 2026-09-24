@@ -1,0 +1,8 @@
+# Local, self-hosted MLflow tracking (no external account needed).
+#
+# The file-based tracking store is deprecated by MLflow in favor of a
+# database backend, hence sqlite rather than a plain "./mlruns" URI.
+# Relative to the repo root (hydra.job.chdir is false).
+
+tracking_uri: sqlite:///mlruns.db
+experiment_name: mhd-surrogate

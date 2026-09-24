@@ -63,13 +63,14 @@ def test_run_parallel_runs_jobs_concurrently_not_serially(scripts_dir):
     assert elapsed < 1.0
 
 
-def test_print_failures_returns_only_failed_jobs(capsys):
+def test_log_failures_returns_only_failed_jobs(caplog):
     results = [
         {"script": "a.py", "label": "x", "returncode": 0, "elapsed": 0.1, "stderr": ""},
         {"script": "b.py", "label": "y", "returncode": 1, "elapsed": 0.1, "stderr": "oops"},
     ]
 
-    failures = parallel.print_failures(results)
+    with caplog.at_level("ERROR"):
+        failures = parallel.log_failures(results)
 
     assert [f["label"] for f in failures] == ["y"]
-    assert "oops" in capsys.readouterr().out
+    assert "oops" in caplog.text

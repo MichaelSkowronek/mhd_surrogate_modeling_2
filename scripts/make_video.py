@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 
 import imageio_ffmpeg
@@ -34,6 +35,9 @@ from matplotlib.animation import FFMpegWriter  # noqa: E402
 
 from mhd_surrogate.fields import vorticity as compute_vorticity  # noqa: E402
 from mhd_surrogate.grid import grid_spacing  # noqa: E402
+from mhd_surrogate.logging_config import add_log_level_arg, setup_logging  # noqa: E402
+
+log = logging.getLogger(__name__)
 
 DEFAULT_STORE = Path("data/processed/re16k_t400.zarr")
 DEFAULT_OUT_DIR = Path("reports/videos")
@@ -75,6 +79,7 @@ def parse_args() -> argparse.Namespace:
         default=32,
         help="Output frames per zarr read (default: %(default)s)",
     )
+    add_log_level_arg(parser)
     return parser.parse_args()
 
 
@@ -103,6 +108,7 @@ def color_limits(arr, steps: np.ndarray, field: str, dx: float, dy: float) -> tu
 
 def main() -> None:
     args = parse_args()
+    setup_logging(args.log_level)
     root = zarr.open_group(store=str(args.store), mode="r")
     arr = root[args.dataset]
     if arr.ndim != 4 or arr.shape[1] != 2:
@@ -119,9 +125,13 @@ def main() -> None:
 
     sample_stride = max(1, len(steps) // args.color_sample)
     vmin, vmax = color_limits(arr, steps[::sample_stride], args.field, dx, dy)
-    print(
-        f"{args.dataset}: {len(steps)} frames, field={args.field}, "
-        f"color range [{vmin:.4g}, {vmax:.4g}]"
+    log.info(
+        "%s: %d frames, field=%s, color range [%.4g, %.4g]",
+        args.dataset,
+        len(steps),
+        args.field,
+        vmin,
+        vmax,
     )
 
     out_path = args.out or (args.out_dir / f"{args.dataset}_{args.field}.mp4")
@@ -151,7 +161,7 @@ def main() -> None:
                 writer.grab_frame()
 
     plt.close(fig)
-    print(f"wrote {out_path}")
+    log.info("wrote %s", out_path)
 
 
 if __name__ == "__main__":

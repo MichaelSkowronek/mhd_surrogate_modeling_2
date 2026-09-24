@@ -16,13 +16,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import zarr
 
+from mhd_surrogate.logging_config import setup_logging
 from mhd_surrogate.summary import add_common_args, filter_datasets, write_summary
+
+log = logging.getLogger(__name__)
 
 DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
 DEFAULT_OUT_DIR = Path("reports/figures")
@@ -281,6 +285,7 @@ def plot_histograms(
 
 def main() -> None:
     args = parse_args()
+    setup_logging(args.log_level)
     manifest = json.loads(args.manifest.read_text())
     root = zarr.open_group(store=manifest["config"]["zarr_store"], mode="r")
     args.out_dir.mkdir(parents=True, exist_ok=True)

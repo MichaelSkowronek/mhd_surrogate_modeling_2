@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -31,7 +32,10 @@ import numpy as np
 import zarr
 
 from mhd_surrogate.grid import grid_spacing
+from mhd_surrogate.logging_config import setup_logging
 from mhd_surrogate.summary import add_common_args, filter_datasets, write_summary
+
+log = logging.getLogger(__name__)
 
 DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
 DEFAULT_OUT_DIR = Path("reports/figures")
@@ -177,6 +181,7 @@ def plot_spectra(name: str, spectra, k_by_direction: dict[str, np.ndarray], out_
 
 def main() -> None:
     args = parse_args()
+    setup_logging(args.log_level)
     manifest = json.loads(args.manifest.read_text())
     root = zarr.open_group(store=manifest["config"]["zarr_store"], mode="r")
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -185,7 +190,7 @@ def main() -> None:
     for name, split in splits.items():
         arr = root[name]
         if arr.ndim != 4 or arr.shape[1] != len(CHANNEL_NAMES):
-            print(f"skipping {name}: expected shape (T, 2, Nx, Ny), got {arr.shape}")
+            log.warning("skipping %s: expected shape (T, 2, Nx, Ny), got %s", name, arr.shape)
             continue
 
         dx, dy = grid_spacing(arr.shape[2], arr.shape[3])

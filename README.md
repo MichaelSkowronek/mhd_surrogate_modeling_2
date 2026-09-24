@@ -45,8 +45,8 @@ uv run pytest
 
 Unit tests live in `tests/`, covering the pure computational logic: the
 `src/mhd_surrogate/` modules (`splitting`, `grid`, `fields`, `dataset`,
-`summary`, `parallel`) plus the computational core functions inside the
-`check_*.py`/`make_video.py`
+`summary`, `parallel`, `mlflow_utils`, `logging_config`) plus the
+computational core functions inside the `check_*.py`/`make_video.py`
 scripts (e.g. `per_timestep_stats`, `field_acf`, `spectrum_sum`,
 `divergence_stats`, `vorticity_stats`, `compute_field`) — the
 `scripts/*.py` files aren't part of the installed package, so
@@ -85,6 +85,37 @@ unchanged if the store moves from local disk to object storage (S3/GCS)
 later — zarr supports both through the same API. Since the ~9GB store isn't
 checked into git, these tests skip themselves automatically when it isn't
 present locally, including in CI.
+
+## Logging
+
+Every `scripts/*.py` CLI script accepts `--log-level` (`DEBUG`/`INFO`/
+`WARNING`/`ERROR`, default `INFO`). `src/mhd_surrogate/logging_config.py`'s
+`setup_logging` is called once at the start of each script's `main()`.
+
+Status/progress/diagnostic messages (warnings like "skipping this dataset,
+wrong shape", orchestration progress like `run_all_checks.py`'s per-job
+`[ok]`/`[FAILED]` lines) go through `logging`. The actual computed results —
+the per-dataset stat lines, comparison tables, "plot: ..."/"summary: ..."
+path confirmations — stay as plain `print()`, since they're formatted report
+output meant to be read directly or piped/redirected, not log records.
+
+Two things worth knowing about `setup_logging`:
+
+- **Root logger stays quiet.** `logging.basicConfig` configures the root
+  logger, which every third-party dependency (matplotlib, zarr, mlflow, ...)
+  inherits from — setting it straight to `DEBUG`/`INFO` leaked their internal
+  logging as noise (e.g. matplotlib logging an INFO line per ffmpeg frame
+  written). So the root stays at `WARNING` or the requested level, whichever
+  is quieter, and only this project's own loggers (`__main__` for a script
+  run directly, `mhd_surrogate` for library code like `parallel.py`) get the
+  requested level. Requesting `ERROR` still quiets third-party `WARNING`s
+  too, since that's stricter than the `WARNING` floor.
+- **stdout is reconfigured to line-buffer.** `print()` (stdout) and
+  `logging` (stderr by default) interleave correctly in a terminal, but
+  stdout is fully block-buffered rather than line-buffered once
+  redirected/piped, so a script's printed report could appear to arrive
+  "late" relative to its own logged status lines under redirection without
+  this.
 
 ## Data
 
@@ -556,15 +587,33 @@ one-step-ahead prediction), not tied to any model yet. Values are returned
 as-is, float32; normalization is not implemented yet.
 
 No model exists yet, so `scripts/train.py` currently only resolves the
-config, confirms the configured dataset is reachable (shape/dtype), and
-builds the train/test `WindowedDataset`s (sample count, one sample's
-shapes), as a smoke test of the plumbing it will grow into the real training
-loop on top of. Each run's resolved config and logs are written to
-`outputs/<date>/<time>/` (gitignored, like the other run artifacts).
-`hydra.job.chdir` is set to `false` so the working directory stays the repo
-root; without it, Hydra's default of chdir-ing into the run directory would
-break every relative path used throughout this project (`data/raw/...`,
-`configs/...`, etc.).
+config, confirms the configured dataset is reachable (shape/dtype), builds
+the train/test `WindowedDataset`s (sample count, one sample's shapes), and
+logs the run to MLflow (see below), as a smoke test of the plumbing it will
+grow into the real training loop on top of. Each run's resolved config and
+logs are written to `outputs/<date>/<time>/` (gitignored, like the other run
+artifacts). `hydra.job.chdir` is set to `false` so the working directory
+stays the repo root; without it, Hydra's default of chdir-ing into the run
+directory would break every relative path used throughout this project
+(`data/raw/...`, `configs/...`, etc.).
+
+### Experiment tracking (MLflow)
+
+```bash
+uv run scripts/train.py
+uv run mlflow ui --backend-store-uri sqlite:///mlruns.db  # view runs at http://127.0.0.1:5000
+```
+
+`configs/mlflow/local.yaml` (selected via the `mlflow` default) points at a
+local, self-hosted MLflow backend — no external account needed. It uses a
+SQLite database (`mlruns.db`, gitignored) rather than the classic
+`./mlruns` file store: MLflow has deprecated the file store in favor of a
+database backend, so SQLite is the current recommended approach.
+`src/mhd_surrogate/mlflow_utils.py`'s `flatten_for_mlflow` turns the
+resolved (nested) Hydra config into the flat key-value pairs
+`mlflow.log_params` expects (e.g. `data.dataset`, `dataset.window`); the
+dataset shape/dtype and both splits' sample counts are also logged. There
+are no metrics yet, since there is no training loop to produce them.
 
 **Dependency note:** `hydra-core` is pinned to the `1.4.0.dev9` pre-release.
 The latest stable release (1.3.7) is broken on Python 3.14 (this project's

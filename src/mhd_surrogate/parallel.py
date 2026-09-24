@@ -12,6 +12,7 @@ like Ray isn't warranted yet.
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import sys
 import time
@@ -20,6 +21,8 @@ from pathlib import Path
 from typing import Any
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent.parent / "scripts"
+
+log = logging.getLogger(__name__)
 
 
 def run_subprocess(script: str, args: list[str], label: str) -> dict[str, Any]:
@@ -47,7 +50,7 @@ def run_parallel(
 ) -> list[dict[str, Any]]:
     """Run (script, args, label) jobs concurrently.
 
-    Prints a one-line status per job as it finishes and returns the result
+    Logs a one-line status per job as it finishes and returns the result
     records in completion order.
     """
     results = []
@@ -59,14 +62,17 @@ def run_parallel(
             result = future.result()
             results.append(result)
             status = "ok" if result["returncode"] == 0 else "FAILED"
-            print(f"  [{status}] {result['script']} {result['label']} ({result['elapsed']:.1f}s)")
+            log.info(
+                "[%s] %s %s (%.1fs)", status, result["script"], result["label"], result["elapsed"]
+            )
     return results
 
 
-def print_failures(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Print stderr for any failed job; returns the list of failures."""
+def log_failures(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Log stderr for any failed job; returns the list of failures."""
     failures = [r for r in results if r["returncode"] != 0]
     for failure in failures:
-        print(f"\n--- {failure['script']} {failure['label']} stderr ---")
-        print(failure["stderr"])
+        log.error(
+            "%s %s failed, stderr:\n%s", failure["script"], failure["label"], failure["stderr"]
+        )
     return failures

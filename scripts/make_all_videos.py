@@ -18,12 +18,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import time
 from pathlib import Path
 
-from mhd_surrogate.parallel import print_failures, run_parallel
+from mhd_surrogate.logging_config import add_log_level_arg, setup_logging
+from mhd_surrogate.parallel import log_failures, run_parallel
 from mhd_surrogate.summary import filter_datasets
+
+log = logging.getLogger(__name__)
 
 DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
 DEFAULT_STORE = Path("data/processed/re16k_t400.zarr")
@@ -46,11 +50,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stride", type=int, default=1, help="Render every Nth time step")
     parser.add_argument("--fps", type=int, default=24)
     parser.add_argument("--workers", type=int, default=None, help="Default: os.cpu_count()")
+    add_log_level_arg(parser)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    setup_logging(args.log_level)
     manifest = json.loads(args.manifest.read_text())
     splits = filter_datasets(manifest["splits"], args.dataset)
     dataset_names = list(splits)
@@ -77,14 +83,14 @@ def main() -> None:
         )
         for name in dataset_names
     ]
-    print(f"rendering {len(jobs)} videos (field={args.field}) with {workers} workers...")
+    log.info("rendering %d videos (field=%s) with %d workers...", len(jobs), args.field, workers)
 
     start = time.monotonic()
     results = run_parallel(jobs, workers)
     elapsed = time.monotonic() - start
 
-    failures = print_failures(results)
-    print(f"\n{len(results) - len(failures)}/{len(results)} videos ok in {elapsed:.1f}s")
+    failures = log_failures(results)
+    log.info("%d/%d videos ok in %.1fs", len(results) - len(failures), len(results), elapsed)
 
     if failures:
         raise SystemExit(1)

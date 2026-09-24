@@ -19,6 +19,7 @@ dependencies = [
     # fixes it. Swap for the stable 1.4.0 release once it ships.
     "hydra-core==1.4.0.dev9",
     "jax>=0.11.2",
+    "mlflow>=3.16.1",
 ]
 
 [build-system]

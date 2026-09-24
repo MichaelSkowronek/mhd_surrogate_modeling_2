@@ -9,12 +9,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from pathlib import Path
 
 import yaml
 import zarr
 
+from mhd_surrogate.logging_config import add_log_level_arg, setup_logging
 from mhd_surrogate.splitting import trailing_split
+
+log = logging.getLogger(__name__)
 
 DEFAULT_CONFIG = Path("configs/split.yaml")
 DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
@@ -24,11 +28,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--out", type=Path, default=DEFAULT_MANIFEST)
+    add_log_level_arg(parser)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    setup_logging(args.log_level)
     config = yaml.safe_load(args.config.read_text())
 
     root = zarr.open_group(store=config["zarr_store"], mode="r")
@@ -43,15 +49,20 @@ def main() -> None:
             "buffer": [split.train_end, split.test_start],
             "test": [split.test_start, split.test_end],
         }
-        print(
-            f"{name}: n_steps={n_steps} "
-            f"train=[0,{split.train_end}) buffer=[{split.train_end},{split.test_start}) "
-            f"test=[{split.test_start},{n_steps})"
+        log.info(
+            "%s: n_steps=%d train=[0,%d) buffer=[%d,%d) test=[%d,%d)",
+            name,
+            n_steps,
+            split.train_end,
+            split.train_end,
+            split.test_start,
+            split.test_start,
+            n_steps,
         )
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(manifest, indent=2) + "\n")
-    print(f"\nwrote manifest to {args.out}")
+    log.info("wrote manifest to %s", args.out)
 
 
 if __name__ == "__main__":
