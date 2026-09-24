@@ -34,6 +34,33 @@ plus [ruff](https://docs.astral.sh/ruff/) lint + format) run automatically on
 uv run pre-commit run --all-files
 ```
 
+## Tests
+
+```bash
+uv run pytest
+```
+
+Unit tests live in `tests/`, covering the pure computational logic: the
+`src/mhd_surrogate/` modules (`splitting`, `grid`, `fields`, `dataset`) plus
+the computational core functions inside the `check_*.py`/`make_video.py`
+scripts (e.g. `per_timestep_stats`, `field_acf`, `spectrum_sum`,
+`divergence_stats`, `vorticity_stats`, `compute_field`) — the
+`scripts/*.py` files aren't part of the installed package, so
+`tests/conftest.py` adds `scripts/` to `sys.path` to import them directly.
+Several of these tests convert ad-hoc checks done during development into
+permanent regression tests: a synthetic AR(1) process with a known
+autocorrelation `phi^lag` (autocorrelation), a synthetic sine wave with
+known variance and peak wavenumber (spectrum), and analytic velocity fields
+with known divergence/vorticity (e.g. solid-body rotation `u_x=-y, u_y=x`
+has constant vorticity 2 everywhere, since both fields are linear so finite
+differences are exact).
+
+What's deliberately **not** tested here: the CLI/argparse/plotting glue in
+each script, and whether a result is *physically* reasonable for the real
+DNS data (e.g. "is a ~36% divergence residual acceptable for a quasi-2D
+slice?") — that's a human judgement call made by reading the printed stats
+and looking at the plots, not something to assert on in a test.
+
 ## Data
 
 Raw `.npy` files are not tracked in git (see `.gitignore`). Copy them into
