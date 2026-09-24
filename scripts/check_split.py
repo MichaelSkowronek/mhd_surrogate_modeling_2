@@ -49,19 +49,20 @@ def parse_args() -> argparse.Namespace:
 def per_timestep_stats(arr, chunk_t: int):
     """Spatial mean, std, min and max per time step and channel, shape (T, C).
 
+    Also returns the per-channel kinetic energy proxy 0.5*u^2 (spatial
+    mean), shape (T, C); the total is its sum over channels.
+
     When there are exactly 2 channels (velocity components u_x, u_y), also
-    returns, per time step:
-    - a kinetic energy proxy 0.5*(u_x^2 + u_y^2), spatial mean, shape (T,)
-    - the spatial Pearson correlation between the two channels, shape (T,)
-    (both None otherwise).
+    returns the spatial Pearson correlation between them per time step,
+    shape (T,) (None otherwise).
     """
     n_steps, n_channels = arr.shape[0], arr.shape[1]
     means = np.empty((n_steps, n_channels), dtype=np.float64)
     stds = np.empty((n_steps, n_channels), dtype=np.float64)
     mins = np.empty((n_steps, n_channels), dtype=np.float64)
     maxs = np.empty((n_steps, n_channels), dtype=np.float64)
+    energy = np.empty((n_steps, n_channels), dtype=np.float64)
     has_velocity_pair = n_channels == 2
-    energy = np.empty(n_steps, dtype=np.float64) if has_velocity_pair else None
     correlation = np.empty(n_steps, dtype=np.float64) if has_velocity_pair else None
 
     for start in range(0, n_steps, chunk_t):
@@ -71,12 +72,11 @@ def per_timestep_stats(arr, chunk_t: int):
         stds[start:end] = block.std(axis=(2, 3))
         mins[start:end] = block.min(axis=(2, 3))
         maxs[start:end] = block.max(axis=(2, 3))
+        energy[start:end] = 0.5 * (block.astype(np.float64) ** 2).mean(axis=(2, 3))
 
         if has_velocity_pair:
             ux = block[:, 0].reshape(end - start, -1)
             uy = block[:, 1].reshape(end - start, -1)
-            energy[start:end] = 0.5 * (ux**2 + uy**2).mean(axis=1)
-
             ux_centered = ux - ux.mean(axis=1, keepdims=True)
             uy_centered = uy - uy.mean(axis=1, keepdims=True)
             cov = (ux_centered * uy_centered).mean(axis=1)
@@ -241,12 +241,18 @@ def main() -> None:
         print(f"\n=== {name} (train: [0,{train_end}), test: [{train_end},{split['n_steps']})) ===")
         print_region_comparison(means, stds, mins, maxs, train_end)
 
-        series = {
-            f"{cname} spatial mean": means[:, c] for c, cname in enumerate(channel_labels(means.shape[1]))
+        labels = channel_labels(means.shape[1])
+        series = {f"{cname} spatial mean": means[:, c] for c, cname in enumerate(labels)}
+
+        energy_series = {
+            f"kinetic energy 0.5*{cname}^2, spatial mean": energy[:, c]
+            for c, cname in enumerate(labels)
         }
-        if energy is not None:
-            print_scalar_comparison("kinetic energy 0.5*(u_x^2+u_y^2), spatial mean", energy, train_end)
-            series["kinetic energy 0.5*(u_x^2+u_y^2), spatial mean"] = energy
+        energy_series["total kinetic energy 0.5*sum(u^2), spatial mean"] = energy.sum(axis=1)
+        for label, values in energy_series.items():
+            print_scalar_comparison(label, values, train_end)
+        series.update(energy_series)
+
         if correlation is not None:
             print_scalar_comparison("u_x-u_y spatial correlation", correlation, train_end)
             series["u_x-u_y spatial correlation"] = correlation

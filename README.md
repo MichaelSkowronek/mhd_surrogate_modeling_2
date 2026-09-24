@@ -84,8 +84,8 @@ uv run scripts/check_split.py  # sanity-checks train vs. test statistics
 
 `check_split.py` computes, per time step, the spatial mean/std/min/max of
 each channel plus (when there are 2 channels, i.e. velocity components) a
-kinetic energy proxy `0.5*(u_x^2+u_y^2)` and the spatial `u_x`-`u_y`
-correlation. It compares train vs. test aggregate statistics for all of
+kinetic energy proxy per direction (`0.5*u_x^2`, `0.5*u_y^2`) and in total,
+and the spatial `u_x`-`u_y` correlation. It compares train vs. test aggregate statistics for all of
 these and produces two plots per dataset: every series over time with the
 split boundary marked (`<name>_split_check.png`), and a train-vs-test value
 histogram per channel (`<name>_split_hist.png`) — so a drift, trend, or
@@ -101,5 +101,7 @@ training region; the trailing test region sits at a lower point of that
 cycle, though it matches the last third of train (t=700-998) reasonably
 well. This is a real feature of the dynamics, not a computation artifact —
 worth keeping in mind when interpreting test-set performance later, since
-the current trailing split under-represents that higher-energy regime.
+the current trailing split under-represents that higher-energy regime. The
+per-direction energies show this comes entirely from `u_x` (~1.15 std devs
+shift); `u_y` energy is essentially unchanged (~0.08).
 `u_x`-`u_y` correlation is not flagged (~0.03 std devs shift).
