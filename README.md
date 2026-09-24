@@ -160,7 +160,8 @@ near the inlet (x < ~150), large coherent vortices of roughly channel-width
 size downstream, and thin high-vorticity layers along both y walls, which
 dominate the extremes. Mean enstrophy is ~26.2 in train and ~25.5 in test
 (~3% lower), with slow variations over time. The spatially averaged
-vorticity is a regular oscillation (period ~30-40 steps, amplitude ~0.03)
+vorticity is a regular oscillation (period ~25-30 steps, amplitude ~0.03; see
+the autocorrelation section)
 with a small mean (~0.012 train, ~0.005 test), tiny compared with the local
 vorticity magnitude of order 10-20. Both quantities are flagged using the
 same thresholds as `check_split.py` (mean shifts of 0.46 and 0.33 std devs),
@@ -219,3 +220,68 @@ For `re16k_t400_0`:
   and ~8-10 structures per domain length, so with ~250 temporally correlated
   test steps this is plausibly statistical noise plus the slow energy
   variation found in the split check, though this was not tested.
+
+## Temporal autocorrelation
+
+```bash
+uv run scripts/check_autocorrelation.py [--max-lag N]
+```
+
+Two analyses, with lags in snapshot steps (the physical time between
+snapshots is not stored in the data, so no physical time scales here):
+
+1. **Field autocorrelation:** the pointwise fluctuation `u' = u - <u>_t`
+   (about each region's time-mean field) correlated with itself at lag `tau`,
+   pooled over all grid points via an FFT along time, per channel and
+   separately for train and test.
+2. **Scalar autocorrelation** over the whole series: spatial means of `u_x`
+   and `u_y` and the per-direction kinetic energy, with the approximate
+   `+-1.96/sqrt(N)` white-noise band.
+
+The estimators were validated on synthetic AR(1) data (measured
+autocorrelation matches `phi^lag` to within ~0.005 at every lag, and is
+insensitive to a mean offset and scale). The reported lags, integral time
+`tau_int` and `N_eff = N/(2*tau_int)` are rough: `tau_int` is truncated at
+the first zero crossing, which ignores the negative lobe and the recurring
+oscillations described below, and the tail of the estimate is noisy.
+
+For `re16k_t400_0`:
+
+- **Fast decorrelation, then oscillation.** The field autocorrelation
+  falls below 1/e after ~5-6 steps and crosses zero after ~7-9 steps
+  (`u_x`: rho(1) = 0.90, `u_y`: 0.82), with a negative lobe (down to -0.4 to
+  -0.55 near lag 12-14). It then keeps oscillating with a period of ~25
+  steps (peaks near lags 26, 51, 76, 99, 121, 147, still ~0.3 at lag ~147), so
+  the flow contains a persistent quasi-periodic component. The spatial mean
+  of `u_y` is close to a pure oscillator with a period of ~28 steps, with the
+  oscillation amplitude modulated in time.
+- **Train vs. test:** the initial decay is essentially identical (rho(1)
+  0.896 vs. 0.885 for `u_x`, 0.824 vs. 0.816 for `u_y`; same 1/e lags). The
+  later oscillatory recurrences are stronger in test (e.g. `u_y` ~0.42 vs.
+  ~0.22 near lag 26). With only 250 test steps and each region's own mean
+  removed, this may be sampling noise or a real difference in how coherent
+  the periodic component is; not determined.
+- **Slow energy variation.** The kinetic energy per direction has much
+  longer memory (1/e at ~32 steps for `u_x`, ~23 for `u_y`; the `u_x` energy
+  only crosses zero at lag ~318), consistent with the slow oscillation found
+  in the split check. Its `N_eff` over the whole series is only ~10 (`u_x`)
+  and ~30 (`u_y`), so a 250-step test window holds just a couple of
+  effectively independent samples of the slow variation. As a
+  back-of-envelope estimate, accounting for the autocorrelation puts the
+  train/test `u_x` energy shift flagged in the split check at roughly 1.5
+  standard errors of the difference of means (the split check's 1.15 is in
+  units of the time series' own standard deviation, a different scale):
+  suggestive, but not clearly distinguishable from sampling variability of
+  a slowly varying signal. This
+  estimate is crude (`N_eff` of about 2 in the test window is too small for
+  a normal approximation to be reliable).
+- **Implication for the split:** snapshots are highly correlated at short
+  lags, so a random split would leak information, as assumed. The direct
+  (monotone) correlation drops below 0.05 after ~8 steps, which suggests a
+  buffer of roughly 10 steps between train and test would remove it; the
+  recurring oscillatory correlation at longer lags reflects a persistent
+  periodic component of the dynamics and is not something a buffer removes.
+  No buffer is implemented yet.
+
+Only temporal autocorrelation is covered; spatial autocorrelation (integral
+length scales) and the enstrophy autocorrelation are not.
