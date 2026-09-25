@@ -1,8 +1,9 @@
-# Root Hydra config for training entrypoints (scripts/train.py and later).
+# Root Hydra config for training entrypoints (scripts/training/train.py and later).
 #
-# This is separate from configs/split.yaml and configs/grid.yaml, which are
-# plain YAML consumed directly by the analysis scripts (scripts/split_data.py,
-# scripts/check_*.py) and are not part of the Hydra config tree.
+# This is separate from configs/analysis/split.yaml and
+# configs/analysis/grid.yaml, which are plain YAML consumed directly by the
+# data/analysis scripts (scripts/data/split_data.py, scripts/analysis/check_*.py)
+# and are not part of the Hydra config tree.
 
 defaults:
   - data: re16k

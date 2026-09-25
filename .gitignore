@@ -233,10 +233,10 @@ reports/videos/*
 reports/summaries/*
 !reports/summaries/.gitkeep
 
-# Hydra run outputs (scripts/train.py and later)
+# Hydra run outputs (scripts/training/train.py and later)
 outputs/
 
-# MLflow tracking data (scripts/train.py and later)
+# MLflow tracking data (scripts/training/train.py and later)
 mlruns.db
 mlruns/
 mlartifacts/

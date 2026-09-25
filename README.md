@@ -37,6 +37,33 @@ plus [ruff](https://docs.astral.sh/ruff/) lint + format) run automatically on
 uv run pre-commit run --all-files
 ```
 
+## Project layout
+
+```
+src/mhd_surrogate/   importable package, split by pipeline stage
+  data/              splitting, dataset, grid
+  analysis/          fields, summary
+  training/          mlflow_utils
+  utils/             logging_config, parallel
+scripts/             CLI entry points, same split (plus viz/)
+  data/              explore_data, convert_to_zarr, split_data
+  analysis/          check_*.py, run_all_checks
+  viz/               make_video, make_all_videos
+  training/          train
+tests/               mirrors src/ and scripts/ (data/, analysis/, training/, utils/, viz/)
+configs/             Hydra tree: config.yaml + data/, dataset/, mlflow/ groups
+  analysis/          plain-YAML configs (split.yaml, grid.yaml)
+```
+
+New code goes under the subpackage/subdirectory matching its pipeline stage,
+with its tests in the mirrored `tests/` subdirectory. `configs/analysis/` is
+the home for the plain-YAML (non-Hydra) configs the data/analysis scripts
+read directly — including `split.yaml`, which `scripts/data/split_data.py`
+consumes — while everything Hydra composes for training lives in the rest of
+`configs/`. Scripts are run from the repo root (`uv run
+scripts/analysis/check_split.py`), since data and config paths are relative
+to it.
+
 ## Tests
 
 ```bash
@@ -49,8 +76,9 @@ Unit tests live in `tests/`, covering the pure computational logic: the
 computational core functions inside the `check_*.py`/`make_video.py`
 scripts (e.g. `per_timestep_stats`, `field_acf`, `spectrum_sum`,
 `divergence_stats`, `vorticity_stats`, `compute_field`) — the
-`scripts/*.py` files aren't part of the installed package, so
-`tests/conftest.py` adds `scripts/` to `sys.path` to import them directly.
+`scripts/**/*.py` files aren't part of the installed package, so
+`tests/conftest.py` adds each `scripts/` subdirectory to `sys.path` to import
+them directly.
 Several of these tests convert ad-hoc checks done during development into
 permanent regression tests: a synthetic AR(1) process with a known
 autocorrelation `phi^lag` (autocorrelation), a synthetic sine wave with
@@ -67,9 +95,9 @@ and looking at the plots, not something to assert on in a test.
 
 ### Data contract tests
 
-`tests/test_data_contract.py` is different from the rest of `tests/`: it
+`tests/data/test_data_contract.py` is different from the rest of `tests/`: it
 runs against the real zarr store (the datasets and store path listed in
-`configs/split.yaml`) rather than synthetic data, checking objective,
+`configs/analysis/split.yaml`) rather than synthetic data, checking objective,
 storage-agnostic structural invariants — every configured dataset exists,
 shape is `(T, 2, Nx, Ny)`, dtype is `float32`, all values are finite, values
 stay within a broad sanity bound (`MAX_ABS_VALUE = 100`, meant to catch
@@ -88,8 +116,8 @@ present locally, including in CI.
 
 ## Logging
 
-Every `scripts/*.py` CLI script accepts `--log-level` (`DEBUG`/`INFO`/
-`WARNING`/`ERROR`, default `INFO`). `src/mhd_surrogate/logging_config.py`'s
+Every `scripts/**/*.py` CLI script accepts `--log-level` (`DEBUG`/`INFO`/
+`WARNING`/`ERROR`, default `INFO`). `src/mhd_surrogate/utils/logging_config.py`'s
 `setup_logging` is called once at the start of each script's `main()`.
 
 Status/progress/diagnostic messages (warnings like "skipping this dataset,
@@ -181,7 +209,7 @@ part of the dataset.
 
 ### Grid
 
-The domain lengths are in `configs/grid.yaml` and are used by every
+The domain lengths are in `configs/analysis/grid.yaml` and are used by every
 derivative-based or wavenumber-based analysis: `Lx = 25` along axis 2 and
 `Ly = 2` along axis 3, with uniform spacing `dx = 25/1150` (~0.02174) and
 `dy = 2/126` (~0.01587).
@@ -196,7 +224,7 @@ or lost by the interpolation.
 ## Exploring the data
 
 ```bash
-uv run scripts/explore_data.py
+uv run scripts/data/explore_data.py
 ```
 
 Prints shape, dtype, value range, and NaN/Inf counts for each `.npy` file in
@@ -205,7 +233,7 @@ Prints shape, dtype, value range, and NaN/Inf counts for each `.npy` file in
 ## Converting to zarr
 
 ```bash
-uv run scripts/convert_to_zarr.py
+uv run scripts/data/convert_to_zarr.py
 ```
 
 Writes all simulations in `data/raw/` into a single zarr store at
@@ -222,7 +250,7 @@ root["re16k_t400_0"]  # shape (1248, 2, 1151, 127)
 
 ## Train/test split
 
-Split parameters live in `configs/split.yaml` (which datasets, test fraction,
+Split parameters live in `configs/analysis/split.yaml` (which datasets, test fraction,
 buffer). The split is time-based (trailing): the last `test_fraction` of each
 dataset's time steps become the test set, since these are temporally
 autocorrelated snapshots and a random split would leak information between
@@ -239,8 +267,8 @@ It does not remove the recurring quasi-periodic correlation at longer lags
 from the split manifest and exclude the buffer from both train and test.
 
 ```bash
-uv run scripts/split_data.py   # writes data/processed/splits/split_manifest.json
-uv run scripts/check_split.py  # sanity-checks train vs. test statistics
+uv run scripts/data/split_data.py   # writes data/processed/splits/split_manifest.json
+uv run scripts/analysis/check_split.py  # sanity-checks train vs. test statistics
 ```
 
 `check_split.py` computes, per time step, the spatial mean/std/min/max of
@@ -270,7 +298,7 @@ shift); `u_y` energy is essentially unchanged (~0.10).
 ## Incompressibility check
 
 ```bash
-uv run scripts/check_divergence.py [--dx DX --dy DY]
+uv run scripts/analysis/check_divergence.py [--dx DX --dy DY]
 ```
 
 Computes `div(u) = du_x/dx + du_y/dy` per time step (second-order central
@@ -278,7 +306,7 @@ differences, layout assumed `(T, 2, Nx, Ny)` with `x` = axis 2) and plots the
 RMS divergence, the RMS normalized by the RMS of the two derivative terms,
 and divergence maps at the first/middle/last step. The long axis (axis 2) is
 the streamwise x direction. Grid spacing is derived from the domain lengths
-in `configs/grid.yaml` (see the Grid section): `dx = 25/1150`, `dy = 2/126`.
+in `configs/analysis/grid.yaml` (see the Grid section): `dx = 25/1150`, `dy = 2/126`.
 `--dx/--dy` override the config (e.g. `--dx 1 --dy 1` for grid units).
 
 For `re16k_t400_0` the normalized divergence is ~0.41 (train and test alike,
@@ -310,11 +338,11 @@ was not tested.
 ## Vorticity and enstrophy
 
 ```bash
-uv run scripts/check_vorticity.py [--dx DX --dy DY]
+uv run scripts/analysis/check_vorticity.py [--dx DX --dy DY]
 ```
 
 Computes the out-of-plane vorticity `w = du_y/dx - du_x/dy` (same central
-differences, layout and `configs/grid.yaml` spacing as the divergence check)
+differences, layout and `configs/analysis/grid.yaml` spacing as the divergence check)
 and the enstrophy proxy `0.5*w^2` (spatial mean per time step, matching the
 `0.5*u^2` energy convention). Only the z-component exists in a 2D slice, so
 this is a 2D enstrophy, not the full 3D one. It prints train vs. test
@@ -323,7 +351,7 @@ with the train/test boundary, and maps the vorticity at the first/middle/last
 step.
 
 Vorticity scales with 1/length and enstrophy with 1/length^2, so the absolute
-values below depend on the domain lengths in `configs/grid.yaml`. The
+values below depend on the domain lengths in `configs/analysis/grid.yaml`. The
 `du_x/dy` term inherits the y-interpolation caveat (see the Grid section):
 the thin wall layers, which dominate the vorticity extremes, are the part of
 the field most affected by the linear interpolation onto the uniform y grid.
@@ -347,7 +375,7 @@ the trailing test region.
 ## Spatial power spectrum
 
 ```bash
-uv run scripts/check_spectrum.py [--dx DX --dy DY]
+uv run scripts/analysis/check_spectrum.py [--dx DX --dy DY]
 ```
 
 Computes 1D power spectra E(k) of `u_x` and `u_y` along x (axis 2) and along
@@ -360,7 +388,7 @@ verified on synthetic sine waves (integral 0.500 for a unit-amplitude sine,
 peak at the expected wavenumber). Output: a log-log plot
 (`<name>_spectrum.png`) and a train-vs-test summary.
 
-Wavenumbers use the domain lengths in `configs/grid.yaml` (`k = 2*pi /
+Wavenumbers use the domain lengths in `configs/analysis/grid.yaml` (`k = 2*pi /
 wavelength` in physical units; see the Grid section). Because the flow is not
 homogeneous in x (the inlet region differs from the developed region), the x
 spectrum averages over a non-stationary signal. In y the data was linearly
@@ -403,7 +431,7 @@ For `re16k_t400_0`:
 ## Temporal autocorrelation
 
 ```bash
-uv run scripts/check_autocorrelation.py [--max-lag N]
+uv run scripts/analysis/check_autocorrelation.py [--max-lag N]
 ```
 
 Two analyses, with lags in snapshot steps (the physical time between
@@ -460,16 +488,16 @@ For `re16k_t400_0`:
   buffer of roughly 10 steps between train and test would remove it; the
   recurring oscillatory correlation at longer lags reflects a persistent
   periodic component of the dynamics and is not something a buffer removes.
-  A 10-step buffer is configured in `configs/split.yaml`.
+  A 10-step buffer is configured in `configs/analysis/split.yaml`.
 
 Only temporal autocorrelation is covered; spatial autocorrelation (integral
 length scales) and the enstrophy autocorrelation are not.
 
 ## Running the suite across all datasets
 
-`configs/split.yaml` now lists all 9 available datasets (`re16k_t400_0`
+`configs/analysis/split.yaml` now lists all 9 available datasets (`re16k_t400_0`
 through `re16k_t400_10`, excluding the two known-bad ones), so
-`uv run scripts/split_data.py` builds a manifest covering all of them.
+`uv run scripts/data/split_data.py` builds a manifest covering all of them.
 
 Each of the five `check_*.py` scripts accepts `--dataset NAME` (repeatable;
 default: every dataset in the manifest) and now writes a JSON summary of its
@@ -479,12 +507,12 @@ and plots — this is what makes cross-dataset comparison possible instead of
 having to read 45 separate walls of text.
 
 ```bash
-uv run scripts/run_all_checks.py
-uv run scripts/run_all_checks.py --dataset re16k_t400_0 --dataset re16k_t400_1
-uv run scripts/run_all_checks.py --script check_split.py --workers 4
+uv run scripts/analysis/run_all_checks.py
+uv run scripts/analysis/run_all_checks.py --dataset re16k_t400_0 --dataset re16k_t400_1
+uv run scripts/analysis/run_all_checks.py --script check_split.py --workers 4
 ```
 
-`scripts/run_all_checks.py` runs every (script, dataset) pair — 45 by
+`scripts/analysis/run_all_checks.py` runs every (script, dataset) pair — 45 by
 default — and builds a comparison table (printed and written to
 `reports/summaries/comparison.csv`) from the resulting JSON summaries, with
 one row per dataset and a handful of headline numbers (step counts, how
@@ -495,7 +523,7 @@ is meant for a quick side-by-side look, not the final word.
 
 **Parallelization:** each (script, dataset) pair is independent, so this
 dispatches them as separate `python check_*.py --dataset X` subprocesses via
-`mhd_surrogate.parallel` (a thread pool where the threads just block on
+`mhd_surrogate.utils.parallel` (a thread pool where the threads just block on
 `subprocess.run`; the real numpy/FFT work happens in the child processes, on
 separate cores, with full process isolation — also used by
 `make_all_videos.py` below). All 45 jobs (9 datasets) completed in ~113s wall
@@ -519,8 +547,8 @@ separate step from reviewing this table in full.
 ## Video
 
 ```bash
-uv run scripts/make_video.py --dataset re16k_t400_0
-uv run scripts/make_video.py --dataset re16k_t400_0 --field speed --stride 2 --fps 30
+uv run scripts/viz/make_video.py --dataset re16k_t400_0
+uv run scripts/viz/make_video.py --dataset re16k_t400_0 --field speed --stride 2 --fps 30
 ```
 
 Renders an animation of the flow over time to `reports/videos/` (gitignored,
@@ -545,8 +573,8 @@ above.
 To render every dataset at once (same field/stride/fps for all of them):
 
 ```bash
-uv run scripts/make_all_videos.py
-uv run scripts/make_all_videos.py --field speed --stride 2 --fps 30
+uv run scripts/viz/make_all_videos.py
+uv run scripts/viz/make_all_videos.py --field speed --stride 2 --fps 30
 ```
 
 Same parallel dispatch as `run_all_checks.py` (see "Running the suite across
@@ -557,12 +585,12 @@ concurrently. All 9 default (vorticity) videos took ~157s wall time against
 ## Training config (Hydra)
 
 ```bash
-uv run scripts/train.py
-uv run scripts/train.py data=re16k seed=123
+uv run scripts/training/train.py
+uv run scripts/training/train.py data=re16k seed=123
 ```
 
 The exploration/analysis scripts above stay on plain argparse + PyYAML
-(`configs/split.yaml`, `configs/grid.yaml`) — they are finished, standalone
+(`configs/analysis/split.yaml`, `configs/analysis/grid.yaml`) — they are finished, standalone
 tools and don't need config composition. New training/model code uses
 [Hydra](https://hydra.cc) instead, since that will need config groups (model,
 optimizer, trainer, ...) that compose, with CLI overrides and later multirun
@@ -576,7 +604,7 @@ installed yet.
 
 `configs/dataset/` holds sample-windowing configs (`window`/`horizon`/
 `stride`/the split manifest path), selected via the `dataset` default.
-`src/mhd_surrogate/dataset.py`'s `WindowedDataset` turns one train/test
+`src/mhd_surrogate/data/dataset.py`'s `WindowedDataset` turns one train/test
 region into fixed-size samples: `window` consecutive time steps as input,
 the following `horizon` steps as target, a new sample every `stride` steps.
 It reads directly from the zarr array (no data is preloaded into memory) and
@@ -586,7 +614,7 @@ region's `[start, end)` range in the split manifest. `windowed.yaml`'s
 one-step-ahead prediction), not tied to any model yet. Values are returned
 as-is, float32; normalization is not implemented yet.
 
-No model exists yet, so `scripts/train.py` currently only resolves the
+No model exists yet, so `scripts/training/train.py` currently only resolves the
 config, confirms the configured dataset is reachable (shape/dtype), builds
 the train/test `WindowedDataset`s (sample count, one sample's shapes), and
 logs the run to MLflow (see below), as a smoke test of the plumbing it will
@@ -600,7 +628,7 @@ directory would break every relative path used throughout this project
 ### Experiment tracking (MLflow)
 
 ```bash
-uv run scripts/train.py
+uv run scripts/training/train.py
 uv run mlflow ui --backend-store-uri sqlite:///mlruns.db  # view runs at http://127.0.0.1:5000
 ```
 
@@ -609,7 +637,7 @@ local, self-hosted MLflow backend — no external account needed. It uses a
 SQLite database (`mlruns.db`, gitignored) rather than the classic
 `./mlruns` file store: MLflow has deprecated the file store in favor of a
 database backend, so SQLite is the current recommended approach.
-`src/mhd_surrogate/mlflow_utils.py`'s `flatten_for_mlflow` turns the
+`src/mhd_surrogate/training/mlflow_utils.py`'s `flatten_for_mlflow` turns the
 resolved (nested) Hydra config into the flat key-value pairs
 `mlflow.log_params` expects (e.g. `data.dataset`, `dataset.window`); the
 dataset shape/dtype and both splits' sample counts are also logged. There
