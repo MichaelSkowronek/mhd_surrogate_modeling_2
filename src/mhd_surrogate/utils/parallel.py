@@ -20,8 +20,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-# src/mhd_surrogate/utils/parallel.py -> parents[3] is the repo root.
-SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts"
+# Relative to the working directory, like every other path in this project
+# (scripts are always run from the repo root / the container's /app). Locating
+# scripts/ from this file's own location only works for an editable install:
+# in a regular install the package lives in site-packages, far from scripts/.
+SCRIPTS_DIR = Path("scripts").resolve()
 
 log = logging.getLogger(__name__)
 

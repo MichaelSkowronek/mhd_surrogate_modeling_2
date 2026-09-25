@@ -652,3 +652,40 @@ before any user code runs. `1.4.0.dev9` fixes it and was verified to resolve
 config and run cleanly via a plain `uv sync` (no `--prerelease` flag needed,
 since the version is pinned exactly). Swap for the stable 1.4.0 release once
 it ships.
+
+## Docker
+
+The project ships as a container image so the exact environment (Python
+3.14, the locked dependency set, the bundled ffmpeg) is reproducible on any
+machine, and later stages (training jobs, serving) have a unit to deploy.
+
+- **`Dockerfile`** — multi-stage. `builder` installs the locked dependencies
+  with uv (in their own cached layer, so source edits don't reinstall
+  everything), then the project non-editable. `runtime` (default) copies only
+  the finished virtualenv plus `scripts/` and `configs/` into a fresh
+  `python:3.14-slim`: no uv, no dev tools, runs as a non-root user.
+  `test` adds the dev group and `tests/` and runs pytest.
+- **Data is never in the image.** The zarr store is ~9 GB and changes
+  independently of the code, so `data/`, `reports/`, and `outputs/` are bind
+  mounts. `.dockerignore` keeps them out of the build context too.
+- **`docker-compose.yml`** — wires up the mounts and an MLflow tracking
+  server. Runs with sqlite in a shared named volume (`mlflow-data`) so the
+  training container and the UI see the same database.
+
+```bash
+docker compose build
+docker compose run --rm test                  # pytest inside the image
+docker compose run --rm app                   # train.py, tracked to the shared volume
+docker compose run --rm app python scripts/analysis/run_all_checks.py
+docker compose up -d mlflow                   # MLflow UI on http://localhost:5000
+```
+
+The image's default user has UID/GID 1000 so files written into the
+bind-mounted directories belong to the usual first host user; pass
+`--build-arg UID=… --build-arg GID=…` if yours differs.
+
+The image is CPU-only, like the local setup (no CUDA build of JAX yet).
+
+`scripts/` is located relative to the working directory (`/app` in the
+container), not relative to the installed package, since in the image the
+package lives in `site-packages`.

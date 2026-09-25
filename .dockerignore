@@ -1,0 +1,19 @@
+# Keep the build context small: data and generated output are mounted at run
+# time, never copied into the image.
+.git
+.github
+.venv
+.pytest_cache
+.ruff_cache
+**/__pycache__
+data
+reports/figures
+reports/videos
+reports/summaries
+outputs/*
+mlruns.db
+mlruns
+mlartifacts
+mlflow
+Dockerfile
+docker-compose.yml

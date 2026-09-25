@@ -1,0 +1,52 @@
+# Local orchestration of the containers. Data and results live on the host
+# (bind mounts), never inside the image.
+#
+#   docker compose build
+#   docker compose up -d mlflow                    # tracking UI on :5000
+#   docker compose run --rm app                    # default: training entrypoint
+#   docker compose run --rm app python scripts/analysis/run_all_checks.py
+#   docker compose run --rm test                   # pytest in the container
+
+x-app: &app
+  build:
+    context: .
+    target: runtime
+  image: mhd-surrogate:latest
+  volumes:
+    - ./data:/app/data
+    - ./reports:/app/reports
+    - ./outputs:/app/outputs
+    # sqlite lives in a directory volume shared with the MLflow server
+    # (a single-file bind mount breaks when sqlite replaces the file).
+    - mlflow-data:/app/mlflow
+
+services:
+  app:
+    <<: *app
+    # Track to the shared volume instead of the default ./mlruns.db.
+    command:
+      - python
+      - scripts/training/train.py
+      - mlflow.tracking_uri=sqlite:///mlflow/mlruns.db
+
+  mlflow:
+    <<: *app
+    command:
+      - mlflow
+      - server
+      - --backend-store-uri=sqlite:///mlflow/mlruns.db
+      - --host=0.0.0.0
+      - --port=5000
+    ports:
+      - "5000:5000"
+    profiles: ["ui"]
+
+  test:
+    build:
+      context: .
+      target: test
+    image: mhd-surrogate:test
+    profiles: ["test"]
+
+volumes:
+  mlflow-data:

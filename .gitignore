@@ -234,7 +234,8 @@ reports/summaries/*
 !reports/summaries/.gitkeep
 
 # Hydra run outputs (scripts/training/train.py and later)
-outputs/
+outputs/*
+!outputs/.gitkeep
 
 # MLflow tracking data (scripts/training/train.py and later)
 mlruns.db
