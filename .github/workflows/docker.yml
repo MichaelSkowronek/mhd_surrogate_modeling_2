@@ -6,6 +6,11 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    # `docker compose up --wait` doesn't reliably fail fast on every container
+    # error (see the HOST_UID/HOST_GID note below for a case that hung it
+    # rather than failing); this is a hard backstop against the job running
+    # for GitHub's default 6h job limit instead.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
@@ -47,7 +52,21 @@ jobs:
       # end: brings the services up and waits for their healthchecks.
       # `app`/`test` are excluded (profiled), and app needs data/ anyway,
       # which isn't present in CI.
-      - run: docker compose up -d --wait
+      # HOST_UID/HOST_GID default to 1000 (the usual first Linux user), but
+      # the checkout on this runner is owned by *its* actual user, not 1000
+      # -- without this, postgres gets "Permission denied" writing into the
+      # bind-mounted ./mlflow/postgres and (observed in CI) the container's
+      # "Error" status isn't one `--wait` reliably fails fast on, hanging
+      # instead of erroring, hence `timeout-minutes` above too.
+      - id: host-ids
+        run: |
+          echo "uid=$(id -u)" >> "$GITHUB_OUTPUT"
+          echo "gid=$(id -g)" >> "$GITHUB_OUTPUT"
+
+      - run: docker compose up -d --wait --wait-timeout 120
+        env:
+          HOST_UID: ${{ steps.host-ids.outputs.uid }}
+          HOST_GID: ${{ steps.host-ids.outputs.gid }}
 
       - run: curl -sf http://localhost:5000/health
 
