@@ -683,6 +683,12 @@ docker compose down                           # stop; all state stays in ./mlflo
 
 (`--no-deps` skips starting the tracking stack for scripts that don't log to it.)
 
+CI (`.github/workflows/docker.yml`) builds both image targets, lints the
+`Dockerfile` with hadolint, runs the `test` image, validates
+`docker-compose.yml`, and brings the tracking stack up with `--wait` to
+check the services' healthchecks. It doesn't run `app`, since that needs
+`data/`, which isn't present in CI.
+
 ### Tracking stack
 
 ```

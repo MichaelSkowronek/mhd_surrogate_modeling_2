@@ -1,0 +1,58 @@
+name: docker
+
+on:
+  push:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hadolint/hadolint-action@v3.5.0
+        with:
+          dockerfile: Dockerfile
+
+      - uses: docker/setup-buildx-action@v4.4.1
+
+      # Build both targets once here (cached via the GitHub Actions cache
+      # backend) and load them into the runner's local Docker so the
+      # `docker compose` steps below reuse them instead of rebuilding.
+      - uses: docker/build-push-action@v7.4.0
+        with:
+          context: .
+          target: runtime
+          tags: mhd-surrogate:latest
+          load: true
+          cache-from: type=gha,scope=runtime
+          cache-to: type=gha,mode=max,scope=runtime
+
+      - uses: docker/build-push-action@v7.4.0
+        with:
+          context: .
+          target: test
+          tags: mhd-surrogate:test
+          load: true
+          cache-from: type=gha,scope=test
+          cache-to: type=gha,mode=max,scope=test
+
+      # Unit tests inside the image, same as `docker compose run --rm test`.
+      # The zarr store isn't present in CI, so the 6 data-contract tests
+      # skip, same as the plain `uv run pytest` job.
+      - run: docker run --rm mhd-surrogate:test
+
+      - run: docker compose config -q
+
+      # Smoke-test the tracking stack (postgres, seaweedfs, mlflow) end to
+      # end: brings the services up and waits for their healthchecks.
+      # `app`/`test` are excluded (profiled), and app needs data/ anyway,
+      # which isn't present in CI.
+      - run: docker compose up -d --wait
+
+      - run: curl -sf http://localhost:5000/health
+
+      - if: always()
+        run: docker compose logs
+
+      - if: always()
+        run: docker compose down
