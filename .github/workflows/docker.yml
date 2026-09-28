@@ -41,9 +41,11 @@ jobs:
           cache-from: type=gha,scope=test
           cache-to: type=gha,mode=max,scope=test
 
-      # Unit tests inside the image, same as `docker compose run --rm test`.
-      # The zarr store isn't present in CI, so the 6 data-contract tests
-      # skip, same as the plain `uv run pytest` job.
+      # Same suite as the `tests` workflow, but against the image's
+      # non-editable install rather than an editable one -- deliberately
+      # not redundant, see CLAUDE.md's Testing section (this is what would
+      # catch a bug that only breaks non-editably, as one already has).
+      # The zarr store isn't present in CI, so the 6 data-contract tests skip.
       - run: docker run --rm mhd-surrogate:test
 
       - run: docker compose config -q

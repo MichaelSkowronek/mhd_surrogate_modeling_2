@@ -69,6 +69,12 @@ conventions below; it shifts which tools are worth reaching for at all.
 - Don't test CLI/argparse/plotting glue, or whether a result is physically
   reasonable for the real data — that stays a human judgement call from the
   printed output and plots.
+- pytest runs twice in CI — `tests.yml` against an editable install,
+  `docker.yml` against the image's non-editable one — deliberately, not
+  redundantly: they exercise different installs, and the two can diverge
+  (`parallel.SCRIPTS_DIR`'s old `parents[3]`-from-`__file__` lookup worked
+  under an editable install but silently broke non-editably, inside the
+  image). Don't remove either on the assumption they're the same check.
 - See the README's "Tests" section for the full rationale and examples.
 
 ## Logging
