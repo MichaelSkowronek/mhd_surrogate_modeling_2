@@ -33,6 +33,28 @@ conventions below; it shifts which tools are worth reaching for at all.
   job paths, `tests/conftest.py`, and path references in the docs.
 - See the README's "Project layout" section for the full tree.
 
+## Docker
+
+- The project is containerized (`Dockerfile`, `docker-compose.yml`). Keep
+  it in sync with things that change it:
+  - New runtime dependencies or dependency groups/extras in `pyproject.toml`
+    need `uv sync` re-run in the image (cache-only effect if `uv.lock` is
+    unchanged, otherwise a new locked dependency to install).
+  - New top-level directories the app reads/writes at run time (like
+    `data/`, `reports/`, `outputs/`) need a bind mount in
+    `docker-compose.yml`, and, if git-tracked as empty, a `.gitkeep` so
+    Docker doesn't create them as root before the container's non-root user
+    can write to them.
+  - Layout moves affecting `scripts/`, `configs/`, or `src/` need matching
+    `COPY` paths in the `Dockerfile`.
+  - New services the app talks to at run time (databases, object stores,
+    ...) belong in `docker-compose.yml`, bind-mounted for persistence like
+    the existing MLflow stack (`postgres/`, `seaweedfs/` under `mlflow/`),
+    not a Docker-managed named volume that a `down -v` or volume prune can
+    silently delete.
+- See the README's "Docker" section for the full rationale and the
+  tracking-stack architecture.
+
 ## Code style
 
 - Write Python code following PEP8.
