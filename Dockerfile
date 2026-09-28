@@ -31,7 +31,7 @@ WORKDIR /app
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     --mount=type=bind,source=uv.lock,target=uv.lock \
-    uv sync --frozen --no-dev --no-install-project
+    uv sync --frozen --no-dev --extra server --no-install-project
 
 # Layer 2: the project itself, installed non-editable so the venv is
 # self-contained and can be copied to the runtime stage as-is.
@@ -39,13 +39,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-editable
+    uv sync --frozen --no-dev --extra server --no-editable
 
 
 FROM builder AS test
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-editable
+    uv sync --frozen --extra server --no-editable
 COPY scripts ./scripts
 COPY configs ./configs
 COPY tests ./tests
@@ -78,8 +78,8 @@ COPY --chown=app:app configs ./configs
 
 # Mount points the app writes to, pre-created so a fresh named volume
 # inherits the right ownership.
-RUN mkdir -p data reports/figures reports/videos reports/summaries outputs mlflow \
-    && chown -R app:app data reports outputs mlflow
+RUN mkdir -p data reports/figures reports/videos reports/summaries outputs \
+    && chown -R app:app data reports outputs
 
 USER ${UID}:${GID}
 CMD ["python", "scripts/training/train.py"]

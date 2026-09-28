@@ -630,6 +630,7 @@ directory would break every relative path used throughout this project
 ```bash
 uv run scripts/training/train.py
 uv run mlflow ui --backend-store-uri sqlite:///mlruns.db  # view runs at http://127.0.0.1:5000
+# or, with the Docker stack running (see "Docker"): train.py mlflow=server
 ```
 
 `configs/mlflow/local.yaml` (selected via the `mlflow` default) points at a
@@ -668,24 +669,68 @@ machine, and later stages (training jobs, serving) have a unit to deploy.
 - **Data is never in the image.** The zarr store is ~9 GB and changes
   independently of the code, so `data/`, `reports/`, and `outputs/` are bind
   mounts. `.dockerignore` keeps them out of the build context too.
-- **`docker-compose.yml`** — wires up the mounts and an MLflow tracking
-  server. Runs with sqlite in a shared named volume (`mlflow-data`) so the
-  training container and the UI see the same database.
+- **`docker-compose.yml`** — the app container plus a full MLflow tracking
+  stack (below).
 
 ```bash
 docker compose build
+docker compose up -d                          # tracking stack; UI on http://localhost:5000
+docker compose run --rm app                   # train.py, logging to the stack
+docker compose run --rm --no-deps app python scripts/analysis/run_all_checks.py
 docker compose run --rm test                  # pytest inside the image
-docker compose run --rm app                   # train.py, tracked to the shared volume
-docker compose run --rm app python scripts/analysis/run_all_checks.py
-docker compose up -d mlflow                   # MLflow UI on http://localhost:5000
+docker compose down                           # stop; all state stays in ./mlflow
 ```
 
-The image's default user has UID/GID 1000 so files written into the
-bind-mounted directories belong to the usual first host user; pass
-`--build-arg UID=… --build-arg GID=…` if yours differs.
+(`--no-deps` skips starting the tracking stack for scripts that don't log to it.)
+
+### Tracking stack
+
+```
+app ──HTTP──▶ mlflow server ──SQL──▶ postgres     runs, params, metrics
+                    └────S3 API────▶ seaweedfs    artifacts (config.json, ...)
+```
+
+This is the layout MLflow recommends for real deployments, run locally:
+
+- **Postgres** is the backend store. SQLite (used for plain local runs, see
+  above) can't handle concurrent writers, which parallel training runs would be.
+- **SeaweedFS** provides an S3-compatible object store for artifacts. Model
+  checkpoints and plots don't belong in a relational database. It stands in
+  for S3/GCS: because MLflow talks to it over the standard S3 API, pointing
+  the same stack at real S3 later is a config change, not a code change.
+  (MinIO would be the usual choice, but it no longer publishes container
+  images and its repository is archived, so it isn't a sound dependency.)
+- The MLflow server runs with `--serve-artifacts`: clients upload artifacts
+  to the server, which writes them to the object store, so training code
+  needs no S3 credentials or endpoint. Host validation is on
+  (`--allowed-hosts`), with the in-network name `mlflow:5000` allow-listed.
+- A one-shot `s3-init` container creates the artifact bucket.
+- The server's extra dependencies (`psycopg2`, `boto3`) live in the
+  `server` extra in `pyproject.toml`; training clients don't need them.
+
+**Persistence.** All state lives in bind mounts inside the project —
+`mlflow/postgres/` and `mlflow/seaweedfs/` (gitignored, with tracked
+`.gitkeep` placeholders) — rather than Docker-managed volumes, so
+`docker compose down -v` or a volume prune can't delete your run history
+(verified: runs and artifacts survive `down -v`). Back it up by copying
+`mlflow/`, with the stack stopped. The services run as your host user
+(`HOST_UID`/`HOST_GID`, default 1000), so the files are yours and need no
+`sudo` to manage. Delete `mlflow/postgres/*` and `mlflow/seaweedfs/*` to
+reset tracking.
+
+**Configuration.** Credentials default to local-development values in
+`docker-compose.yml`; copy `.env.example` to `.env` to override them. They
+are not meant for anything reachable beyond your machine.
+
+**Using the stack from the host.** With the stack up, `uv run
+scripts/training/train.py mlflow=server` logs to it via `localhost:5000`
+(the `mlflow/server.yaml` config); the default `mlflow=local` still uses the
+SQLite file and needs no containers.
 
 The image is CPU-only, like the local setup (no CUDA build of JAX yet).
 
 `scripts/` is located relative to the working directory (`/app` in the
 container), not relative to the installed package, since in the image the
-package lives in `site-packages`.
+package lives in `site-packages`. Keep bind-mount source directories tracked
+(`.gitkeep`): Docker creates missing ones as root, which the non-root
+container user can't write to.

@@ -1,0 +1,11 @@
+# MLflow tracking server (Postgres backend store + SeaweedFS artifact store),
+# started with `docker compose up -d`. Select with `mlflow=server`.
+#
+# This is the address as seen from the host. Inside the compose network the
+# `app` service overrides it to http://mlflow:5000.
+#
+# Artifacts are uploaded through the server (--serve-artifacts), so the
+# client needs no S3 credentials.
+
+tracking_uri: http://localhost:5000
+experiment_name: mhd-surrogate

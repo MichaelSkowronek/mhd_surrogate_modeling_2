@@ -237,6 +237,12 @@ reports/summaries/*
 outputs/*
 !outputs/.gitkeep
 
+# Data of the docker-compose MLflow stack (Postgres + SeaweedFS bind mounts)
+mlflow/postgres/*
+!mlflow/postgres/.gitkeep
+mlflow/seaweedfs/*
+!mlflow/seaweedfs/.gitkeep
+
 # MLflow tracking data (scripts/training/train.py and later)
 mlruns.db
 mlruns/

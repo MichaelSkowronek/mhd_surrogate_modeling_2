@@ -1,11 +1,20 @@
-# Local orchestration of the containers. Data and results live on the host
-# (bind mounts), never inside the image.
+# Local orchestration: the training/analysis container plus an MLflow tracking
+# stack that mirrors a production layout --
 #
-#   docker compose build
-#   docker compose up -d mlflow                    # tracking UI on :5000
+#   app --HTTP--> mlflow server --SQL--> postgres   (runs, params, metrics)
+#                      \--S3 API--> seaweedfs      (artifacts)
+#
+# All state lives in bind mounts inside the project (data/, reports/,
+# outputs/, mlflow/postgres/, mlflow/seaweedfs/), not in Docker-managed
+# volumes, so `docker compose down -v` or a volume prune can't delete it.
+#
+#   docker compose up -d                           # start the stack, UI on :5000
 #   docker compose run --rm app                    # default: training entrypoint
 #   docker compose run --rm app python scripts/analysis/run_all_checks.py
 #   docker compose run --rm test                   # pytest in the container
+#
+# Credentials below are local-development defaults, overridable via .env
+# (see .env.example).
 
 x-app: &app
   build:
@@ -16,30 +25,94 @@ x-app: &app
     - ./data:/app/data
     - ./reports:/app/reports
     - ./outputs:/app/outputs
-    # sqlite lives in a directory volume shared with the MLflow server
-    # (a single-file bind mount breaks when sqlite replaces the file).
-    - mlflow-data:/app/mlflow
+
+x-s3-credentials: &s3-credentials
+  AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-mlflow}
+  AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-mlflow-secret}
 
 services:
-  app:
-    <<: *app
-    # Track to the shared volume instead of the default ./mlruns.db.
+  postgres:
+    image: postgres:18-alpine
+    # Run as the host user so the bind-mounted data stays owned by you.
+    # (/etc/passwd is mounted because initdb needs the UID to resolve.)
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    environment:
+      POSTGRES_USER: mlflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mlflow}
+      POSTGRES_DB: mlflow
+    volumes:
+      - ./mlflow/postgres:/var/lib/postgresql
+      - /etc/passwd:/etc/passwd:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mlflow -d mlflow"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.47
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    # Single-process master + volume + filer + S3 gateway (port 8333).
+    command: ["server", "-dir=/data", "-s3"]
+    environment:
+      <<: *s3-credentials
+    volumes:
+      - ./mlflow/seaweedfs:/data
+
+  # One-shot: create the artifact bucket (retrying until SeaweedFS is up).
+  s3-init:
+    image: amazon/aws-cli:2.27.0
+    depends_on: [seaweedfs]
+    environment:
+      <<: *s3-credentials
+      AWS_DEFAULT_REGION: us-east-1
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - python
-      - scripts/training/train.py
-      - mlflow.tracking_uri=sqlite:///mlflow/mlruns.db
+      - >
+        until aws --endpoint-url http://seaweedfs:8333 s3api head-bucket --bucket mlflow
+        || aws --endpoint-url http://seaweedfs:8333 s3 mb s3://mlflow;
+        do echo "waiting for seaweedfs..."; sleep 2; done
+    restart: "no"
 
   mlflow:
     <<: *app
+    depends_on:
+      postgres: {condition: service_healthy}
+      s3-init: {condition: service_completed_successfully}
+    environment:
+      <<: *s3-credentials
+      MLFLOW_S3_ENDPOINT_URL: http://seaweedfs:8333
     command:
       - mlflow
       - server
-      - --backend-store-uri=sqlite:///mlflow/mlruns.db
+      - --backend-store-uri=postgresql://mlflow:${POSTGRES_PASSWORD:-mlflow}@postgres:5432/mlflow
+      # Clients upload artifacts to the server, which writes them to S3, so
+      # they need no S3 credentials or endpoint knowledge.
+      - --artifacts-destination=s3://mlflow
+      - --serve-artifacts
       - --host=0.0.0.0
       - --port=5000
+      # MLflow rejects requests whose Host header isn't allow-listed (DNS
+      # rebinding protection); add the in-network name the app uses.
+      - --allowed-hosts=mlflow:5000,localhost:5000,127.0.0.1:5000
     ports:
       - "5000:5000"
-    profiles: ["ui"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:5000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    <<: *app
+    depends_on:
+      mlflow: {condition: service_healthy}
+    command:
+      - python
+      - scripts/training/train.py
+      - mlflow=server
+      - mlflow.tracking_uri=http://mlflow:5000
+    profiles: ["run"]
 
   test:
     build:
@@ -47,6 +120,3 @@ services:
       target: test
     image: mhd-surrogate:test
     profiles: ["test"]
-
-volumes:
-  mlflow-data:

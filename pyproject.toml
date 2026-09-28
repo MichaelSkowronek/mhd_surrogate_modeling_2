@@ -22,6 +22,14 @@ dependencies = [
     "mlflow>=3.16.1",
 ]
 
+[project.optional-dependencies]
+# Only the MLflow tracking *server* needs these (Postgres backend store and
+# S3 artifact store); training clients talk to it over HTTP without them.
+server = [
+    "psycopg2-binary>=2.9",
+    "boto3>=1.35",
+]
+
 [build-system]
 requires = ["uv_build>=0.12.17,<0.13.0"]
 build-backend = "uv_build"

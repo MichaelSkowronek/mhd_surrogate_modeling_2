@@ -8,6 +8,7 @@ the real training loop on top of.
 Usage:
     uv run scripts/training/train.py
     uv run scripts/training/train.py data=re16k seed=123
+    uv run scripts/training/train.py mlflow=server  # Docker stack, see README
     uv run mlflow ui --backend-store-uri sqlite:///mlruns.db  # view runs
 """
 
@@ -17,10 +18,10 @@ import logging
 import os
 
 import hydra
-import mlflow
 import zarr
 from omegaconf import DictConfig, OmegaConf
 
+import mlflow
 from mhd_surrogate.data.dataset import load_dataset
 from mhd_surrogate.training.mlflow_utils import flatten_for_mlflow
 
@@ -40,7 +41,9 @@ def main(cfg: DictConfig) -> None:
 
     with mlflow.start_run() as run:
         log.info("mlflow run: %s (experiment: %s)", run.info.run_id, cfg.mlflow.experiment_name)
-        mlflow.log_params(flatten_for_mlflow(OmegaConf.to_container(cfg, resolve=True)))
+        resolved = OmegaConf.to_container(cfg, resolve=True)
+        mlflow.log_params(flatten_for_mlflow(resolved))
+        mlflow.log_dict(resolved, "config.json")
 
         root = zarr.open_group(store=cfg.data.zarr_store, mode="r")
         arr = root[cfg.data.dataset]
