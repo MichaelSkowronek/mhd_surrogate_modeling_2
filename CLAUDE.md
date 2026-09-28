@@ -86,6 +86,16 @@ conventions below; it shifts which tools are worth reaching for at all.
   (`setup_logging` already does this).
 - See the README's "Logging" section for the full rationale.
 
+## Maintaining this file
+
+- After finishing a piece of work, consider whether it introduced a
+  standing convention, architectural decision, or non-obvious constraint
+  (like the ones already in this file) that would trip up future work if
+  left undocumented. If so, propose adding it here — don't add it
+  silently — and let the user decide.
+- Don't propose documenting things the code/git history already makes
+  obvious, or one-off details that only matter to the current task.
+
 ## Licensing (Apache 2.0)
 
 - This project is licensed under Apache 2.0. If you vendor or adapt Apache-licensed third-party code into this repo, retain its original copyright notice and add a note describing what was changed.
