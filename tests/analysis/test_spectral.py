@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
-from check_point_spectrum import dominant_periods, power_spectrum, welch_spectrum
+
+from mhd_surrogate.analysis.spectral import dominant_periods, power_spectrum, welch_spectrum
 
 
 def test_power_spectrum_recovers_amplitude_and_period_of_a_sine():
