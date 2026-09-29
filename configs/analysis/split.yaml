@@ -1,8 +1,18 @@
-# Train/test split configuration.
+# Train+val / test split configuration.
 #
 # Splitting is time-based (trailing): the last `test_fraction` of each
-# dataset's time steps become the test set, the rest is train. A random
-# split would leak information between temporally autocorrelated snapshots.
+# dataset's time steps become the held-out test set; the rest, still called
+# "train" in the split manifest below, is the train+val region -- the actual
+# train/val boundary within it isn't decided yet. scripts/analysis/*.py only
+# ever read this region, never the test region, to avoid data snooping (see
+# CLAUDE.md's Testing section). A random split would also leak information
+# between temporally autocorrelated snapshots, hence trailing rather than
+# random.
+#
+# test_fraction and buffer_steps below are conservative placeholders so the
+# analysis suite has something to run on; the real values -- and the
+# train/val boundary -- are decided later, from the analysis this config
+# feeds (see CLAUDE.md).
 
 zarr_store: data/processed/re16k_t400.zarr
 
@@ -17,12 +27,13 @@ datasets:
   - re16k_t400_9
   - re16k_t400_10
 
-test_fraction: 0.2
+test_fraction: 0.4  # train+val gets the remaining, conservative 60%
 
-# Snapshots dropped from the END of the training region, so the last training
+# Snapshots dropped from the END of the train+val region, so its last
 # snapshot is separated from the first test snapshot. The test set keeps its
-# full `test_fraction`. In snapshot steps (the physical time step is unknown).
-# 10 follows the autocorrelation check for re16k_t400_0: the pooled field
-# autocorrelation falls below 0.05 after ~8 steps. It does not remove the
-# recurring quasi-periodic correlation (period ~25 steps) at longer lags.
-buffer_steps: 10
+# full `test_fraction`. In snapshot steps (the physical time step is
+# unknown). 50 is a conservative placeholder, not derived from anything --
+# the previous value (10) came from the autocorrelation check, but that
+# check itself is being extended as part of this same overhaul, so it isn't
+# trustworthy as a citation yet.
+buffer_steps: 50

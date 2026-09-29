@@ -1,20 +1,21 @@
 """Temporal autocorrelation of the velocity field and of scalar diagnostics.
 
-Two analyses, with lags measured in snapshot steps (the physical time
-between snapshots is not stored in the data):
+Two analyses, both over the train+val region only (like every
+scripts/analysis/*.py script, this never reads the held-out test region),
+with lags measured in snapshot steps (the physical time between snapshots is
+not stored in the data):
 
 1. Field autocorrelation: the pointwise fluctuation u' = u - <u>_t (the mean
-   is the time-mean field of each region) is correlated with itself at lag
-   tau, pooled over all grid points and normalized by the zero-lag value,
-   separately for u_x and u_y and separately for the train and test time
-   steps. This says how quickly the flow decorrelates from a given snapshot,
-   which bounds how far apart train and test snapshots must be to be
-   effectively independent and gives the effective number of independent
-   time steps.
-2. Scalar autocorrelation over the whole series: the spatial means of u_x
-   and u_y and the kinetic energy per direction (0.5*u^2, spatial mean),
-   with the approximate +-1.96/sqrt(N) white-noise band for reference (only
-   a rough guide for strongly autocorrelated series).
+   is the train+val time-mean field) is correlated with itself at lag tau,
+   pooled over all grid points and normalized by the zero-lag value,
+   separately for u_x and u_y. This says how quickly the flow decorrelates
+   from a given snapshot, which bounds how large a buffer around a split
+   boundary needs to be for the two sides to be effectively independent, and
+   gives the effective number of independent time steps.
+2. Scalar autocorrelation over the whole train+val series: the spatial means
+   of u_x and u_y and the kinetic energy per direction (0.5*u^2, spatial
+   mean), with the approximate +-1.96/sqrt(N) white-noise band for reference
+   (only a rough guide for strongly autocorrelated series).
 
 Per curve it reports the lag-1 correlation, the lags at which the
 autocorrelation first falls below 1/e and below 0.05, the first zero
@@ -113,12 +114,14 @@ def field_acf(data: np.ndarray, max_lag: int, slab: int) -> np.ndarray:
     return acf_from_power(np.moveaxis(power, 0, -1), n_steps, n_fft, max_lag)
 
 
-def scalar_series(data: np.ndarray, chunk_t: int) -> np.ndarray:
+def scalar_series(data, chunk_t: int, n_steps: int | None = None) -> np.ndarray:
     """Spatial means of u_x, u_y and per-direction energy 0.5*u^2, shape (T, 4).
 
-    `data` may be a zarr array; it is read in time chunks.
+    `data` may be a zarr array; it is read in time chunks. `n_steps` bounds
+    how much of `data` is read (default: all of it) -- for reading only a
+    leading region of a larger array without loading the rest.
     """
-    n_steps = data.shape[0]
+    n_steps = data.shape[0] if n_steps is None else n_steps
     out = np.empty((n_steps, 4), dtype=np.float64)
     for start in range(0, n_steps, chunk_t):
         end = min(start + chunk_t, n_steps)
@@ -169,7 +172,7 @@ def format_metrics(m: dict) -> str:
 
 def plot_acf(
     name: str,
-    field: dict[str, np.ndarray],
+    field: np.ndarray,
     scalars: np.ndarray,
     n_steps: int,
     out_dir: Path,
@@ -178,19 +181,11 @@ def plot_acf(
     fig, axes = plt.subplots(2, 1, figsize=(11, 9))
 
     ax = axes[0]
-    for region, style in (("train", "-"), ("test", "--")):
-        for c, cname in enumerate(CHANNEL_NAMES):
-            rho = field[region][c]
-            ax.plot(
-                np.arange(len(rho)),
-                rho,
-                style,
-                color=colors[c],
-                label=f"{cname} {region}",
-            )
+    for c, cname in enumerate(CHANNEL_NAMES):
+        ax.plot(np.arange(field.shape[1]), field[c], color=colors[c], label=cname)
     ax.axhline(1 / np.e, color="grey", linestyle=":", label="1/e")
     ax.axhline(0, color="black", linewidth=0.5)
-    ax.set_title(f"{name}: field autocorrelation (pooled over space)")
+    ax.set_title(f"{name}: field autocorrelation (pooled over space, train+val)")
     ax.set_xlabel("lag (snapshot steps)")
     ax.set_ylabel("autocorrelation")
     ax.legend()
@@ -201,7 +196,7 @@ def plot_acf(
     bound = 1.96 / np.sqrt(n_steps)
     ax.axhspan(-bound, bound, color="grey", alpha=0.2, label="+-1.96/sqrt(N)")
     ax.axhline(0, color="black", linewidth=0.5)
-    ax.set_title(f"{name}: scalar diagnostics autocorrelation (all steps)")
+    ax.set_title(f"{name}: scalar diagnostics autocorrelation (train+val)")
     ax.set_xlabel("lag (snapshot steps)")
     ax.set_ylabel("autocorrelation")
     ax.legend()
@@ -227,34 +222,32 @@ def main() -> None:
             log.warning("skipping %s: expected shape (T, 2, Nx, Ny), got %s", name, arr.shape)
             continue
 
-        regions = {"train": split["train"], "test": split["test"]}
-        field: dict[str, np.ndarray] = {}
-        field_summary: dict[str, dict] = {cname: {} for cname in CHANNEL_NAMES}
-        print(f"\n=== {name} (lags in snapshot steps) ===")
-        print("field autocorrelation, fluctuations about each region's time-mean field:")
-        for region, (start, end) in regions.items():
-            data = arr[start:end]
-            n_steps = end - start
-            max_lag = min(args.max_lag, n_steps // 2)
-            field[region] = field_acf(data, max_lag, args.slab)
-            del data
-            for c, cname in enumerate(CHANNEL_NAMES):
-                metrics = decorrelation_metrics(field[region][c], n_steps)
-                print(f"  {cname} {region} (N={n_steps}): {format_metrics(metrics)}")
-                field_summary[cname][region] = metrics
+        train_end = split["train"][1]
+        n_steps = train_end
+        max_lag = min(args.max_lag, n_steps // 2)
 
-        series = scalar_series(arr, args.chunk_t)
-        total_steps = series.shape[0]
-        scalar_lag = total_steps // 3
+        print(f"\n=== {name} (lags in snapshot steps, train+val: [0,{train_end})) ===")
+        print("field autocorrelation, fluctuations about the train+val time-mean field:")
+        data = arr[:train_end]
+        field = field_acf(data, max_lag, args.slab)
+        del data
+        field_summary: dict[str, dict] = {}
+        for c, cname in enumerate(CHANNEL_NAMES):
+            metrics = decorrelation_metrics(field[c], n_steps)
+            print(f"  {cname} (N={n_steps}): {format_metrics(metrics)}")
+            field_summary[cname] = metrics
+
+        series = scalar_series(arr, args.chunk_t, n_steps=train_end)
+        scalar_lag = n_steps // 3
         scalars = series_acf(series, scalar_lag)
-        print("scalar diagnostics autocorrelation, all steps:")
+        print("scalar diagnostics autocorrelation, train+val:")
         scalar_summary = {}
         for s, sname in enumerate(SCALAR_NAMES):
-            metrics = decorrelation_metrics(scalars[s], total_steps)
-            print(f"  {sname} (N={total_steps}): {format_metrics(metrics)}")
+            metrics = decorrelation_metrics(scalars[s], n_steps)
+            print(f"  {sname} (N={n_steps}): {format_metrics(metrics)}")
             scalar_summary[sname] = metrics
 
-        print(f"  plot: {plot_acf(name, field, scalars, total_steps, args.out_dir)}")
+        print(f"  plot: {plot_acf(name, field, scalars, n_steps, args.out_dir)}")
 
         summary_path = write_summary(
             name,

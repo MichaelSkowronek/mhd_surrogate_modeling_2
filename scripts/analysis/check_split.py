@@ -1,12 +1,19 @@
-"""Sanity-check whether a trailing train/test split looks representative.
+"""Descriptive statistics of the train+val region of a trailing split.
 
 Loads the split manifest written by scripts/data/split_data.py and, for each
-dataset, computes the per-timestep spatial mean/std/min/max of each
-channel, compares aggregate train vs. test statistics, plots the
-per-timestep values over time with the train/test boundary marked, and
-plots a train-vs-test value histogram per channel -- so a drift, trend, or
-distribution shift concentrated in the held-out tail is visible rather
-than hidden inside a single aggregate number.
+dataset, computes the per-timestep spatial mean/std/min/max of each channel,
+the per-channel kinetic energy proxy (0.5*u^2), and the correlation between
+channels, over the train+val region only -- this script (like every
+scripts/analysis/*.py script) never reads the held-out test region, since
+even just looking at its summary statistics would be data snooping. It plots
+the per-timestep values over time and a value histogram per channel, so a
+drift or trend within the region is visible rather than hidden inside a
+single aggregate number.
+
+This used to compare train against test; now that test is off limits, it
+just describes train+val. Once the train/val boundary within this region is
+decided, comparing train against val the way this used to compare train
+against test belongs here again.
 
 Usage:
     uv run scripts/analysis/check_split.py
@@ -31,8 +38,6 @@ log = logging.getLogger(__name__)
 DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
 DEFAULT_OUT_DIR = Path("reports/figures")
 CHANNEL_NAMES = ["u_x", "u_y"]
-STD_DIFF_WARN_THRESHOLD = 0.2  # flag mean shifts larger than this many std devs
-REL_DIFF_WARN_THRESHOLD = 0.1  # flag std ratio changes larger than this fraction
 N_HIST_BINS = 60
 
 
@@ -56,7 +61,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def per_timestep_stats(arr, chunk_t: int):
+def per_timestep_stats(arr, chunk_t: int, n_steps: int | None = None):
     """Spatial mean, std, min and max per time step and channel, shape (T, C).
 
     Also returns the per-channel kinetic energy proxy 0.5*u^2 (spatial
@@ -65,8 +70,13 @@ def per_timestep_stats(arr, chunk_t: int):
     When there are exactly 2 channels (velocity components u_x, u_y), also
     returns the spatial Pearson correlation between them per time step,
     shape (T,) (None otherwise).
+
+    `n_steps` bounds how much of `arr` is read (default: all of it) -- for
+    reading only a leading region of a larger array without loading the
+    rest.
     """
-    n_steps, n_channels = arr.shape[0], arr.shape[1]
+    n_steps = arr.shape[0] if n_steps is None else n_steps
+    n_channels = arr.shape[1]
     means = np.empty((n_steps, n_channels), dtype=np.float64)
     stds = np.empty((n_steps, n_channels), dtype=np.float64)
     mins = np.empty((n_steps, n_channels), dtype=np.float64)
@@ -95,43 +105,33 @@ def per_timestep_stats(arr, chunk_t: int):
     return means, stds, mins, maxs, energy, correlation
 
 
-def train_test_histograms(
+def histogram(
     arr,
     train_end: int,
-    test_start: int,
     value_range: np.ndarray,
     n_bins: int,
     chunk_t: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Per-channel value histograms for the train and test regions.
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-channel value histogram of the train+val region, i.e. `arr[:train_end]`.
 
-    Reads the array in chunks and accumulates counts rather than loading
-    everything at once; a chunk straddling a region boundary is split so each
-    region gets the right counts regardless of chunk alignment. Buffer steps
-    (train_end <= step < test_start) are excluded from both.
-    Returns (train_counts, test_counts, bin_edges), each (n_channels, ...).
+    Reads the array in chunks bounded by `train_end` rather than loading it
+    all at once; never reads at or past `train_end`. Returns (counts,
+    bin_edges), each (n_channels, ...).
     """
-    n_steps, n_channels = arr.shape[0], arr.shape[1]
+    n_channels = arr.shape[1]
     bin_edges = np.stack(
         [np.linspace(value_range[c, 0], value_range[c, 1], n_bins + 1) for c in range(n_channels)]
     )
-    train_counts = np.zeros((n_channels, n_bins), dtype=np.int64)
-    test_counts = np.zeros((n_channels, n_bins), dtype=np.int64)
+    counts = np.zeros((n_channels, n_bins), dtype=np.int64)
 
-    for start in range(0, n_steps, chunk_t):
-        end = min(start + chunk_t, n_steps)
+    for start in range(0, train_end, chunk_t):
+        end = min(start + chunk_t, train_end)
         block = arr[start:end]
-        train_n = max(0, min(train_end, end) - start)
-        test_from = min(max(test_start - start, 0), block.shape[0])
         for c in range(n_channels):
-            if train_n > 0:
-                counts, _ = np.histogram(block[:train_n, c], bins=bin_edges[c])
-                train_counts[c] += counts
-            if test_from < block.shape[0]:
-                counts, _ = np.histogram(block[test_from:, c], bins=bin_edges[c])
-                test_counts[c] += counts
+            hist, _ = np.histogram(block[:, c], bins=bin_edges[c])
+            counts[c] += hist
 
-    return train_counts, test_counts, bin_edges
+    return counts, bin_edges
 
 
 def rolling_mean(x: np.ndarray, window: int) -> np.ndarray:
@@ -141,88 +141,24 @@ def rolling_mean(x: np.ndarray, window: int) -> np.ndarray:
     return np.convolve(x, kernel, mode="valid")
 
 
-def print_region_comparison(
-    means: np.ndarray,
-    stds: np.ndarray,
-    mins: np.ndarray,
-    maxs: np.ndarray,
-    train_end: int,
-    test_start: int,
-) -> dict[str, dict]:
+def print_stats(means: np.ndarray, stds: np.ndarray, mins: np.ndarray, maxs: np.ndarray) -> dict:
     n_channels = means.shape[1]
     summary = {}
     for c, cname in enumerate(channel_labels(n_channels)):
-        train_mean = means[:train_end, c].mean()
-        test_mean = means[test_start:, c].mean()
-        train_std = stds[:train_end, c].mean()
-        test_std = stds[test_start:, c].mean()
-        train_min, train_max = mins[:train_end, c].min(), maxs[:train_end, c].max()
-        test_min, test_max = mins[test_start:, c].min(), maxs[test_start:, c].max()
-        # Mean shift relative to the natural fluctuation scale (train std),
-        # not relative to the mean itself -- a % diff is meaningless when
-        # the baseline mean is near zero (e.g. a zero-mean fluctuation).
-        mean_diff_in_std = abs(test_mean - train_mean) / (train_std + 1e-8)
-        std_rel_diff = abs(test_std - train_std) / (abs(train_std) + 1e-8)
-        flagged = (
-            mean_diff_in_std > STD_DIFF_WARN_THRESHOLD or std_rel_diff > REL_DIFF_WARN_THRESHOLD
-        )
-        print(
-            f"  {cname}: train mean={train_mean:.4g} std={train_std:.4g} "
-            f"min={train_min:.4g} max={train_max:.4g} | "
-            f"test mean={test_mean:.4g} std={test_std:.4g} "
-            f"min={test_min:.4g} max={test_max:.4g} | "
-            f"mean shift={mean_diff_in_std:.2f} std devs, std rel diff={std_rel_diff:.1%}"
-            f"{' <-- check this' if flagged else ''}"
-        )
-        summary[cname] = {
-            "train_mean": train_mean,
-            "test_mean": test_mean,
-            "train_std": train_std,
-            "test_std": test_std,
-            "train_min": train_min,
-            "train_max": train_max,
-            "test_min": test_min,
-            "test_max": test_max,
-            "mean_diff_in_std": mean_diff_in_std,
-            "std_rel_diff": std_rel_diff,
-            "flagged": bool(flagged),
-        }
+        mean, std = means[:, c].mean(), stds[:, c].mean()
+        vmin, vmax = mins[:, c].min(), maxs[:, c].max()
+        print(f"  {cname}: mean={mean:.4g} std={std:.4g} min={vmin:.4g} max={vmax:.4g}")
+        summary[cname] = {"mean": mean, "std": std, "min": vmin, "max": vmax}
     return summary
 
 
-def print_scalar_comparison(
-    label: str, series: np.ndarray, train_end: int, test_start: int
-) -> dict:
-    train_vals, test_vals = series[:train_end], series[test_start:]
-    train_mean, test_mean = train_vals.mean(), test_vals.mean()
-    train_std, test_std = train_vals.std(), test_vals.std()
-    mean_diff_in_std = abs(test_mean - train_mean) / (train_std + 1e-8)
-    std_rel_diff = abs(test_std - train_std) / (abs(train_std) + 1e-8)
-    flagged = mean_diff_in_std > STD_DIFF_WARN_THRESHOLD or std_rel_diff > REL_DIFF_WARN_THRESHOLD
-    print(
-        f"  {label}: train mean={train_mean:.4g} std={train_std:.4g} | "
-        f"test mean={test_mean:.4g} std={test_std:.4g} | "
-        f"mean shift={mean_diff_in_std:.2f} std devs, std rel diff={std_rel_diff:.1%}"
-        f"{' <-- check this' if flagged else ''}"
-    )
-    return {
-        "train_mean": train_mean,
-        "test_mean": test_mean,
-        "train_std": train_std,
-        "test_std": test_std,
-        "mean_diff_in_std": mean_diff_in_std,
-        "std_rel_diff": std_rel_diff,
-        "flagged": bool(flagged),
-    }
+def print_scalar_stats(label: str, series: np.ndarray) -> dict:
+    mean, std = series.mean(), series.std()
+    print(f"  {label}: mean={mean:.4g} std={std:.4g}")
+    return {"mean": mean, "std": std}
 
 
-def plot_series_over_time(
-    name: str,
-    series: dict[str, np.ndarray],
-    train_end: int,
-    test_start: int,
-    out_dir: Path,
-) -> Path:
+def plot_series_over_time(name: str, series: dict[str, np.ndarray], out_dir: Path) -> Path:
     n_steps = next(iter(series.values())).shape[0]
     window = max(n_steps // 50, 1)
 
@@ -237,10 +173,7 @@ def plot_series_over_time(
             smoothed,
             label=f"rolling mean (w={window})",
         )
-        if test_start > train_end:
-            ax.axvspan(train_end, test_start, color="grey", alpha=0.4, label="buffer")
-        ax.axvline(test_start, color="red", linestyle="--", label="train/test boundary")
-        ax.set_title(f"{name}: {label} over time")
+        ax.set_title(f"{name}: {label} over time (train+val)")
         ax.set_xlabel("time step")
         ax.legend()
 
@@ -251,30 +184,24 @@ def plot_series_over_time(
     return out_path
 
 
-def plot_histograms(
+def plot_histogram(
     name: str,
-    train_counts: np.ndarray,
-    test_counts: np.ndarray,
+    counts: np.ndarray,
     bin_edges: np.ndarray,
     out_dir: Path,
 ) -> Path:
-    n_channels = train_counts.shape[0]
+    n_channels = counts.shape[0]
 
     fig, axes = plt.subplots(n_channels, 1, figsize=(10, 4 * n_channels), squeeze=False)
     for c, cname in enumerate(channel_labels(n_channels)):
         ax = axes[c][0]
         centers = (bin_edges[c, :-1] + bin_edges[c, 1:]) / 2
         width = bin_edges[c, 1] - bin_edges[c, 0]
-        # Normalize to a density so train/test are comparable despite the
-        # different number of time steps in each region.
-        train_density = train_counts[c] / (train_counts[c].sum() * width)
-        test_density = test_counts[c] / (test_counts[c].sum() * width)
-        ax.bar(centers, train_density, width=width, alpha=0.5, label="train")
-        ax.bar(centers, test_density, width=width, alpha=0.5, label="test")
-        ax.set_title(f"{name}: {cname} value distribution, train vs. test")
+        density = counts[c] / (counts[c].sum() * width)
+        ax.bar(centers, density, width=width, alpha=0.7)
+        ax.set_title(f"{name}: {cname} value distribution (train+val)")
         ax.set_xlabel("value")
         ax.set_ylabel("density")
-        ax.legend()
 
     fig.tight_layout()
     out_path = out_dir / f"{name}_split_hist.png"
@@ -292,15 +219,17 @@ def main() -> None:
 
     splits = filter_datasets(manifest["splits"], args.dataset)
     for name, split in splits.items():
-        train_end, test_start = split["train"][1], split["test"][0]
+        train_end = split["train"][1]
         arr = root[name]
-        means, stds, mins, maxs, energy, correlation = per_timestep_stats(arr, args.chunk_t)
+        means, stds, mins, maxs, energy, correlation = per_timestep_stats(
+            arr, args.chunk_t, n_steps=train_end
+        )
 
         print(
-            f"\n=== {name} (train: [0,{train_end}), buffer: [{train_end},{test_start}), "
-            f"test: [{test_start},{split['n_steps']})) ==="
+            f"\n=== {name} (train+val: [0,{train_end}) of {split['n_steps']} total; "
+            f"buffer: {split['buffer']}, test: {split['test']} held out) ==="
         )
-        channel_summary = print_region_comparison(means, stds, mins, maxs, train_end, test_start)
+        channel_summary = print_stats(means, stds, mins, maxs)
 
         labels = channel_labels(means.shape[1])
         series = {f"{cname} spatial mean": means[:, c] for c, cname in enumerate(labels)}
@@ -311,26 +240,21 @@ def main() -> None:
         }
         energy_series["total kinetic energy 0.5*sum(u^2), spatial mean"] = energy.sum(axis=1)
         energy_summary = {
-            label: print_scalar_comparison(label, values, train_end, test_start)
-            for label, values in energy_series.items()
+            label: print_scalar_stats(label, values) for label, values in energy_series.items()
         }
         series.update(energy_series)
 
         correlation_summary = None
         if correlation is not None:
-            correlation_summary = print_scalar_comparison(
-                "u_x-u_y spatial correlation", correlation, train_end, test_start
-            )
+            correlation_summary = print_scalar_stats("u_x-u_y spatial correlation", correlation)
             series["u_x-u_y spatial correlation"] = correlation
 
-        out_path = plot_series_over_time(name, series, train_end, test_start, args.out_dir)
+        out_path = plot_series_over_time(name, series, args.out_dir)
         print(f"  plot: {out_path}")
 
         value_range = np.stack([mins.min(axis=0), maxs.max(axis=0)], axis=1)
-        train_counts, test_counts, bin_edges = train_test_histograms(
-            arr, train_end, test_start, value_range, N_HIST_BINS, args.chunk_t
-        )
-        hist_path = plot_histograms(name, train_counts, test_counts, bin_edges, args.out_dir)
+        counts, bin_edges = histogram(arr, train_end, value_range, N_HIST_BINS, args.chunk_t)
+        hist_path = plot_histogram(name, counts, bin_edges, args.out_dir)
         print(f"  histogram: {hist_path}")
 
         summary_path = write_summary(
@@ -338,9 +262,9 @@ def main() -> None:
             "check_split",
             {
                 "n_steps": split["n_steps"],
-                "train_range": [0, train_end],
-                "buffer_range": [train_end, test_start],
-                "test_range": [test_start, split["n_steps"]],
+                "train_range": split["train"],
+                "buffer_range": split["buffer"],
+                "test_range": split["test"],
                 "channels": channel_summary,
                 "energy": energy_summary,
                 "correlation": correlation_summary,

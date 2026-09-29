@@ -14,9 +14,10 @@ In y the data was linearly interpolated onto a uniform grid from a non-uniform
 DNS grid, so y-derivatives are piecewise-constant approximations. The absolute
 values depend on those lengths.
 
-It prints train vs. test statistics for the mean vorticity and the
-enstrophy, plots both over time with the train/test boundary marked, and
-maps the vorticity at the first, middle and last time step.
+It prints statistics for the mean vorticity and the enstrophy, plots both
+over time, and maps the vorticity at the first, middle and last time step --
+all over the train+val region only. Like every scripts/analysis/*.py script,
+this never reads the held-out test region.
 
 Usage:
     uv run scripts/analysis/check_vorticity.py
@@ -43,8 +44,6 @@ log = logging.getLogger(__name__)
 
 DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
 DEFAULT_OUT_DIR = Path("reports/figures")
-STD_DIFF_WARN_THRESHOLD = 0.2  # flag mean shifts larger than this many std devs
-REL_DIFF_WARN_THRESHOLD = 0.1  # flag std ratio changes larger than this fraction
 
 
 def parse_args() -> argparse.Namespace:
@@ -63,13 +62,24 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def vorticity_stats(arr, dx: float, dy: float, chunk_t: int, snapshot_steps: list[int]):
+def vorticity_stats(
+    arr,
+    dx: float,
+    dy: float,
+    chunk_t: int,
+    snapshot_steps: list[int],
+    n_steps: int | None = None,
+):
     """Per-timestep mean vorticity and enstrophy, plus vorticity snapshots.
 
     Returns (mean_vorticity, enstrophy, snapshots) where the first two have
     shape (T,) and snapshots maps a time step to its (Nx, Ny) vorticity field.
+
+    `n_steps` bounds how much of `arr` is read (default: all of it) -- for
+    reading only a leading region of a larger array without loading the
+    rest.
     """
-    n_steps = arr.shape[0]
+    n_steps = arr.shape[0] if n_steps is None else n_steps
     mean_vorticity = np.empty(n_steps, dtype=np.float64)
     enstrophy = np.empty(n_steps, dtype=np.float64)
     snapshots: dict[int, np.ndarray] = {}
@@ -89,48 +99,18 @@ def vorticity_stats(arr, dx: float, dy: float, chunk_t: int, snapshot_steps: lis
     return mean_vorticity, enstrophy, snapshots
 
 
-def print_scalar_comparison(
-    label: str, series: np.ndarray, train_end: int, test_start: int
-) -> dict:
-    train_vals, test_vals = series[:train_end], series[test_start:]
-    train_mean, test_mean = train_vals.mean(), test_vals.mean()
-    train_std, test_std = train_vals.std(), test_vals.std()
-    mean_diff_in_std = abs(test_mean - train_mean) / (train_std + 1e-8)
-    std_rel_diff = abs(test_std - train_std) / (abs(train_std) + 1e-8)
-    flagged = mean_diff_in_std > STD_DIFF_WARN_THRESHOLD or std_rel_diff > REL_DIFF_WARN_THRESHOLD
-    print(
-        f"  {label}: train mean={train_mean:.4g} std={train_std:.4g} | "
-        f"test mean={test_mean:.4g} std={test_std:.4g} | "
-        f"mean shift={mean_diff_in_std:.2f} std devs, std rel diff={std_rel_diff:.1%}"
-        f"{' <-- check this' if flagged else ''}"
-    )
-    return {
-        "train_mean": train_mean,
-        "test_mean": test_mean,
-        "train_std": train_std,
-        "test_std": test_std,
-        "mean_diff_in_std": mean_diff_in_std,
-        "std_rel_diff": std_rel_diff,
-        "flagged": bool(flagged),
-    }
+def print_scalar_stats(label: str, series: np.ndarray) -> dict:
+    mean, std = series.mean(), series.std()
+    print(f"  {label}: mean={mean:.4g} std={std:.4g}")
+    return {"mean": mean, "std": std}
 
 
-def plot_over_time(
-    name: str,
-    series: dict[str, np.ndarray],
-    train_end: int,
-    test_start: int,
-    out_dir: Path,
-) -> Path:
+def plot_over_time(name: str, series: dict[str, np.ndarray], out_dir: Path) -> Path:
     fig, axes = plt.subplots(len(series), 1, figsize=(12, 4 * len(series)), squeeze=False)
     for (label, values), ax in zip(series.items(), axes[:, 0]):
         ax.plot(values)
-        if test_start > train_end:
-            ax.axvspan(train_end, test_start, color="grey", alpha=0.4, label="buffer")
-        ax.axvline(test_start, color="red", linestyle="--", label="train/test boundary")
-        ax.set_title(f"{name}: {label} over time")
+        ax.set_title(f"{name}: {label} over time (train+val)")
         ax.set_xlabel("time step")
-        ax.legend()
 
     fig.tight_layout()
     out_path = out_dir / f"{name}_vorticity.png"
@@ -170,32 +150,24 @@ def main() -> None:
             log.warning("skipping %s: expected shape (T, 2, Nx, Ny), got %s", name, arr.shape)
             continue
 
-        n_steps, train_end, test_start = (
-            split["n_steps"],
-            split["train"][1],
-            split["test"][0],
-        )
-        snapshot_steps = sorted({0, n_steps // 2, n_steps - 1})
+        train_end = split["train"][1]
+        snapshot_steps = sorted({0, train_end // 2, train_end - 1})
         dx, dy = grid_spacing(arr.shape[2], arr.shape[3])
         dx = args.dx if args.dx is not None else dx
         dy = args.dy if args.dy is not None else dy
         mean_vorticity, enstrophy, snapshots = vorticity_stats(
-            arr, dx, dy, args.chunk_t, snapshot_steps
+            arr, dx, dy, args.chunk_t, snapshot_steps, n_steps=train_end
         )
 
-        print(f"\n=== {name} (dx={dx:.5g}, dy={dy:.5g}) ===")
-        vorticity_summary = print_scalar_comparison(
-            "mean vorticity", mean_vorticity, train_end, test_start
-        )
-        enstrophy_summary = print_scalar_comparison(
-            "enstrophy 0.5*w^2, spatial mean", enstrophy, train_end, test_start
-        )
+        print(f"\n=== {name} (dx={dx:.5g}, dy={dy:.5g}, train+val: [0,{train_end})) ===")
+        vorticity_summary = print_scalar_stats("mean vorticity", mean_vorticity)
+        enstrophy_summary = print_scalar_stats("enstrophy 0.5*w^2, spatial mean", enstrophy)
 
         series = {
             "mean vorticity (spatial)": mean_vorticity,
             "enstrophy 0.5*w^2 (spatial mean)": enstrophy,
         }
-        print(f"  plot: {plot_over_time(name, series, train_end, test_start, args.out_dir)}")
+        print(f"  plot: {plot_over_time(name, series, args.out_dir)}")
         print(f"  maps: {plot_vorticity_maps(name, snapshots, args.out_dir)}")
 
         summary_path = write_summary(

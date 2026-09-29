@@ -33,6 +33,18 @@ conventions below; it shifts which tools are worth reaching for at all.
   job paths, `tests/conftest.py`, and path references in the docs.
 - See the README's "Project layout" section for the full tree.
 
+## Data analysis
+
+- `scripts/analysis/*.py` scripts must never read past the train+val region
+  of the split manifest (`configs/analysis/split.yaml`'s `train_end`, i.e.
+  `split["train"][1]`) -- never the buffer or the held-out test region, not
+  even for summary statistics. Looking at test data, even just its
+  aggregates, is data snooping. When adding a new check script, read
+  `arr[:train_end]` (or bound a chunked loop by `train_end`), not `arr` or
+  `arr.shape[0]`.
+- See the README's "Train+val / test split" section for the full rationale
+  and the train-vs-test comparison this replaced.
+
 ## Docker
 
 - The project is containerized (`Dockerfile`, `docker-compose.yml`). Keep

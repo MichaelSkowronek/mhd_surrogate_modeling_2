@@ -63,7 +63,13 @@ def parse_args() -> argparse.Namespace:
 
 
 def count_flags(data: Any) -> int:
-    """Recursively count `"flagged": true` occurrences in a summary dict."""
+    """Recursively count `"flagged": true` occurrences in a summary dict.
+
+    Currently unused by build_comparison_table: the check_*.py scripts no
+    longer flag mean/std shifts, since that comparison was against the
+    (now off-limits) test region. Kept for when train-vs-val comparison
+    replaces it, once the train/val boundary is decided.
+    """
     if isinstance(data, dict):
         count = 1 if data.get("flagged") is True else 0
         return count + sum(count_flags(v) for v in data.values())
@@ -99,24 +105,22 @@ def build_comparison_table(dataset_names: list[str], summary_dir: Path) -> list[
         split = summaries.get("check_split")
         if split:
             row["n_steps"] = split["n_steps"]
-            row["train_steps"] = split["train_range"][1] - split["train_range"][0]
+            row["trainval_steps"] = split["train_range"][1] - split["train_range"][0]
             row["test_steps"] = split["test_range"][1] - split["test_range"][0]
-            row["split_flags"] = count_flags(split)
 
         vorticity = summaries.get("check_vorticity")
         if vorticity:
-            row["vorticity_flags"] = count_flags(vorticity)
+            row["enstrophy_mean"] = round(vorticity["enstrophy"]["mean"], 4)
 
         divergence = summaries.get("check_divergence")
         if divergence:
-            row["div_normalized_train"] = round(divergence["train"]["normalized_mean"], 4)
-            row["div_normalized_test"] = round(divergence["test"]["normalized_mean"], 4)
+            row["div_normalized_mean"] = round(divergence["normalized_mean"], 4)
 
         autocorr = summaries.get("check_autocorrelation")
         if autocorr:
-            row["ux_train_tau_int"] = round(autocorr["field"]["u_x"]["train"]["tau_int"], 2)
-            n_eff = autocorr["field"]["u_x"]["test"]["n_eff"]
-            row["ux_test_n_eff"] = round(n_eff, 1) if n_eff is not None else None
+            row["ux_tau_int"] = round(autocorr["field"]["u_x"]["tau_int"], 2)
+            n_eff = autocorr["field"]["u_x"]["n_eff"]
+            row["ux_n_eff"] = round(n_eff, 1) if n_eff is not None else None
 
         rows.append(row)
     return rows
