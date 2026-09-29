@@ -46,6 +46,13 @@ def test_write_summary_round_trips_numpy_scalars_and_arrays(tmp_path):
     assert loaded["nested"] == {"lag1": pytest.approx(0.9, abs=1e-6), "zero": None}
 
 
+def test_write_summary_round_trips_a_complex_number(tmp_path):
+    path = write_summary("ds0", "check_x", {"amplitude": 1.5 - 2.0j}, out_dir=tmp_path)
+
+    loaded = json.loads(path.read_text())
+    assert loaded["amplitude"] == {"real": pytest.approx(1.5), "imag": pytest.approx(-2.0)}
+
+
 def test_write_summary_creates_output_directory(tmp_path):
     out_dir = tmp_path / "nested" / "summaries"
     path = write_summary("ds0", "check_x", {}, out_dir=out_dir)

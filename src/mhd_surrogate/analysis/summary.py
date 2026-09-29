@@ -43,6 +43,8 @@ def _json_default(obj: Any) -> Any:
         return obj.item()
     if isinstance(obj, np.ndarray):
         return obj.tolist()
+    if isinstance(obj, complex):
+        return {"real": obj.real, "imag": obj.imag}
     raise TypeError(f"not JSON serializable: {type(obj)!r}")
 
 
