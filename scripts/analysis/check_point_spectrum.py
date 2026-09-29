@@ -14,6 +14,15 @@ For each of a few grid points, computes the FFT of u_x(t) and u_y(t) at that
 point over the train+val region only -- like every scripts/analysis/*.py
 script, this never reads the held-out test region.
 
+Two estimators are computed and plotted together: a plain periodogram
+(`power_spectrum`, one FFT over the whole series) and Welch's method
+(`welch_spectrum`, the average of overlapping segments' periodograms). A
+single periodogram bin is a high-variance estimate (effectively 2 degrees
+of freedom, i.e. its own value is not strong evidence against being a random
+fluctuation of white noise); Welch's method trades frequency resolution for
+a much lower-variance estimate by averaging, so a peak that survives in
+Welch too is real, not an artifact of that variance.
+
 Default points (grid indices into axis 2 = x, axis 3 = y; override with
 --point label:x:y, repeatable). All downstream of the inlet transient
 (x < ~150, see check_vorticity.py's docstring) -- a near-inlet point was
@@ -58,6 +67,12 @@ DEFAULT_OUT_DIR = Path("reports/figures")
 CHANNEL_NAMES = ["u_x", "u_y"]
 DEFAULT_POINTS = "core_mid:500:63,core_downstream:900:63,wall_bottom:900:5,wall_top:900:121"
 N_PEAKS = 3
+# 50% overlap is the standard choice for a Hann window (satisfies the
+# constant-overlap-add condition, and is close to the variance-minimizing
+# overlap for it). 200 resolves periods well below the ~25-40 steps already
+# found, while still leaving several segments (4-6, given this project's
+# ~500-730 step train+val regions) to average over.
+NPERSEG = 200
 
 
 def parse_points(spec: str) -> dict[str, tuple[int, int]]:
@@ -89,6 +104,18 @@ def parse_args() -> argparse.Namespace:
         default=N_PEAKS,
         help="Top spectral peaks to report per point/channel (default: %(default)s)",
     )
+    parser.add_argument(
+        "--nperseg",
+        type=int,
+        default=NPERSEG,
+        help="Welch segment length, in steps (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--noverlap",
+        type=int,
+        default=None,
+        help="Welch segment overlap, in steps (default: nperseg // 2)",
+    )
     add_common_args(parser)
     return parser.parse_args()
 
@@ -117,6 +144,36 @@ def power_spectrum(series: np.ndarray, spacing: float = 1.0) -> tuple[np.ndarray
     return omega, power
 
 
+def welch_spectrum(
+    series: np.ndarray, nperseg: int, noverlap: int, spacing: float = 1.0
+) -> tuple[np.ndarray, np.ndarray]:
+    """Welch's method: average the periodogram (via `power_spectrum`, so each
+    segment is independently detrended and Hann-windowed) over overlapping
+    segments of length `nperseg`, stepping by `nperseg - noverlap`.
+
+    Trades frequency resolution (bins are `nperseg`-wide, not
+    `series`-length-wide) for a lower-variance power spectral density
+    estimate -- see this module's docstring for why that matters here.
+
+    Returns (omega, power), each shape (nperseg // 2 + 1,); same
+    units/normalization as `power_spectrum`.
+    """
+    if noverlap >= nperseg:
+        raise ValueError(f"noverlap ({noverlap}) must be < nperseg ({nperseg})")
+    n = series.shape[0]
+    if n < nperseg:
+        raise ValueError(f"series length ({n}) must be >= nperseg ({nperseg})")
+
+    step = nperseg - noverlap
+    starts = range(0, n - nperseg + 1, step)
+    omega = None
+    powers = []
+    for start in starts:
+        omega, power = power_spectrum(series[start : start + nperseg], spacing)
+        powers.append(power)
+    return omega, np.mean(powers, axis=0)
+
+
 def dominant_periods(omega: np.ndarray, power: np.ndarray, n_peaks: int) -> list[dict]:
     """Top `n_peaks` local-maximum peaks of `power`, ranked by power, excluding
     the zero-frequency bin (omega[0]).
@@ -141,18 +198,24 @@ def dominant_periods(omega: np.ndarray, power: np.ndarray, n_peaks: int) -> list
     ]
 
 
+def format_peaks(peaks: list[dict]) -> str:
+    return ", ".join(f"T={p['period']:.1f} ({p['power_fraction']:.1%})" for p in peaks)
+
+
 def plot_point_spectra(
     name: str,
     points: dict[str, tuple[int, int]],
-    spectra: dict[str, dict[str, tuple[np.ndarray, np.ndarray]]],
+    spectra: dict[str, dict[str, dict[str, tuple[np.ndarray, np.ndarray]]]],
     out_dir: Path,
 ) -> Path:
+    colors = ["tab:blue", "tab:orange"]
     fig, axes = plt.subplots(len(points), 1, figsize=(10, 5 * len(points)), squeeze=False)
     for ax, (label, (x, y)) in zip(axes[:, 0], points.items()):
-        for cname in CHANNEL_NAMES:
-            omega, power = spectra[label][cname]
-            periods = 2 * np.pi / omega[1:]
-            ax.loglog(periods, power[1:], label=cname)
+        for c, cname in enumerate(CHANNEL_NAMES):
+            omega, power = spectra[label][cname]["periodogram"]
+            ax.loglog(2 * np.pi / omega[1:], power[1:], color=colors[c], alpha=0.3, linewidth=1)
+            omega, power = spectra[label][cname]["welch"]
+            ax.loglog(2 * np.pi / omega[1:], power[1:], color=colors[c], label=f"{cname} (Welch)")
         ax.set_title(f"{name}: point '{label}' (x={x}, y={y}) temporal spectrum (train+val)")
         ax.set_xlabel("period T (snapshot steps)")
         ax.set_ylabel("power spectral density")
@@ -170,6 +233,7 @@ def main() -> None:
     args = parse_args()
     setup_logging(args.log_level)
     points = parse_points(",".join(args.points) if args.points else DEFAULT_POINTS)
+    noverlap = args.noverlap if args.noverlap is not None else args.nperseg // 2
     manifest = json.loads(args.manifest.read_text())
     root = zarr.open_group(store=manifest["config"]["zarr_store"], mode="r")
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -184,7 +248,7 @@ def main() -> None:
         train_end = split["train"][1]
         print(f"\n=== {name} (train+val: [0,{train_end})) ===")
 
-        spectra: dict[str, dict[str, tuple[np.ndarray, np.ndarray]]] = {}
+        spectra: dict[str, dict[str, dict[str, tuple[np.ndarray, np.ndarray]]]] = {}
         point_summary: dict[str, dict] = {}
         for label, (x, y) in points.items():
             series = arr[:train_end, :, x, y]  # (train_end, C); a single grid point, tiny read
@@ -192,20 +256,22 @@ def main() -> None:
             spectra[label] = {}
             channel_summary = {}
             for c, cname in enumerate(CHANNEL_NAMES):
-                omega, power = power_spectrum(series[:, c])
-                spectra[label][cname] = (omega, power)
-                peaks = dominant_periods(omega, power, args.n_peaks)
-                peaks_text = ", ".join(
-                    f"T={p['period']:.1f} ({p['power_fraction']:.1%})" for p in peaks
-                )
+                periodogram = power_spectrum(series[:, c])
+                welch = welch_spectrum(series[:, c], args.nperseg, noverlap)
+                spectra[label][cname] = {"periodogram": periodogram, "welch": welch}
+
+                periodogram_peaks = dominant_periods(*periodogram, args.n_peaks)
+                welch_peaks = dominant_periods(*welch, args.n_peaks)
                 print(
-                    f"    {cname}: mean={series[:, c].mean():.4g} std={series[:, c].std():.4g} "
-                    f"| top periods: {peaks_text}"
+                    f"    {cname}: mean={series[:, c].mean():.4g} std={series[:, c].std():.4g}\n"
+                    f"      periodogram top periods: {format_peaks(periodogram_peaks)}\n"
+                    f"      Welch top periods:       {format_peaks(welch_peaks)}"
                 )
                 channel_summary[cname] = {
                     "mean": series[:, c].mean(),
                     "std": series[:, c].std(),
-                    "top_periods": peaks,
+                    "periodogram_top_periods": periodogram_peaks,
+                    "welch_top_periods": welch_peaks,
                 }
             point_summary[label] = {"x": x, "y": y, "channels": channel_summary}
 
