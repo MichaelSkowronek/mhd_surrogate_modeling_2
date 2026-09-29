@@ -79,6 +79,17 @@ def dominant_periods(omega: np.ndarray, power: np.ndarray, n_peaks: int) -> list
     right neighbor to compare against. Returns a list of
     {"period", "omega", "power_fraction"} (power_fraction relative to the
     total power excluding the zero-frequency bin), most dominant first.
+
+    Caveat: the lowest-frequency bin (omega[1], i.e. the longest resolvable
+    period) is compared only against omega[0] (the zero-frequency bin, ~0
+    after detrending) and omega[2]. On a spectrum that is still monotonically
+    rising toward the low-frequency end -- no isolated peak, just red noise
+    or an unresolved slow trend -- that comparison is trivially satisfied,
+    so this bin gets reported as a "dominant period" even though it is not a
+    real local maximum, just where the resolvable range happens to end.
+    Check the plot before trusting a top period at or near the edge of the
+    resolvable range (T close to the series length for `power_spectrum`, or
+    to `nperseg` for `welch_spectrum`).
     """
     total = power[1:].sum()
     is_peak = (power[1:-1] > power[:-2]) & (power[1:-1] > power[2:])
