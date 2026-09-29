@@ -9,10 +9,9 @@
 # between temporally autocorrelated snapshots, hence trailing rather than
 # random.
 #
-# test_fraction and buffer_steps below are conservative placeholders so the
-# analysis suite has something to run on; the real values -- and the
-# train/val boundary -- are decided later, from the analysis this config
-# feeds (see CLAUDE.md).
+# test_fraction is a conservative placeholder; the actual dataset
+# selection/split sizing is decided later (see CLAUDE.md), once the analysis
+# this config feeds has been reviewed in full.
 
 zarr_store: data/processed/re16k_t400.zarr
 
@@ -32,8 +31,17 @@ test_fraction: 0.4  # train+val gets the remaining, conservative 60%
 # Snapshots dropped from the END of the train+val region, so its last
 # snapshot is separated from the first test snapshot. The test set keeps its
 # full `test_fraction`. In snapshot steps (the physical time step is
-# unknown). 50 is a conservative placeholder, not derived from anything --
-# the previous value (10) came from the autocorrelation check, but that
-# check itself is being extended as part of this same overhaul, so it isn't
-# trustworthy as a citation yet.
-buffer_steps: 50
+# unknown).
+#
+# 20 is derived from scripts/analysis/check_autocorrelation.py, checked
+# across all 9 datasets above: the direct (monotone) field decorrelation
+# crosses zero within 6-11 steps and drops below 0.05 within 6-10 steps in
+# every dataset/channel, so 20 clears that with margin. Every dataset also
+# shows a persistent quasi-periodic component (period ~24-40 steps,
+# dataset-dependent) whose amplitude does *not* decay away -- it is still
+# routinely 0.2-0.5 correlated at lag ~150 in every dataset checked -- so no
+# buffer size within a practical fraction of the train+val region removes
+# it; buffering past the fast decorrelation has diminishing returns against
+# shrinking train+val further. See the README's "Temporal autocorrelation"
+# section for the full analysis.
+buffer_steps: 20

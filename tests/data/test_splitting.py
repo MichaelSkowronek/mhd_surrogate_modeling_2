@@ -4,8 +4,8 @@ from mhd_surrogate.data.splitting import trailing_split
 
 
 def test_trailing_split_matches_committed_re16k_t400_0_split():
-    s = trailing_split(1248, 0.4, buffer_steps=50)
-    assert (s.train_start, s.train_end) == (0, 699)
+    s = trailing_split(1248, 0.4, buffer_steps=20)
+    assert (s.train_start, s.train_end) == (0, 729)
     assert (s.test_start, s.test_end) == (749, 1248)
     assert s.test_end - s.test_start == 499
 

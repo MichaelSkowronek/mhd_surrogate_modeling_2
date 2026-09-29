@@ -272,13 +272,21 @@ against test directly for exactly this purpose (below); that comparison is
 gone for now, and will return as train-vs-val once the split within
 train+val is decided.
 
-`test_fraction` (0.4) and `buffer_steps` (50) are conservative placeholders,
-not derived values — pending a fuller pass through the extended analysis and
-an actual decision on dataset/split sizing (see `CLAUDE.md`).
-`buffer_steps` drops that many snapshots from the *end of the train+val
+`test_fraction` (0.4) is a conservative placeholder, not a derived value —
+pending an actual decision on dataset/split sizing (see `CLAUDE.md`), once
+the analysis below has been reviewed in full.
+
+`buffer_steps` (20) drops that many snapshots from the *end of the train+val
 region*, so its last snapshot is separated from the first test snapshot; the
-test set keeps its full `test_fraction`. For `re16k_t400_0` (1248 steps) this
-gives train+val `[0, 699)`, buffer `[699, 749)`, test `[749, 1248)`.
+test set keeps its full `test_fraction`. Unlike `test_fraction`, this one is
+derived, from the autocorrelation check below: the direct (monotone) field
+decorrelation crosses zero within 6-11 steps and drops below 0.05 within
+6-10 steps, checked across all 9 datasets, so 20 clears that with margin.
+The recurring quasi-periodic component found in every dataset (period
+~24-40 steps) is not removed by any practical buffer size -- see "Implication
+for the split" in the autocorrelation section for why 20 rather than
+something larger. For `re16k_t400_0` (1248 steps) this gives train+val
+`[0, 729)`, buffer `[729, 749)`, test `[749, 1248)`.
 
 ```bash
 uv run scripts/data/split_data.py   # writes data/processed/splits/split_manifest.json
@@ -457,38 +465,42 @@ insensitive to a mean offset and scale). The reported lags, integral time
 the first zero crossing, which ignores the negative lobe and the recurring
 oscillations described below, and the tail of the estimate is noisy.
 
-For `re16k_t400_0`'s train+val region (699 steps):
+For `re16k_t400_0`'s train+val region (729 steps):
 
 - **Fast decorrelation, then oscillation.** The field autocorrelation
-  (`u_x`: rho(1) = 0.898, `u_y`: 0.825) falls below 1/e after 6 and 5 steps
+  (`u_x`: rho(1) = 0.898, `u_y`: 0.824) falls below 1/e after 6 and 5 steps
   respectively and crosses zero after 9 and 7 steps, with a negative lobe
   (down to ~-0.4 near lag ~14). It then keeps oscillating with a period of
   ~30 steps (peaks near lags 32, 62, 88, 116, 146, still ~0.3 at lag ~146),
   so the flow contains a persistent quasi-periodic component.
 - **Slow energy variation.** The kinetic energy per direction has much
-  longer memory than the field autocorrelation (`tau_int` 31.3 steps for
-  `u_x`, 16.6 for `u_y`), with `N_eff` over train+val of only ~11 (`u_x`)
-  and ~21 (`u_y`) — a short held-out window would hold just a handful of
+  longer memory than the field autocorrelation (`tau_int` 30.9 steps for
+  `u_x`, 16.7 for `u_y`), with `N_eff` over train+val of only ~12 (`u_x`)
+  and ~22 (`u_y`) — a short held-out window would hold just a handful of
   effectively independent samples of this slow variation, worth keeping in
-  mind once the train/val/test sizes are decided. These specific numbers
-  are noticeably different from an earlier run against the longer
-  (988-step) pre-overhaul train region (which found `tau_int` ~32 for `u_x`
-  with a zero crossing near lag 318, over 3x longer): for a diagnostic this
-  slowly varying relative to the window, the tail of the FFT-based estimate
-  is sensitive to how much of the series is available, not just noisy at
-  long lags as already caveated above. Treat both as rough, and expect this
-  number to keep moving as the analysis window changes.
-- **Implication for the split:** snapshots are highly correlated at short
-  lags, so a random split would leak information, as assumed. The direct
-  (monotone) correlation drops below 0.05 after ~8-9 steps; the recurring
-  oscillatory correlation at longer lags reflects a persistent periodic
-  component of the dynamics and is not something a buffer removes.
-  `configs/analysis/split.yaml` currently uses a conservative 50-step
-  buffer rather than this number directly (see the Train+val / test split
-  section above) — an ~8-step buffer only guards against the fast initial
-  decorrelation, and this project's train/val/test boundaries deserve more
-  margin than the bare minimum, especially before the actual sizes are
-  decided.
+  mind once the train/val/test sizes are decided. This estimate is itself
+  sensitive to how much of the series is available (an earlier, longer
+  pre-overhaul window found a noticeably different tail), since the tail of
+  the FFT-based estimate is noisy for a diagnostic this slowly varying
+  relative to the window; treat it as rough and expect it to keep moving as
+  the analysis window changes.
+- **Implication for the split, checked across all 9 datasets:** snapshots
+  are highly correlated at short lags, so a random split would leak
+  information, as assumed. The direct (monotone) correlation crosses zero
+  within 6-11 steps and drops below 0.05 within 6-10 steps in every
+  dataset/channel -- consistently tight, and this is the part a buffer
+  actually removes. The recurring oscillatory correlation is a different
+  matter: every dataset shows one (period ~24-40 steps, dataset-dependent),
+  and its amplitude does *not* decay away -- it's still routinely 0.2-0.5 at
+  lag ~150 in every dataset checked, sometimes higher for the scalar
+  diagnostics. No buffer size within a practical fraction of the train+val
+  region removes this component; it's a structural feature of the dynamics,
+  not something a gap between regions fixes. Given that, `buffer_steps: 20`
+  in `configs/analysis/split.yaml` clears the fast decorrelation with margin
+  (roughly 2x the worst-case 11-step zero crossing) without pretending a
+  larger buffer would meaningfully reduce the periodic component's
+  contribution at the boundary -- that would cost train+val data for
+  diminishing returns instead.
 
 Only temporal autocorrelation is covered; spatial autocorrelation (integral
 length scales) and the enstrophy autocorrelation are not.
