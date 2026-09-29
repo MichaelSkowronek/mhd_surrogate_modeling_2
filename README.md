@@ -42,7 +42,7 @@ uv run pre-commit run --all-files
 ```
 src/mhd_surrogate/   importable package, split by pipeline stage
   data/              splitting, dataset, grid
-  analysis/          fields, summary
+  analysis/          fields, summary, spectral
   training/          mlflow_utils
   utils/             logging_config, parallel
 scripts/             CLI entry points, same split (plus viz/)
@@ -504,6 +504,161 @@ For `re16k_t400_0`'s train+val region (729 steps):
 
 Only temporal autocorrelation is covered; spatial autocorrelation (integral
 length scales) and the enstrophy autocorrelation are not.
+
+## Frequency analysis
+
+The autocorrelation check above found a persistent quasi-periodic
+component but could only infer its period indirectly, from zero crossings.
+The four scripts below read it off directly as spectral peaks, from
+several independent angles, toward eventually sizing train/val/test off
+the slowest well-characterized frequency (see the Train+val / test split
+section above). They are exploratory and, unlike the check scripts above,
+not wired into `run_all_checks.py`. The shared FFT machinery
+(`power_spectrum`, `welch_spectrum`, `dominant_periods`) lives in
+`src/mhd_surrogate/analysis/spectral.py`, used by the first two scripts
+below.
+
+### Point spectrum
+
+```bash
+uv run scripts/analysis/check_point_spectrum.py
+```
+
+FFT of `u_x(t)` and `u_y(t)` at a few fixed grid points, over train+val.
+Two estimators, plotted together: a plain periodogram, and Welch's method
+(averaging the periodogram over overlapping segments). A single
+periodogram bin is a high-variance estimate (effectively 2 degrees of
+freedom) -- not strong evidence against being a random fluctuation on its
+own -- so a peak that survives Welch's averaging is real, not an artifact
+of that variance; this was checked directly against synthetic white noise
+(the estimated variance at a bin drops roughly as expected from averaging
+independent segments).
+
+Default points: `core_mid`/`core_downstream` (mid-channel, two streamwise
+stations) and `wall_bottom`/`wall_top` (near each wall, same downstream
+station as `core_downstream`) -- all past the inlet's developing region. A
+near-inlet point was tried and dropped: it showed a persistent negative
+mean `u_x` (backflow) in every dataset, and watching the video confirms
+that region is either backflow or laminar, neither useful here.
+
+Across all 9 datasets, every point locks onto the *same* dominant period
+per dataset (~24-40 steps, matching the autocorrelation check's range),
+with a physically sensible pattern in how it shows up: at the walls it
+dominates `u_x` (up to 43% of variance in one Welch peak), in the core it
+dominates `u_y` (up to 51%) -- consistent with a no-slip wall suppressing
+the wall-normal (`u_y`) component. Welch confirms, and often sharpens, the
+periodogram's peak wherever it was already strong; where the periodogram
+peak was weak, Welch correctly declines to confirm it rather than
+manufacturing a spurious one.
+
+### Spatially averaged spectrum
+
+```bash
+uv run scripts/analysis/check_spatial_mean_spectrum.py
+```
+
+Same periodogram + Welch analysis, applied to the domain-averaged series
+instead of a single point: the spatial mean of `u_x`, `u_y`, and the
+per-channel kinetic energy proxy `0.5*u^2` (matching `check_split.py`'s
+per-timestep spatial means/energy).
+
+`u_y` gives the cleanest signal in the whole suite: a single, sharp,
+isolated peak at the same ~24-40 step period, with Welch power fractions
+of 30-51% and essentially no competing peak, across all 9 datasets.
+Averaging over the *whole* domain reinforcing rather than washing out the
+signal confirms it is a coherent, domain-wide mode, not a localized
+artifact. `u_x` shows no such peak -- a broad, low bump with periodogram
+and Welch disagreeing on the exact period -- and the energy series show a
+monotonically rising ("red") spectrum with no isolated peak at all, still
+climbing at the longest period the window allows. `dominant_periods`'s
+"top period" for a still-rising spectrum like that is an edge artifact
+(the boundary bin trivially beats its only neighbor), not a real spectral
+line -- documented directly in its docstring after this was caught by
+looking at the plot, not the printed numbers. The corrected reading:
+global kinetic energy has no resolvable characterizing period within a
+single train+val window (~500-730 steps); its true slow timescale exceeds
+what this much data can measure, consistent with (and more precise than)
+the pre-overhaul note about a slow ~500-700 step oscillation.
+
+### 2D wavenumber spectrum
+
+```bash
+uv run scripts/analysis/check_wavenumber_spectrum.py
+```
+
+The "Spatial power spectrum" section above computes two 1D spectra,
+`E(kx)` and `E(ky)`, each averaged over the *other* spatial axis; it can't
+say whether energy at a given `kx` and a given `ky` occur together in the
+same structure. This keeps both wavenumbers: a full 2D FFT per snapshot,
+averaged over time, over the train+val region.
+
+Getting this right needed a real fix along the way. The first version
+detrended each snapshot by its own scalar spatial mean, which leaves a
+channel's (near time-invariant) mean *profile* shape -- e.g. `u_x`'s
+cross-channel shear profile -- inside what gets called the "fluctuation".
+Present in every snapshot, it dominated the time-averaged spectrum as a
+broad blob centered at `kx=0`, drowning out the actual coherent structure.
+Fixing it to subtract the true time-mean *field* (matching
+`check_autocorrelation.py`'s `u' = u - <u>_t` convention) moved the peak
+from `kx=0` to `kx~-2` -- verified numerically, not just by eye: the
+reported peak is ~54x the power at the origin, not merely nominally
+different.
+
+Across all 9 datasets, `u_x` and `u_y` consistently agree on
+`|kx| ~ 1.76-2.26` (wavelength ~2.78-3.57, matching the ~2.0/~3.1 found in
+the 1D spectrum above), and `u_x` additionally shows `ky=3.12` (wavelength
+~2.02, essentially the channel width `ly=2`) in every dataset, while
+`u_y`'s peak sits at `ky=0`.
+
+### Space-time (dispersion) spectrum
+
+```bash
+uv run scripts/analysis/check_spacetime_spectrum.py
+```
+
+The wavenumber and the period above were found independently -- they could
+be two unrelated features of the flow that merely coexist. This computes
+the joint spectrum `E(kx, ky, omega)`, a full 3D FFT over x, y *and* time
+together, so a peak at their combination is direct evidence of one
+coherent, moving structure (a traveling wave, with phase velocity
+`omega/kx`), not a coincidence of two separate analyses.
+
+Unlike every other script here, this can't process time in independent
+chunks -- it's itself an FFT axis -- so it loads the whole train+val
+region for one channel into memory at once (matching
+`check_autocorrelation.py`'s `field_acf`). That peaks at ~6 GB and
+~15-20s per dataset/channel, clearly heavier than the rest of the suite,
+so it is deliberately not run in parallel across datasets the way
+`run_all_checks.py` runs the other scripts.
+
+Across all 9 datasets, `u_x` and `u_y` peak at the same period (matching
+to one decimal in 8 of 9 datasets) and the same `|kx|` -- direct
+confirmation these are one linked structure, not separate coincidences.
+The dispersion plot shows something more nuanced than a single clean
+traveling wave, though: a nearly *vertical* ridge -- `kx` staying close to
+~1.8-2.3 across almost the entire `omega` range, rather than a diagonal
+line through one frequency. The dominant spatial wavenumber (vortex size)
+is present across a broad range of frequencies, with only a statistical
+preference toward the ~24-40 step period, rather than a pure periodic
+oscillator -- consistent with quasi-periodic vortex shedding, not a clean
+single-tone wave. (A minor cross-check note: this script's single-bin peak
+`kx` can differ slightly from the 2D script's `omega`-pooled peak `kx` for
+the same dataset -- expected, since the ridge is not perfectly uniform
+across `omega`, not a discrepancy between the two analyses.)
+
+### Where this leaves the split-sizing question
+
+Four independent analyses (pooled autocorrelation, per-point, domain-mean,
+and joint space-time spectra) now agree on the same ~24-40 step
+(dataset-dependent) oscillation as the flow's best-characterized frequency
+-- confirmed, not just detected once. It is a broad, quasi-periodic
+feature rather than a pure tone, which is itself useful to know: it argues
+for buffer/margin choices with headroom rather than a razor-precise
+period. Kinetic energy's slow variation remains a genuine open question --
+its own characterizing timescale exceeds what a single train+val window
+can resolve, which matters for deciding how much data a final split needs,
+not just how it should be divided. The actual train/val/test size decision
+is still pending, per `CLAUDE.md`.
 
 ## Running the suite across all datasets
 
