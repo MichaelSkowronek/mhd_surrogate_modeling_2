@@ -812,26 +812,26 @@ dispatches them as separate `python check_*.py --dataset X` subprocesses via
 `mhd_surrogate.utils.parallel` (a thread pool where the threads just block on
 `subprocess.run`; the real numpy/FFT work happens in the child processes, on
 separate cores, with full process isolation — also used by
-`make_all_videos.py` below). All 45 jobs (9 datasets, on the ~60% train+val
-region only) completed in ~67s wall time on a 12-core machine, down from the
-~113s measured pre-overhaul against the full-length arrays — consistent
-with reading and processing noticeably less data per job. A distributed
+`make_all_videos.py` below). All 45 jobs (9 datasets, on the train+val
+region only -- now a fixed step count per dataset rather than a fraction of
+it, see "Train / val / test split" above) completed in ~70s wall time on a
+12-core machine, down from the ~113s measured pre-overhaul against the
+full-length arrays — consistent with reading and processing noticeably less
+data per job. A distributed
 framework like Ray was considered but is not warranted for a workload this
 size (a minute, one machine); it would earn its keep once training actually
 needs a cluster, distributed GPUs, or data beyond single-machine scale.
 
 **First cross-dataset result (train+val, post-overhaul):** the divergence
-residual clusters tightly across all 9 datasets (0.4165-0.4328), and so does
+residual clusters tightly across all 9 datasets (0.4152-0.4328), and so does
 enstrophy (26.4-28.0) — consistent with the `re16k_t400_0` numbers above
 being representative of this simulation family rather than a fluke of one
 run. The `check_split`/`check_vorticity` flags this section used to mention
 are gone along with the train-vs-test comparison that produced them (see
 the Train / val / test split section above); this table now only describes
 train+val, so it has nothing to flag against. The tooling working
-end-to-end across all 9 datasets, on the new split, is confirmed. (These
-numbers predate the val/test sizing decision above and haven't been
-re-run against the resulting, slightly larger, train+val regions --
-`uv run scripts/analysis/run_all_checks.py` refreshes them.)
+end-to-end across all 9 datasets, on the new (val/test-sized) split, is
+confirmed.
 
 ## Video
 
