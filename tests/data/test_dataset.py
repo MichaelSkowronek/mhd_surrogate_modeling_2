@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import zarr
 
-from mhd_surrogate.data.dataset import WindowedDataset, load_dataset
+from mhd_surrogate.data.dataset import WindowedDataset, load_dataset, load_full_dataset
 
 
 def test_windowed_dataset_length_and_sample_content():
@@ -76,3 +76,20 @@ def test_load_dataset_reads_manifest_and_zarr_store(tmp_path):
     x, y = test_ds[0]
     np.testing.assert_array_equal(np.asarray(x), data[7:9])
     np.testing.assert_array_equal(np.asarray(y), data[9:10])
+
+
+def test_load_full_dataset_covers_the_whole_array_ignoring_any_manifest(tmp_path):
+    store_path = tmp_path / "store.zarr"
+    root = zarr.open_group(store=str(store_path), mode="w")
+    data = np.arange(10 * 2 * 3 * 4).reshape(10, 2, 3, 4).astype(np.float32)
+    root.create_array("ds0", data=data)
+
+    ds = load_full_dataset(store_path, "ds0", window=2, horizon=1, stride=1)
+
+    assert len(ds) == 8  # (10 - 3) // 1 + 1
+    x, y = ds[0]
+    np.testing.assert_array_equal(np.asarray(x), data[0:2])
+    np.testing.assert_array_equal(np.asarray(y), data[2:3])
+    x_last, y_last = ds[len(ds) - 1]
+    np.testing.assert_array_equal(np.asarray(x_last), data[7:9])
+    np.testing.assert_array_equal(np.asarray(y_last), data[9:10])

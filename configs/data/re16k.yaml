@@ -1,2 +1,29 @@
 zarr_store: data/processed/re16k_t400.zarr
-dataset: re16k_t400_0
+
+# Dataset-level split for multi-dataset training: 7 datasets used in full
+# for training, 1 held out in full for validation, 1 held out in full for
+# final testing -- the test dataset must never be read by any script (this
+# project's analysis suite included) from here on. All 9 datasets are the
+# same DNS run (Re=16000) restarted with small randomness -- different
+# realizations of one regime, not different physical parameters -- so this
+# splits at the *dataset* level specifically to test generalization to an
+# unseen realization, which configs/analysis/split.yaml's purely
+# within-dataset time split (used during the EDA phase) never tested.
+#
+# val/test chosen via a seeded random draw over all 9, not cherry-picked or
+# informed by anything the EDA suite found for a specific dataset:
+#   rng = np.random.default_rng(0)
+#   val, test = rng.choice(datasets, size=2, replace=False)
+# with `datasets` in this fixed order: re16k_t400_0, _1, _2, _3, _4, _5,
+# _6, _9, _10 (configs/analysis/split.yaml's order, before _5 was removed
+# from it below).
+train_datasets:
+  - re16k_t400_0
+  - re16k_t400_1
+  - re16k_t400_2
+  - re16k_t400_3
+  - re16k_t400_4
+  - re16k_t400_9
+  - re16k_t400_10
+val_dataset: re16k_t400_6
+test_dataset: re16k_t400_5

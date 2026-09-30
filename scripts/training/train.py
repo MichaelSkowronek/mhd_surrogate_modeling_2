@@ -1,9 +1,14 @@
 """Training entry point.
 
 No model exists yet, so this currently just resolves the Hydra config,
-confirms the configured dataset is reachable, and logs the config and
-dataset info to MLflow, as a smoke test of the plumbing this will grow into
-the real training loop on top of.
+confirms the configured train/val datasets are reachable, and logs the
+config and dataset info to MLflow, as a smoke test of the plumbing this
+will grow into the real training loop on top of.
+
+Deliberately never opens `cfg.data.test_dataset`, not even to check its
+shape -- see configs/data/re16k.yaml's docstring: it's the dataset-level
+held-out test set and must never be read by any script, including this
+one, until final evaluation.
 
 Usage:
     uv run scripts/training/train.py
@@ -22,7 +27,7 @@ import zarr
 from omegaconf import DictConfig, OmegaConf
 
 import mlflow
-from mhd_surrogate.data.dataset import load_dataset
+from mhd_surrogate.data.dataset import load_full_dataset
 from mhd_surrogate.training.mlflow_utils import flatten_for_mlflow
 
 log = logging.getLogger(__name__)
@@ -46,23 +51,34 @@ def main(cfg: DictConfig) -> None:
         mlflow.log_dict(resolved, "config.json")
 
         root = zarr.open_group(store=cfg.data.zarr_store, mode="r")
-        arr = root[cfg.data.dataset]
-        log.info("dataset %s: shape=%s dtype=%s", cfg.data.dataset, arr.shape, arr.dtype)
-        mlflow.log_params({"data.shape": str(arr.shape), "data.dtype": str(arr.dtype)})
+        log.info("test_dataset %s: configured, deliberately not opened", cfg.data.test_dataset)
 
-        for split in ("train", "test"):
-            ds = load_dataset(
-                cfg.dataset.manifest,
-                cfg.data.dataset,
-                split,
+        for name in [*cfg.data.train_datasets, cfg.data.val_dataset]:
+            arr = root[name]
+            ds = load_full_dataset(
+                cfg.data.zarr_store,
+                name,
                 cfg.dataset.window,
                 cfg.dataset.horizon,
                 cfg.dataset.stride,
             )
             x, y = ds[0]
-            log.info("%s: %d samples, sample shapes x=%s y=%s", split, len(ds), x.shape, y.shape)
+            role = "val" if name == cfg.data.val_dataset else "train"
+            log.info(
+                "%s (%s): shape=%s dtype=%s, %d windowed samples, sample shapes x=%s y=%s",
+                name,
+                role,
+                arr.shape,
+                arr.dtype,
+                len(ds),
+                x.shape,
+                y.shape,
+            )
             mlflow.log_params(
-                {f"{split}.n_samples": len(ds), f"{split}.sample_shape_x": str(x.shape)}
+                {
+                    f"{role}.{name}.shape": str(arr.shape),
+                    f"{role}.{name}.n_samples": len(ds),
+                }
             )
 
 

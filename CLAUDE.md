@@ -42,7 +42,12 @@ conventions below; it shifts which tools are worth reaching for at all.
   Looking at test data, even just its aggregates, is data snooping. When
   adding a new check script, read `arr[:train_end]` (or bound a chunked loop
   by `train_end`), not `arr` or `arr.shape[0]`.
-- See the README's "Train+val / test split" section for the full rationale
+- Separately, `re16k_t400_5` (`configs/data/re16k.yaml`'s `test_dataset`,
+  the dataset-level held-out test set for multi-dataset model training) must
+  never be read by any script at all, for any purpose -- not just within
+  its train+val region. It's excluded from `configs/analysis/split.yaml`'s
+  `datasets` list for exactly this reason; don't add it back.
+- See the README's "Train / val / test split" section for the full rationale
   and the train-vs-test comparison this replaced.
 
 ## Docker

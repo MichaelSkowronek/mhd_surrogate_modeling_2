@@ -68,3 +68,20 @@ def load_dataset(
     root = zarr.open_group(store=manifest["config"]["zarr_store"], mode="r")
     start, end = manifest["splits"][dataset][split]
     return WindowedDataset(root[dataset], start, end, window, horizon, stride)
+
+
+def load_full_dataset(
+    zarr_store: Path | str,
+    dataset: str,
+    window: int,
+    horizon: int,
+    stride: int,
+) -> WindowedDataset:
+    """Build a WindowedDataset over `dataset`'s entire recorded length, not a
+    split-manifest region -- for a dataset used wholesale (see
+    configs/data/re16k.yaml's dataset-level train/val/test split), where
+    there's no further internal region to look up.
+    """
+    root = zarr.open_group(store=str(zarr_store), mode="r")
+    arr = root[dataset]
+    return WindowedDataset(arr, 0, arr.shape[0], window, horizon, stride)
