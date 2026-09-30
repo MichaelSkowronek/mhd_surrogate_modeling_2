@@ -21,7 +21,12 @@ never be read by any script, analysis included.
 
 ## Status
 
-Data exploration phase. No models are implemented yet.
+Exploratory data analysis is done (tagged
+[`v0.1.0-eda-complete`](https://github.com/MichaelSkowronek/mhd_surrogate_modeling_2/releases/tag/v0.1.0-eda-complete)),
+and the dataset-level train/val/test split is implemented and verified
+against real data. No surrogate model or training loop exists yet --
+`scripts/training/train.py` is still just a smoke test of the Hydra/MLflow
+plumbing it will grow into.
 
 ## Setup
 
@@ -75,14 +80,14 @@ uv run pytest
 ```
 
 Unit tests live in `tests/`, covering the pure computational logic: the
-`src/mhd_surrogate/` modules (`splitting`, `grid`, `fields`, `dataset`,
-`summary`, `parallel`, `mlflow_utils`, `logging_config`) plus the
-computational core functions inside the `check_*.py`/`make_video.py`
-scripts (e.g. `per_timestep_stats`, `field_acf`, `spectrum_sum`,
-`divergence_stats`, `vorticity_stats`, `compute_field`) — the
-`scripts/**/*.py` files aren't part of the installed package, so
-`tests/conftest.py` adds each `scripts/` subdirectory to `sys.path` to import
-them directly.
+`src/mhd_surrogate/` modules (`grid`, `fields`, `dataset`, `summary`,
+`spectral`, `dmd`, `pod`, `spod`, `parallel`, `mlflow_utils`,
+`logging_config`) plus the computational core functions inside the
+`check_*.py`/`make_video.py` scripts (e.g. `per_timestep_stats`,
+`field_acf`, `spectrum_sum`, `divergence_stats`, `vorticity_stats`,
+`compute_field`) — the `scripts/**/*.py` files aren't part of the installed
+package, so `tests/conftest.py` adds each `scripts/` subdirectory to
+`sys.path` to import them directly.
 Several of these tests convert ad-hoc checks done during development into
 permanent regression tests: a synthetic AR(1) process with a known
 autocorrelation `phi^lag` (autocorrelation), a synthetic sine wave with
@@ -96,6 +101,14 @@ each script, and whether a result is *physically* reasonable for the real
 DNS data (e.g. "is a ~36% divergence residual acceptable for a quasi-2D
 slice?") — that's a human judgement call made by reading the printed stats
 and looking at the plots, not something to assert on in a test.
+
+`src/mhd_surrogate/`'s coverage is gated at 95% in CI (`pyproject.toml`'s
+`[tool.coverage]`; `uv run pytest --cov --cov-report=term-missing` to check
+locally) — deliberately scoped away from `scripts/`, where the untested
+CLI/plotting glue above would make a coverage number meaningless (33-50%
+per file there, by design, not a problem to fix). Not wired into pytest's
+default `addopts`, so a local subset run (`pytest tests/foo.py`) stays fast
+and isn't gated on partial coverage; only the full-suite CI run is.
 
 ### Data contract tests
 
