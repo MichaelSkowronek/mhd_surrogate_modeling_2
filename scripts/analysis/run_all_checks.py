@@ -22,6 +22,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from mhd_surrogate.analysis.summary import DEFAULT_SUMMARY_DIR, filter_datasets
 from mhd_surrogate.utils.logging_config import add_log_level_arg, setup_logging
 from mhd_surrogate.utils.parallel import log_failures, run_parallel
@@ -36,19 +38,19 @@ SCRIPTS = [
     "check_autocorrelation.py",
     "check_stationarity.py",
 ]
-DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
+DEFAULT_CONFIG = Path("configs/analysis/split.yaml")
 # Subdirectory of scripts/ holding the SCRIPTS above; --script takes bare filenames.
 SCRIPTS_SUBDIR = "analysis"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument(
         "--dataset",
         action="append",
         default=None,
-        help="Limit to this dataset (repeatable); default: all datasets in the manifest",
+        help="Limit to this dataset (repeatable); default: all configured datasets",
     )
     parser.add_argument(
         "--script",
@@ -61,22 +63,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=None, help="Default: os.cpu_count()")
     add_log_level_arg(parser)
     return parser.parse_args()
-
-
-def count_flags(data: Any) -> int:
-    """Recursively count `"flagged": true` occurrences in a summary dict.
-
-    Currently unused by build_comparison_table: the check_*.py scripts no
-    longer flag mean/std shifts, since that comparison was against the
-    (now off-limits) test region. Kept for when train-vs-val comparison
-    replaces it, once the train/val boundary is decided.
-    """
-    if isinstance(data, dict):
-        count = 1 if data.get("flagged") is True else 0
-        return count + sum(count_flags(v) for v in data.values())
-    if isinstance(data, list):
-        return sum(count_flags(v) for v in data)
-    return 0
 
 
 def discover_dataset_names(summary_dir: Path) -> list[str]:
@@ -106,8 +92,6 @@ def build_comparison_table(dataset_names: list[str], summary_dir: Path) -> list[
         split = summaries.get("check_split")
         if split:
             row["n_steps"] = split["n_steps"]
-            row["trainval_steps"] = split["trainval_range"][1] - split["trainval_range"][0]
-            row["test_steps"] = split["test_range"][1] - split["test_range"][0]
 
         vorticity = summaries.get("check_vorticity")
         if vorticity:
@@ -161,18 +145,17 @@ def write_csv(rows: list[dict[str, Any]], path: Path) -> None:
 def main() -> None:
     args = parse_args()
     setup_logging(args.log_level)
-    manifest = json.loads(args.manifest.read_text())
-    splits = filter_datasets(manifest["splits"], args.dataset)
+    config = yaml.safe_load(args.config.read_text())
+    dataset_names = filter_datasets(config["datasets"], args.dataset)
     scripts = args.script or SCRIPTS
-    dataset_names = list(splits)
     workers = args.workers or os.cpu_count()
 
     jobs = [
         (
             f"{SCRIPTS_SUBDIR}/{script}",
             [
-                "--manifest",
-                str(args.manifest),
+                "--config",
+                str(args.config),
                 "--dataset",
                 name,
                 "--summary-dir",

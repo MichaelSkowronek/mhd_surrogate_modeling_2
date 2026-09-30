@@ -35,20 +35,23 @@ conventions below; it shifts which tools are worth reaching for at all.
 
 ## Data analysis
 
-- `scripts/analysis/*.py` scripts must never read past the train+val region
-  of the split manifest (`configs/analysis/split.yaml`'s `train_end`, i.e.
-  `split["trainval"][1]`) -- never the internal train/val buffer, the val/test
-  buffer, or the held-out test region, not even for summary statistics.
-  Looking at test data, even just its aggregates, is data snooping. When
-  adding a new check script, read `arr[:train_end]` (or bound a chunked loop
-  by `train_end`), not `arr` or `arr.shape[0]`.
-- Separately, `re16k_t400_5` (`configs/data/re16k.yaml`'s `test_dataset`,
-  the dataset-level held-out test set for multi-dataset model training) must
-  never be read by any script at all, for any purpose -- not just within
-  its train+val region. It's excluded from `configs/analysis/split.yaml`'s
-  `datasets` list for exactly this reason; don't add it back.
-- See the README's "Train / val / test split" section for the full rationale
-  and the train-vs-test comparison this replaced.
+- The split is at the *dataset* level now, not a per-dataset time split:
+  `configs/data/re16k.yaml` designates 7 datasets for training (used in
+  full), 1 for validation (used in full) and 1 (`re16k_t400_5`) as the
+  final held-out test set. `re16k_t400_5` must never be read by any script,
+  for any purpose, including this project's own analysis suite -- it's
+  excluded from `configs/analysis/split.yaml`'s `datasets` list for exactly
+  this reason; don't add it back.
+- `scripts/analysis/*.py` scripts read `configs/analysis/split.yaml` (via
+  `--config`, not a manifest) and analyze each configured dataset's full
+  recorded length (`arr.shape[0]`) -- there's no more internal train/val/
+  test region to bound reads by within a dataset, since only whole-dataset
+  exclusion (`re16k_t400_5`) matters. When adding a new check script,
+  follow the same pattern: `zarr_store`/`datasets` from the config,
+  `filter_datasets` for `--dataset`, no manifest.
+- See the README's "Train / val / test split" section for the full history
+  (the earlier per-dataset trailing split it replaced, and why) and
+  rationale.
 
 ## Docker
 

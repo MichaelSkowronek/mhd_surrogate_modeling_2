@@ -1,8 +1,7 @@
-"""Windowed dataset over a split of a zarr-backed velocity time series."""
+"""Windowed dataset over a zarr-backed velocity time series."""
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,13 +11,12 @@ import zarr
 
 @dataclass(frozen=True)
 class WindowedDataset:
-    """Consecutive-window samples (input, target) drawn from one train/test region.
+    """Consecutive-window samples (input, target) drawn from one region of a
+    dataset's time series.
 
     Each sample is `window` consecutive time steps as input and the
     following `horizon` time steps as target, both shape (steps, C, Nx, Ny).
-    Samples start every `stride` steps within [start, end) and never cross
-    the train/test boundary, since that range is a hard start/end from the
-    split manifest.
+    Samples start every `stride` steps within [start, end).
 
     Values are returned as-is (float32), not normalized -- normalization is
     not implemented yet.
@@ -55,21 +53,6 @@ class WindowedDataset:
         return jnp.asarray(x), jnp.asarray(y)
 
 
-def load_dataset(
-    manifest_path: Path,
-    dataset: str,
-    split: str,
-    window: int,
-    horizon: int,
-    stride: int,
-) -> WindowedDataset:
-    """Build a WindowedDataset for `dataset`'s `split` region ("train" or "test")."""
-    manifest = json.loads(Path(manifest_path).read_text())
-    root = zarr.open_group(store=manifest["config"]["zarr_store"], mode="r")
-    start, end = manifest["splits"][dataset][split]
-    return WindowedDataset(root[dataset], start, end, window, horizon, stride)
-
-
 def load_full_dataset(
     zarr_store: Path | str,
     dataset: str,
@@ -77,10 +60,10 @@ def load_full_dataset(
     horizon: int,
     stride: int,
 ) -> WindowedDataset:
-    """Build a WindowedDataset over `dataset`'s entire recorded length, not a
-    split-manifest region -- for a dataset used wholesale (see
-    configs/data/re16k.yaml's dataset-level train/val/test split), where
-    there's no further internal region to look up.
+    """Build a WindowedDataset over `dataset`'s entire recorded length -- for
+    a dataset used wholesale (see configs/data/re16k.yaml's dataset-level
+    train/val/test split), where there's no further internal region to look
+    up.
     """
     root = zarr.open_group(store=str(zarr_store), mode="r")
     arr = root[dataset]

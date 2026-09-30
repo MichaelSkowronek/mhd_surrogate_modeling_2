@@ -5,8 +5,9 @@ averaged over the *other* spatial axis (and over time); it can't say
 whether energy at a given kx and a given ky occur together in the same
 structure or in unrelated ones. This instead keeps both wavenumbers: a full
 2D FFT per snapshot, then the resulting 2D power spectrum E(kx, ky)
-averaged over time, over the train+val region only -- like every
-scripts/analysis/*.py script, this never reads the held-out test region.
+averaged over time, over each dataset's full recorded length -- like every
+scripts/analysis/*.py script, this never reads re16k_t400_5, the model's
+held-out test set (excluded entirely from configs/analysis/split.yaml).
 
 Each snapshot has the channel's *time-mean field* subtracted (not just its
 own instantaneous spatial mean -- see wavenumber_spectrum_2d's docstring
@@ -28,12 +29,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import yaml
 import zarr
 from matplotlib.colors import LogNorm
 
@@ -43,14 +44,14 @@ from mhd_surrogate.utils.logging_config import setup_logging
 
 log = logging.getLogger(__name__)
 
-DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
+DEFAULT_CONFIG = Path("configs/analysis/split.yaml")
 DEFAULT_OUT_DIR = Path("reports/figures")
 CHANNEL_NAMES = ["u_x", "u_y"]
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument("--dx", type=float, default=None, help="Override spacing along axis 2")
     parser.add_argument("--dy", type=float, default=None, help="Override spacing along axis 3")
@@ -144,7 +145,7 @@ def plot_wavenumber_spectra(
     fig, axes = plt.subplots(1, len(spectra), figsize=(7 * len(spectra), 6), squeeze=False)
     for ax, (cname, power) in zip(axes[0], spectra.items()):
         pcm = ax.pcolormesh(kx, ky, power.T, norm=LogNorm(), shading="auto", cmap="viridis")
-        ax.set_title(f"{name}: {cname} 2D wavenumber spectrum (train+val)")
+        ax.set_title(f"{name}: {cname} 2D wavenumber spectrum")
         ax.set_xlabel("kx")
         ax.set_ylabel("ky")
         fig.colorbar(pcm, ax=ax, label="power spectral density")
@@ -159,12 +160,12 @@ def plot_wavenumber_spectra(
 def main() -> None:
     args = parse_args()
     setup_logging(args.log_level)
-    manifest = json.loads(args.manifest.read_text())
-    root = zarr.open_group(store=manifest["config"]["zarr_store"], mode="r")
+    config = yaml.safe_load(args.config.read_text())
+    root = zarr.open_group(store=config["zarr_store"], mode="r")
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    splits = filter_datasets(manifest["splits"], args.dataset)
-    for name, split in splits.items():
+    dataset_names = filter_datasets(config["datasets"], args.dataset)
+    for name in dataset_names:
         arr = root[name]
         if arr.ndim != 4 or arr.shape[1] != len(CHANNEL_NAMES):
             log.warning("skipping %s: expected shape (T, 2, Nx, Ny), got %s", name, arr.shape)
@@ -173,13 +174,13 @@ def main() -> None:
         dx, dy = grid_spacing(arr.shape[2], arr.shape[3])
         dx = args.dx if args.dx is not None else dx
         dy = args.dy if args.dy is not None else dy
-        train_end = split["trainval"][1]
-        print(f"\n=== {name} (dx={dx:.5g}, dy={dy:.5g}, train+val: [0,{train_end})) ===")
+        n_steps = arr.shape[0]
+        print(f"\n=== {name} (dx={dx:.5g}, dy={dy:.5g}, {n_steps} steps) ===")
 
         spectra = {}
         channel_summary = {}
         for c, cname in enumerate(CHANNEL_NAMES):
-            kx, ky, power = wavenumber_spectrum_2d(arr, c, dx, dy, args.chunk_t, n_steps=train_end)
+            kx, ky, power = wavenumber_spectrum_2d(arr, c, dx, dy, args.chunk_t, n_steps=n_steps)
             spectra[cname] = power
             peak = peak_wavenumbers(kx, ky, power)
             wavelength_x = 2 * np.pi / abs(peak["kx"]) if peak["kx"] != 0 else float("inf")

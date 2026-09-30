@@ -32,9 +32,10 @@ persistent mean flow. The DMD machinery itself
 `reconstruct_frames`) lives in `src/mhd_surrogate/analysis/dmd.py`, shared
 with `scripts/viz/make_dmd_video.py`.
 
-Like check_spacetime_spectrum.py, this loads the whole train+val region
-into memory at once (DMD needs the full snapshot sequence for its SVD, not
-just chunks of it), never the held-out test region. The SVD is truncated
+Like check_spacetime_spectrum.py, this loads a dataset's whole recorded
+length into memory at once (DMD needs the full snapshot sequence for its
+SVD, not just chunks of it), never re16k_t400_5, the model's held-out test
+set (excluded entirely from configs/analysis/split.yaml). The SVD is truncated
 to --rank (default 100) for robustness against small, noise-dominated
 singular values -- standard DMD practice; the energy this captures is
 printed for transparency. Frequency is in radians per snapshot step, like
@@ -54,12 +55,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import yaml
 import zarr
 
 from mhd_surrogate.analysis.dmd import build_dmd_state, dominant_modes, exact_dmd, mode_amplitudes
@@ -68,7 +69,7 @@ from mhd_surrogate.utils.logging_config import setup_logging
 
 log = logging.getLogger(__name__)
 
-DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
+DEFAULT_CONFIG = Path("configs/analysis/split.yaml")
 DEFAULT_OUT_DIR = Path("reports/figures")
 CHANNEL_NAMES = ["u_x", "u_y"]
 DEFAULT_RANK = 100
@@ -77,7 +78,7 @@ N_MODES = 5
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument(
         "--rank",
@@ -103,7 +104,7 @@ def plot_eigenvalue_spectrum(name: str, mu: np.ndarray, power: np.ndarray, out_d
     fig, ax = plt.subplots(figsize=(8, 6))
     sc = ax.scatter(mu.imag, mu.real, c=np.log10(power + 1e-300), cmap="viridis", s=40)
     ax.axhline(0, color="grey", linestyle=":", linewidth=1)
-    ax.set_title(f"{name}: DMD eigenvalue spectrum (train+val)")
+    ax.set_title(f"{name}: DMD eigenvalue spectrum")
     ax.set_xlabel("frequency (rad/step)")
     ax.set_ylabel("growth rate (per step)")
     fig.colorbar(sc, ax=ax, label="log10(power)")
@@ -144,31 +145,31 @@ def plot_mode_shapes(
 def main() -> None:
     args = parse_args()
     setup_logging(args.log_level)
-    manifest = json.loads(args.manifest.read_text())
-    root = zarr.open_group(store=manifest["config"]["zarr_store"], mode="r")
+    config = yaml.safe_load(args.config.read_text())
+    root = zarr.open_group(store=config["zarr_store"], mode="r")
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    splits = filter_datasets(manifest["splits"], args.dataset)
-    for name, split in splits.items():
+    dataset_names = filter_datasets(config["datasets"], args.dataset)
+    for name in dataset_names:
         arr = root[name]
         if arr.ndim != 4 or arr.shape[1] != len(CHANNEL_NAMES):
             log.warning("skipping %s: expected shape (T, 2, Nx, Ny), got %s", name, arr.shape)
             continue
 
-        train_end = split["trainval"][1]
+        n_steps = arr.shape[0]
         nx, ny = arr.shape[2], arr.shape[3]
-        data = arr[:train_end].astype(np.float64)  # (T, 2, Nx, Ny)
+        data = arr[:n_steps].astype(np.float64)  # (T, 2, Nx, Ny)
         fluctuation = build_dmd_state(data)  # (state_dim, T)
         x, xprime = fluctuation[:, :-1], fluctuation[:, 1:]
 
         eigenvalues, modes, energy_fraction = exact_dmd(x, xprime, rank=args.rank)
         amplitudes = mode_amplitudes(modes, x[:, 0])
         top = dominant_modes(
-            eigenvalues, amplitudes, modes, dt=1.0, n_steps=train_end, n_modes=args.n_modes
+            eigenvalues, amplitudes, modes, dt=1.0, n_steps=n_steps, n_modes=args.n_modes
         )
 
         print(
-            f"\n=== {name} (train+val: [0,{train_end}), rank {args.rank} "
+            f"\n=== {name} ({n_steps} steps, rank {args.rank} "
             f"captures {energy_fraction:.1%} of variance) ==="
         )
         # Selection above is by power (the standard DMD convention, at the

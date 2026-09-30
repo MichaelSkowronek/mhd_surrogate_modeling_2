@@ -1,19 +1,12 @@
-"""Descriptive statistics of the train+val region of a trailing split.
+"""Descriptive statistics of each analysis-suite dataset.
 
-Loads the split manifest written by scripts/data/split_data.py and, for each
-dataset, computes the per-timestep spatial mean/std/min/max of each channel,
-the per-channel kinetic energy proxy (0.5*u^2), and the correlation between
-channels, over the train+val region only -- this script (like every
-scripts/analysis/*.py script) never reads the held-out test region, since
-even just looking at its summary statistics would be data snooping. It plots
-the per-timestep values over time and a value histogram per channel, so a
-drift or trend within the region is visible rather than hidden inside a
-single aggregate number.
-
-This used to compare train against test; now that test is off limits, it
-just describes train+val. The train/val boundary within this region is now
-decided (see configs/analysis/split.yaml), but comparing train against val
-the way this used to compare train against test isn't wired up here yet.
+For each configured dataset (configs/analysis/split.yaml -- excludes
+re16k_t400_5, the model's held-out test set; see that file's docstring),
+computes the per-timestep spatial mean/std/min/max of each channel, the
+per-channel kinetic energy proxy (0.5*u^2), and the correlation between
+channels, over the dataset's full recorded length. It plots the per-timestep
+values over time and a value histogram per channel, so a drift or trend is
+visible rather than hidden inside a single aggregate number.
 
 Usage:
     uv run scripts/analysis/check_split.py
@@ -22,12 +15,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import yaml
 import zarr
 
 from mhd_surrogate.analysis.summary import add_common_args, filter_datasets, write_summary
@@ -35,7 +28,7 @@ from mhd_surrogate.utils.logging_config import setup_logging
 
 log = logging.getLogger(__name__)
 
-DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
+DEFAULT_CONFIG = Path("configs/analysis/split.yaml")
 DEFAULT_OUT_DIR = Path("reports/figures")
 CHANNEL_NAMES = ["u_x", "u_y"]
 N_HIST_BINS = 60
@@ -49,7 +42,7 @@ def channel_labels(n_channels: int) -> list[str]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument(
         "--chunk-t",
@@ -107,16 +100,15 @@ def per_timestep_stats(arr, chunk_t: int, n_steps: int | None = None):
 
 def histogram(
     arr,
-    train_end: int,
+    n_steps: int,
     value_range: np.ndarray,
     n_bins: int,
     chunk_t: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Per-channel value histogram of the train+val region, i.e. `arr[:train_end]`.
+    """Per-channel value histogram of `arr[:n_steps]`.
 
-    Reads the array in chunks bounded by `train_end` rather than loading it
-    all at once; never reads at or past `train_end`. Returns (counts,
-    bin_edges), each (n_channels, ...).
+    Reads the array in chunks bounded by `n_steps` rather than loading it
+    all at once. Returns (counts, bin_edges), each (n_channels, ...).
     """
     n_channels = arr.shape[1]
     bin_edges = np.stack(
@@ -124,8 +116,8 @@ def histogram(
     )
     counts = np.zeros((n_channels, n_bins), dtype=np.int64)
 
-    for start in range(0, train_end, chunk_t):
-        end = min(start + chunk_t, train_end)
+    for start in range(0, n_steps, chunk_t):
+        end = min(start + chunk_t, n_steps)
         block = arr[start:end]
         for c in range(n_channels):
             hist, _ = np.histogram(block[:, c], bins=bin_edges[c])
@@ -173,7 +165,7 @@ def plot_series_over_time(name: str, series: dict[str, np.ndarray], out_dir: Pat
             smoothed,
             label=f"rolling mean (w={window})",
         )
-        ax.set_title(f"{name}: {label} over time (train+val)")
+        ax.set_title(f"{name}: {label} over time")
         ax.set_xlabel("time step")
         ax.legend()
 
@@ -199,7 +191,7 @@ def plot_histogram(
         width = bin_edges[c, 1] - bin_edges[c, 0]
         density = counts[c] / (counts[c].sum() * width)
         ax.bar(centers, density, width=width, alpha=0.7)
-        ax.set_title(f"{name}: {cname} value distribution (train+val)")
+        ax.set_title(f"{name}: {cname} value distribution")
         ax.set_xlabel("value")
         ax.set_ylabel("density")
 
@@ -213,23 +205,19 @@ def plot_histogram(
 def main() -> None:
     args = parse_args()
     setup_logging(args.log_level)
-    manifest = json.loads(args.manifest.read_text())
-    root = zarr.open_group(store=manifest["config"]["zarr_store"], mode="r")
+    config = yaml.safe_load(args.config.read_text())
+    root = zarr.open_group(store=config["zarr_store"], mode="r")
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    splits = filter_datasets(manifest["splits"], args.dataset)
-    for name, split in splits.items():
-        train_end = split["trainval"][1]
+    dataset_names = filter_datasets(config["datasets"], args.dataset)
+    for name in dataset_names:
         arr = root[name]
+        n_steps = arr.shape[0]
         means, stds, mins, maxs, energy, correlation = per_timestep_stats(
-            arr, args.chunk_t, n_steps=train_end
+            arr, args.chunk_t, n_steps=n_steps
         )
 
-        print(
-            f"\n=== {name} (train+val: [0,{train_end}) of {split['n_steps']} total, "
-            f"within it train: {split['train']}, val: {split['val']}; "
-            f"buffer: {split['buffer']}, test: {split['test']} held out) ==="
-        )
+        print(f"\n=== {name} ({n_steps} steps) ===")
         channel_summary = print_stats(means, stds, mins, maxs)
 
         labels = channel_labels(means.shape[1])
@@ -254,7 +242,7 @@ def main() -> None:
         print(f"  plot: {out_path}")
 
         value_range = np.stack([mins.min(axis=0), maxs.max(axis=0)], axis=1)
-        counts, bin_edges = histogram(arr, train_end, value_range, N_HIST_BINS, args.chunk_t)
+        counts, bin_edges = histogram(arr, n_steps, value_range, N_HIST_BINS, args.chunk_t)
         hist_path = plot_histogram(name, counts, bin_edges, args.out_dir)
         print(f"  histogram: {hist_path}")
 
@@ -262,12 +250,7 @@ def main() -> None:
             name,
             "check_split",
             {
-                "n_steps": split["n_steps"],
-                "trainval_range": split["trainval"],
-                "train_range": split["train"],
-                "val_range": split["val"],
-                "buffer_range": split["buffer"],
-                "test_range": split["test"],
+                "n_steps": n_steps,
                 "channels": channel_summary,
                 "energy": energy_summary,
                 "correlation": correlation_summary,

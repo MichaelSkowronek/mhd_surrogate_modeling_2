@@ -1,18 +1,19 @@
 """Temporal autocorrelation of the velocity field and of scalar diagnostics.
 
-Two analyses, both over the train+val region only (like every
-scripts/analysis/*.py script, this never reads the held-out test region),
+Two analyses, both over each dataset's full recorded length (like every
+scripts/analysis/*.py script, this never reads re16k_t400_5 -- the model's
+held-out test set, excluded from configs/analysis/split.yaml entirely),
 with lags measured in snapshot steps (the physical time between snapshots is
 not stored in the data):
 
 1. Field autocorrelation: the pointwise fluctuation u' = u - <u>_t (the mean
-   is the train+val time-mean field) is correlated with itself at lag tau,
-   pooled over all grid points and normalized by the zero-lag value,
+   is the dataset's own time-mean field) is correlated with itself at lag
+   tau, pooled over all grid points and normalized by the zero-lag value,
    separately for u_x and u_y. This says how quickly the flow decorrelates
    from a given snapshot, which bounds how large a buffer around a split
    boundary needs to be for the two sides to be effectively independent, and
    gives the effective number of independent time steps.
-2. Scalar autocorrelation over the whole train+val series: the spatial means
+2. Scalar autocorrelation over the whole series: the spatial means
    of u_x and u_y and the kinetic energy per direction (0.5*u^2, spatial
    mean), with the approximate +-1.96/sqrt(N) white-noise band for reference
    (only a rough guide for strongly autocorrelated series).
@@ -31,12 +32,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import yaml
 import zarr
 
 from mhd_surrogate.analysis.summary import add_common_args, filter_datasets, write_summary
@@ -44,7 +45,7 @@ from mhd_surrogate.utils.logging_config import setup_logging
 
 log = logging.getLogger(__name__)
 
-DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
+DEFAULT_CONFIG = Path("configs/analysis/split.yaml")
 DEFAULT_OUT_DIR = Path("reports/figures")
 CHANNEL_NAMES = ["u_x", "u_y"]
 SCALAR_NAMES = [
@@ -57,7 +58,7 @@ SCALAR_NAMES = [
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument(
         "--max-lag",
@@ -185,7 +186,7 @@ def plot_acf(
         ax.plot(np.arange(field.shape[1]), field[c], color=colors[c], label=cname)
     ax.axhline(1 / np.e, color="grey", linestyle=":", label="1/e")
     ax.axhline(0, color="black", linewidth=0.5)
-    ax.set_title(f"{name}: field autocorrelation (pooled over space, train+val)")
+    ax.set_title(f"{name}: field autocorrelation (pooled over space)")
     ax.set_xlabel("lag (snapshot steps)")
     ax.set_ylabel("autocorrelation")
     ax.legend()
@@ -196,7 +197,7 @@ def plot_acf(
     bound = 1.96 / np.sqrt(n_steps)
     ax.axhspan(-bound, bound, color="grey", alpha=0.2, label="+-1.96/sqrt(N)")
     ax.axhline(0, color="black", linewidth=0.5)
-    ax.set_title(f"{name}: scalar diagnostics autocorrelation (train+val)")
+    ax.set_title(f"{name}: scalar diagnostics autocorrelation")
     ax.set_xlabel("lag (snapshot steps)")
     ax.set_ylabel("autocorrelation")
     ax.legend()
@@ -211,24 +212,23 @@ def plot_acf(
 def main() -> None:
     args = parse_args()
     setup_logging(args.log_level)
-    manifest = json.loads(args.manifest.read_text())
-    root = zarr.open_group(store=manifest["config"]["zarr_store"], mode="r")
+    config = yaml.safe_load(args.config.read_text())
+    root = zarr.open_group(store=config["zarr_store"], mode="r")
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    splits = filter_datasets(manifest["splits"], args.dataset)
-    for name, split in splits.items():
+    dataset_names = filter_datasets(config["datasets"], args.dataset)
+    for name in dataset_names:
         arr = root[name]
         if arr.ndim != 4 or arr.shape[1] != len(CHANNEL_NAMES):
             log.warning("skipping %s: expected shape (T, 2, Nx, Ny), got %s", name, arr.shape)
             continue
 
-        train_end = split["trainval"][1]
-        n_steps = train_end
+        n_steps = arr.shape[0]
         max_lag = min(args.max_lag, n_steps // 2)
 
-        print(f"\n=== {name} (lags in snapshot steps, train+val: [0,{train_end})) ===")
-        print("field autocorrelation, fluctuations about the train+val time-mean field:")
-        data = arr[:train_end]
+        print(f"\n=== {name} (lags in snapshot steps, {n_steps} steps) ===")
+        print("field autocorrelation, fluctuations about the time-mean field:")
+        data = arr[:n_steps]
         field = field_acf(data, max_lag, args.slab)
         del data
         field_summary: dict[str, dict] = {}
@@ -237,10 +237,10 @@ def main() -> None:
             print(f"  {cname} (N={n_steps}): {format_metrics(metrics)}")
             field_summary[cname] = metrics
 
-        series = scalar_series(arr, args.chunk_t, n_steps=train_end)
+        series = scalar_series(arr, args.chunk_t, n_steps=n_steps)
         scalar_lag = n_steps // 3
         scalars = series_acf(series, scalar_lag)
-        print("scalar diagnostics autocorrelation, train+val:")
+        print("scalar diagnostics autocorrelation:")
         scalar_summary = {}
         for s, sname in enumerate(SCALAR_NAMES):
             metrics = decorrelation_metrics(scalars[s], n_steps)

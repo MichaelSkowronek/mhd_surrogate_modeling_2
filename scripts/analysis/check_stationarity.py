@@ -1,4 +1,4 @@
-"""Lightweight non-stationarity check: first half vs. second half of train+val.
+"""Lightweight non-stationarity check: first half vs. second half of each dataset.
 
 Every method in the frequency-analysis suite (Welch spectra, DMD, POD, SPOD)
 implicitly assumes the process is statistically stationary over the analysis
@@ -15,8 +15,9 @@ The DNS discards a 400-step warm-up (spin-up) phase before the saved series
 begins (see the README's "Origin: from the 3D DNS to this dataset" section),
 so a strong startup transient isn't expected in what's recorded -- but that
 was a design choice made upstream of this project, not something verified
-against the actual data here. This check does that verification: split the
-train+val region into two contiguous halves and compare, per channel, the
+against the actual data here. This check does that verification: split
+each dataset's full recorded length into two contiguous halves and
+compare, per channel, the
 spatial mean/std, the kinetic energy proxy, and the dominant period/power of
 the domain-mean series (a plain periodogram per half, not Welch -- each half
 is already short, and Welch would need to shrink segments further to fit).
@@ -35,8 +36,9 @@ sharp, dominant peak, is the more meaningful period comparison here. And
 it is a near-zero-denominator artifact; this reports mean shifts as an
 absolute delta instead, not a percentage, for exactly that reason.
 
-Like every scripts/analysis/*.py script, this never reads past train+val
-(`split["trainval"][1]`), let alone the held-out test region.
+Like every scripts/analysis/*.py script, this never reads re16k_t400_5,
+the model's held-out test set (excluded entirely from
+configs/analysis/split.yaml).
 
 Usage:
     uv run scripts/analysis/check_stationarity.py
@@ -46,12 +48,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import yaml
 import zarr
 
 from mhd_surrogate.analysis.spectral import dominant_periods, power_spectrum
@@ -60,7 +62,7 @@ from mhd_surrogate.utils.logging_config import setup_logging
 
 log = logging.getLogger(__name__)
 
-DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
+DEFAULT_CONFIG = Path("configs/analysis/split.yaml")
 DEFAULT_OUT_DIR = Path("reports/figures")
 CHANNEL_NAMES = ["u_x", "u_y"]
 N_PEAKS = 1
@@ -68,7 +70,7 @@ N_PEAKS = 1
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument(
         "--chunk-t",
@@ -153,7 +155,7 @@ def plot_halves(
 
         ax_series.plot(means[:, c], color="tab:blue", linewidth=1)
         ax_series.axvline(mid, color="grey", linestyle=":", linewidth=1)
-        ax_series.set_title(f"{name}: {cname} spatial mean over time (train+val)")
+        ax_series.set_title(f"{name}: {cname} spatial mean over time")
         ax_series.set_xlabel("time step")
 
         first_omega, first_power = power_spectrum(means[:mid, c])
@@ -180,20 +182,20 @@ def plot_halves(
 def main() -> None:
     args = parse_args()
     setup_logging(args.log_level)
-    manifest = json.loads(args.manifest.read_text())
-    root = zarr.open_group(store=manifest["config"]["zarr_store"], mode="r")
+    config = yaml.safe_load(args.config.read_text())
+    root = zarr.open_group(store=config["zarr_store"], mode="r")
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    splits = filter_datasets(manifest["splits"], args.dataset)
-    for name, split in splits.items():
+    dataset_names = filter_datasets(config["datasets"], args.dataset)
+    for name in dataset_names:
         arr = root[name]
         if arr.ndim != 4 or arr.shape[1] != len(CHANNEL_NAMES):
             log.warning("skipping %s: expected shape (T, 2, Nx, Ny), got %s", name, arr.shape)
             continue
 
-        trainval_end = split["trainval"][1]
-        means, stds, energy = per_timestep_summary(arr, args.chunk_t, trainval_end)
-        first_slice, second_slice = half_windows(trainval_end)
+        n_steps = arr.shape[0]
+        means, stds, energy = per_timestep_summary(arr, args.chunk_t, n_steps)
+        first_slice, second_slice = half_windows(n_steps)
         mid = first_slice.stop
 
         first = analyze_half(
@@ -204,8 +206,8 @@ def main() -> None:
         )
 
         print(
-            f"\n=== {name} (train+val: [0,{trainval_end}), "
-            f"first half [0,{mid}), second half [{mid},{trainval_end})) ==="
+            f"\n=== {name} ({n_steps} steps, "
+            f"first half [0,{mid}), second half [{mid},{n_steps})) ==="
         )
         for cname in first:
             f, s = first[cname], second[cname]
@@ -229,7 +231,7 @@ def main() -> None:
         summary_path = write_summary(
             name,
             "check_stationarity",
-            {"trainval_steps": trainval_end, "mid": mid, "first": first, "second": second},
+            {"n_steps": n_steps, "mid": mid, "first": first, "second": second},
             args.summary_dir,
         )
         print(f"  summary: {summary_path}")

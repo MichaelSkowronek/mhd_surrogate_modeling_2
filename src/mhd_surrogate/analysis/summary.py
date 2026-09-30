@@ -15,27 +15,27 @@ DEFAULT_SUMMARY_DIR = Path("reports/summaries")
 
 
 def add_common_args(parser: argparse.ArgumentParser) -> None:
-    """--dataset (repeatable, filters the manifest to run on), --summary-dir
-    and --log-level, shared by all check_*.py scripts.
+    """--dataset (repeatable, filters the configured datasets to run on),
+    --summary-dir and --log-level, shared by all check_*.py scripts.
     """
     parser.add_argument(
         "--dataset",
         action="append",
         default=None,
-        help="Limit to this dataset (repeatable); default: all datasets in the manifest",
+        help="Limit to this dataset (repeatable); default: all configured datasets",
     )
     parser.add_argument("--summary-dir", type=Path, default=DEFAULT_SUMMARY_DIR)
     add_log_level_arg(parser)
 
 
-def filter_datasets(splits: dict[str, Any], only: list[str] | None) -> dict[str, Any]:
-    """Filter a manifest's `splits` dict to `only` dataset names, in manifest order."""
+def filter_datasets(datasets: list[str], only: list[str] | None) -> list[str]:
+    """Filter `datasets` to `only`, preserving `datasets`'s original order."""
     if not only:
-        return splits
-    missing = set(only) - set(splits)
+        return datasets
+    missing = set(only) - set(datasets)
     if missing:
-        raise ValueError(f"unknown dataset(s): {sorted(missing)}; available: {sorted(splits)}")
-    return {name: splits[name] for name in splits if name in only}
+        raise ValueError(f"unknown dataset(s): {sorted(missing)}; available: {sorted(datasets)}")
+    return [name for name in datasets if name in only]
 
 
 def _json_default(obj: Any) -> Any:

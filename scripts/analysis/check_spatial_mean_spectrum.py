@@ -5,8 +5,9 @@ Complements check_point_spectrum.py's per-point view (does the dominant
 period depend on where you look?) with the aggregate one: the spatial mean
 of u_x, u_y, and the per-channel kinetic energy proxy 0.5*u^2 (matching
 check_split.py's per-timestep spatial means/energy) at each time step, over
-the train+val region only -- like every scripts/analysis/*.py script, this
-never reads the held-out test region.
+each dataset's full recorded length -- like every scripts/analysis/*.py
+script, this never reads re16k_t400_5, the model's held-out test set
+(excluded entirely from configs/analysis/split.yaml).
 
 Two estimators are computed and plotted together, same as
 check_point_spectrum.py: a plain periodogram and Welch's method (see
@@ -26,12 +27,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import yaml
 import zarr
 
 from mhd_surrogate.analysis.spectral import (
@@ -45,7 +46,7 @@ from mhd_surrogate.utils.logging_config import setup_logging
 
 log = logging.getLogger(__name__)
 
-DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
+DEFAULT_CONFIG = Path("configs/analysis/split.yaml")
 DEFAULT_OUT_DIR = Path("reports/figures")
 CHANNEL_NAMES = ["u_x", "u_y"]
 N_PEAKS = 3
@@ -55,7 +56,7 @@ NPERSEG = 200
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument(
         "--chunk-t",
@@ -130,7 +131,7 @@ def plot_spectrum(name: str, groups: dict[str, dict[str, dict]], out_dir: Path) 
             ax.loglog(2 * np.pi / omega[1:], power[1:], color=colors[c], alpha=0.3, linewidth=1)
             omega, power = s["welch"]
             ax.loglog(2 * np.pi / omega[1:], power[1:], color=colors[c], label=f"{label} (Welch)")
-        ax.set_title(f"{name}: {title}, temporal spectrum (train+val)")
+        ax.set_title(f"{name}: {title}, temporal spectrum")
         ax.set_xlabel("period T (snapshot steps)")
         ax.set_ylabel("power spectral density")
         ax.legend()
@@ -147,19 +148,19 @@ def main() -> None:
     args = parse_args()
     setup_logging(args.log_level)
     noverlap = args.noverlap if args.noverlap is not None else args.nperseg // 2
-    manifest = json.loads(args.manifest.read_text())
-    root = zarr.open_group(store=manifest["config"]["zarr_store"], mode="r")
+    config = yaml.safe_load(args.config.read_text())
+    root = zarr.open_group(store=config["zarr_store"], mode="r")
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    splits = filter_datasets(manifest["splits"], args.dataset)
-    for name, split in splits.items():
+    dataset_names = filter_datasets(config["datasets"], args.dataset)
+    for name in dataset_names:
         arr = root[name]
         if arr.ndim != 4 or arr.shape[1] != len(CHANNEL_NAMES):
             log.warning("skipping %s: expected shape (T, 2, Nx, Ny), got %s", name, arr.shape)
             continue
 
-        train_end = split["trainval"][1]
-        means, energy = spatial_series(arr, args.chunk_t, n_steps=train_end)
+        n_steps = arr.shape[0]
+        means, energy = spatial_series(arr, args.chunk_t, n_steps=n_steps)
         series = {
             "u_x": means[:, 0],
             "u_y": means[:, 1],
@@ -167,7 +168,7 @@ def main() -> None:
             "energy_y": energy[:, 1],
             "energy_total": energy.sum(axis=1),
         }
-        print(f"\n=== {name} (train+val: [0,{train_end})) ===")
+        print(f"\n=== {name} ({n_steps} steps) ===")
 
         results = {
             label: analyze(s, args.nperseg, noverlap, args.n_peaks) for label, s in series.items()

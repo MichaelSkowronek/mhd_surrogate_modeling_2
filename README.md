@@ -11,12 +11,13 @@ full 3D field. There are 9 datasets (`re16k_t400_0.npy` through
 `re16k_t400_10.npy`, excluding two known-bad ones): the same DNS run
 (Re=16000 for all nine) restarted, with enough small randomness in each
 restart that the nine are distinct, not identical, realizations of the
-same regime. The analysis suite (see "Running the suite across all
-datasets") now runs across all 9, to support the eventual decision on final
-test set size and which dataset(s) to train on; the training config
-(`configs/data/`) still targets just `re16k_t400_0` for now -- the plan is
-to get a surrogate working on one dataset first, before training across
-multiple (or all) of them for robustness across realizations.
+same regime. Since it's one regime, not different ones, the split is at
+the dataset level (`configs/data/re16k.yaml`): 7 datasets for training
+(used in full), 1 held out in full for validation, 1 (`re16k_t400_5`) held
+out in full as the final test set -- see "Train / val / test split" below.
+The analysis suite (`configs/analysis/split.yaml`) runs across the 8
+non-test datasets; `re16k_t400_5` is excluded from it entirely and must
+never be read by any script, analysis included.
 
 ## Status
 
@@ -44,12 +45,12 @@ uv run pre-commit run --all-files
 
 ```
 src/mhd_surrogate/   importable package, split by pipeline stage
-  data/              splitting, dataset, grid
+  data/              dataset, grid
   analysis/          fields, summary, spectral
   training/          mlflow_utils
   utils/             logging_config, parallel
 scripts/             CLI entry points, same split (plus viz/)
-  data/              explore_data, convert_to_zarr, split_data
+  data/              explore_data, convert_to_zarr
   analysis/          check_*.py, run_all_checks
   viz/               make_video, make_all_videos
   training/          train
@@ -61,9 +62,9 @@ configs/             Hydra tree: config.yaml + data/, dataset/, mlflow/ groups
 New code goes under the subpackage/subdirectory matching its pipeline stage,
 with its tests in the mirrored `tests/` subdirectory. `configs/analysis/` is
 the home for the plain-YAML (non-Hydra) configs the data/analysis scripts
-read directly — including `split.yaml`, which `scripts/data/split_data.py`
-consumes — while everything Hydra composes for training lives in the rest of
-`configs/`. Scripts are run from the repo root (`uv run
+read directly — including `split.yaml`, which every `scripts/analysis/*.py`
+script consumes — while everything Hydra composes for training lives in the
+rest of `configs/`. Scripts are run from the repo root (`uv run
 scripts/analysis/check_split.py`), since data and config paths are relative
 to it.
 
@@ -104,10 +105,9 @@ runs against the real zarr store (the datasets and store path listed in
 storage-agnostic structural invariants — every configured dataset exists,
 shape is `(T, 2, Nx, Ny)`, dtype is `float32`, all values are finite, values
 stay within a broad sanity bound (`MAX_ABS_VALUE = 100`, meant to catch
-corrupted data, not enforce a tight physical range), spatial shape is
-consistent across datasets, and there are enough time steps for the
-configured split (`val_steps`/`test_steps`/`buffer_steps`). It does **not** check
-statistical representativeness or physical plausibility — that stays with
+corrupted data, not enforce a tight physical range), and spatial shape is
+consistent across datasets. It does **not** check statistical
+representativeness or physical plausibility — that stays with
 `check_split.py` and the other `check_*.py` scripts.
 
 It reads the zarr store path from config rather than a hardcoded local one,
@@ -119,19 +119,21 @@ present locally, including in CI.
 
 `tests/analysis/test_pipeline_integration.py` is the same idea, one level
 up: instead of checking the raw data's structural contract, it runs the
-real CLI entry points as subprocesses -- `scripts/data/split_data.py`
-building a manifest, then `scripts/analysis/run_all_checks.py`'s six check
-scripts against one dataset -- and checks the *pipeline* still wires
-together, not that any result is correct or physically reasonable (still a
-human judgement call, unchanged). Concretely: every script runs without
-error, and the comparison table's `trainval_steps` column is cross-checked
-against the manifest's own `trainval` range, since each script already has
-thorough unit tests in isolation but nothing previously checked the wiring
-between them -- which is exactly how a real bug (`run_all_checks.py`
-silently reading the wrong manifest key after a schema refactor, reporting
-the train-only length as `trainval_steps`) slipped through unnoticed until
-caught by hand. Same skip-if-store-absent behavior as the data contract
-tests above.
+real CLI entry point as a subprocess -- `scripts/analysis/run_all_checks.py`'s
+six check scripts against one dataset -- and checks the *pipeline* still
+wires together, not that any result is correct or physically reasonable
+(still a human judgement call, unchanged). Concretely: every script runs
+without error, and the comparison table's `n_steps` column is cross-checked
+against the dataset's actual length read straight from the zarr store,
+since each script already has thorough unit tests in isolation but nothing
+previously checked the wiring between them -- which is exactly how a real
+bug (`run_all_checks.py` silently reading the wrong manifest key after an
+earlier schema refactor, reporting the wrong step count) slipped through
+unnoticed until caught by hand. That was against the now-retired
+per-dataset split manifest (see "Train / val / test split"'s "Earlier: a
+per-dataset time split" section); the test still guards against the same
+class of bug in the current, simpler pipeline. Same skip-if-store-absent
+behavior as the data contract tests above.
 
 ## Logging
 
@@ -270,74 +272,97 @@ root["re16k_t400_0"]  # shape (1248, 2, 1151, 127)
 
 ## Train / val / test split
 
-Split parameters live in `configs/analysis/split.yaml` (which datasets,
-`val_steps`, `test_steps`, `buffer_steps`). The split is time-based
-(trailing): the last `test_steps` snapshots of each dataset become the held-
-out test set, and the `val_steps` immediately before that (minus a buffer)
-become validation, since these are temporally autocorrelated snapshots and a
-random split would leak information across a boundary. Everything before
-that is train; train+val combined (`split["trainval"]` in the manifest) is
-the region analyzed below.
+The split is at the *dataset* level, not a per-dataset time split:
+`configs/data/re16k.yaml` designates 7 of the 9 datasets for training (used
+in full), 1 (`re16k_t400_6`) held out in full for validation, and 1
+(`re16k_t400_5`) held out in full as the final test set. All 9 datasets are
+the same DNS run (Re=16000) restarted with small randomness -- different
+realizations of one regime, not different physical parameters (see "Origin"
+above) -- so training on multiple realizations is the natural default, and
+holding out whole datasets is what actually tests generalization to an
+unseen realization, rather than just forecasting further into one the model
+already saw part of. val/test were chosen via a seeded random draw over all
+9 (`np.random.default_rng(0).choice(datasets, size=2, replace=False)`), not
+cherry-picked.
 
-**Analysis scripts never read the test region.** Every `scripts/analysis/*.py`
-script only ever reads `[0, train_end)`, i.e. the train+val region (`split["trainval"][1]`
-in the manifest) — not just its own summary statistics being excluded, the
-test region's raw values are never loaded at all. Looking at the held-out
-set, even just its aggregate statistics, is data snooping: it lets the
-choices made while developing the analysis and later the model be (even
-unconsciously) informed by data the final evaluation is supposed to be blind
-to. `check_split.py` used to compare train against test directly for
-exactly this purpose (below); that comparison is gone for now, and belongs
-back here as a train-vs-val comparison (the train/val boundary is decided,
-but that comparison isn't wired up yet).
+**`re16k_t400_5` (the test set) must never be read by any script, for any
+purpose, including this project's own analysis suite below.** It's excluded
+from `configs/analysis/split.yaml`'s `datasets` list for exactly this
+reason -- don't add it back. `re16k_t400_6` (val) stays in that list; val
+data is fair game to look at during development, unlike test.
 
-`val_steps` (160) and `test_steps` (400) are fixed absolute step counts, not
-fractions of each dataset's length. Seven independent analyses below (pooled
-autocorrelation, point spectrum, domain-mean spectrum, 2D wavenumber
-spectrum, joint space-time spectrum, DMD, POD, SPOD) all converge on the
-same ~24-40 step (dataset-dependent) dominant oscillation as this flow's
-best-characterized timescale; sizing val/test as a fraction of a dataset's
-length would size them arbitrarily relative to that timescale instead, so
-both are defined as a multiple of a conservative reference period T=40 (the
-upper end of that range): val = 4T, test = 10T — see "Where this leaves the
-split-sizing question" below for the full reasoning.
-
-`buffer_steps` (20 = T/2) drops that many snapshots between train and val,
-and again between val and test, so neither region's last snapshot is
-adjacent to the one that immediately follows it; val and test each keep
-their full requested size. This is derived, from the autocorrelation check
-below: the direct (monotone) field decorrelation crosses zero within 6-11
-steps and drops below 0.05 within 6-10 steps, checked across all 9 datasets,
-so 20 clears that with margin at either boundary. The recurring
-quasi-periodic component found in every dataset (period ~24-40 steps) is not
-removed by any practical buffer size -- see "Implication for the split" in
-the autocorrelation section for why 20 rather than something larger. For
-`re16k_t400_0` (1248 steps) this gives train `[0, 648)`, val `[668, 828)`,
-test `[848, 1248)`.
+Every `scripts/analysis/*.py` script below reads `configs/analysis/split.yaml`
+directly and analyzes each configured dataset's *entire* recorded length --
+there's no more per-dataset region to precompute or bound reads by, since
+only whole-dataset exclusion matters now.
 
 ```bash
-uv run scripts/data/split_data.py   # writes data/processed/splits/split_manifest.json
-uv run scripts/analysis/check_split.py  # describes the train+val region
+uv run scripts/analysis/check_split.py  # describes each configured dataset in full
 ```
 
 `check_split.py` computes, per time step, the spatial mean/std/min/max of
 each channel plus (when there are 2 channels, i.e. velocity components) a
 kinetic energy proxy per direction (`0.5*u_x^2`, `0.5*u_y^2`) and in total,
-and the spatial `u_x`-`u_y` correlation, over the train+val region. It
-produces two plots per dataset: every series over time (`<name>_split_check.png`)
-and a value histogram per channel (`<name>_split_hist.png`) — so a drift or
-trend within the region would be visible rather than hidden inside a single
-aggregate number.
+and the spatial `u_x`-`u_y` correlation. It produces two plots per dataset:
+every series over time (`<name>_split_check.png`) and a value histogram per
+channel (`<name>_split_hist.png`) — so a drift or trend would be visible
+rather than hidden inside a single aggregate number.
 
-For `re16k_t400_0`'s train+val region: `u_x` mean 1.0, std 0.822, range
-[-3.23, 4.87]; `u_y` mean ~0 (-0.0002), std 0.424, range [-2.97, 2.63] --
-`u_x` (streamwise) carries most of the flow's energy and variance, as
-expected. Kinetic energy is 0.838 (`u_x`) + 0.090 (`u_y`) = 0.928 total,
-with small std relative to the mean (~2%) -- consistent with the "slow
-energy variation" found in the autocorrelation section being a real but
-modest-amplitude effect. `u_x`-`u_y` correlation is essentially zero
-(0.006 +- 0.039), i.e. the two velocity components are spatially
-uncorrelated on average, as expected for a shear-dominated channel flow.
+For `re16k_t400_0`: `u_x` mean 1.0, std 0.822, range [-3.23, 4.87]; `u_y`
+mean ~0 (-0.0002), std 0.424, range [-2.97, 2.63] -- `u_x` (streamwise)
+carries most of the flow's energy and variance, as expected. Kinetic energy
+is 0.838 (`u_x`) + 0.090 (`u_y`) = 0.928 total, with small std relative to
+the mean (~2%) -- consistent with the "slow energy variation" found in the
+autocorrelation section being a real but modest-amplitude effect. `u_x`-`u_y`
+correlation is essentially zero (0.006 +- 0.039), i.e. the two velocity
+components are spatially uncorrelated on average, as expected for a
+shear-dominated channel flow. (These specific numbers predate the switch to
+full-length reads and haven't been re-run against the extra ~34-46% of each
+dataset now in scope; given the stationarity check below already found no
+meaningful shift between a dataset's first and second half, they're not
+expected to move much -- worth a refresh before relying on exact values,
+not worth blocking on.)
+
+### Earlier: a per-dataset time split (retired)
+
+Before the dataset-level split above, `configs/analysis/split.yaml` also
+configured a *within*-dataset trailing split -- `val_steps`/`test_steps`/
+`buffer_steps`, a generated `split_manifest.json`, and every
+`scripts/analysis/*.py` script bounding its reads to a `[0, trainval_end)`
+region -- so that developing the analysis suite couldn't see data that
+would later be held out for evaluating a model trained per-dataset. That
+plan (train/evaluate one dataset at a time) is superseded now that all 9
+datasets are confirmed to be one regime rather than different ones (see
+"Train plan" reasoning above): training pools multiple datasets, held out
+*whole*, so a within-dataset time split no longer serves the purpose it was
+built for. `trailing_split`, `scripts/data/split_data.py`, and the
+generated manifest are gone; `scripts/data/dataset.py`'s `load_full_dataset`
+(whole-dataset windowed sampling) replaced the manifest-based loader.
+
+That earlier design is kept here as history, not deleted outright, because
+the numbers it produced are still referenced elsewhere in this document
+(the autocorrelation section's `buffer_steps` discussion, and the ~24-40
+step reference period T=40 that motivated `val_steps`/`test_steps`'s
+sizing): `val_steps` (160) and `test_steps` (400) were fixed absolute step
+counts (`4T`/`10T`), not fractions of a dataset's length, since seven
+independent analyses below all converged on that ~24-40 step dominant
+oscillation as this flow's best-characterized timescale; `buffer_steps`
+(20 = `T/2`) dropped that many snapshots at each internal boundary, derived
+from the autocorrelation check's finding that direct field decorrelation
+crosses zero within 6-11 steps across all 9 datasets. See "Where this
+leaves the split-sizing question" below for the full original reasoning.
+
+**A note on everything below:** most of the findings in the rest of this
+document -- "across all 9 datasets", specific numbers for `re16k_t400_0`,
+etc. -- were produced while all 9 datasets were still in scope for the
+analysis suite and each script read a fixed-size `train+val` region rather
+than a dataset's full length. Re-running any script now touches only the 8
+configured datasets (never `re16k_t400_5`) and reads each one in full. The
+qualitative conclusions aren't expected to change -- the stationarity
+check below already found no meaningful shift between a dataset's first
+and second half, which is direct evidence the extra data wouldn't shift
+things much -- but the exact numbers throughout predate this change and
+haven't all been individually re-verified against it.
 
 ## Incompressibility check
 
@@ -839,30 +864,36 @@ timescale exceeds what a single train+val window can resolve, and even the
 sizing below only holds a handful of effectively independent samples of it
 (see the autocorrelation section's `N_eff` estimate).
 
-**Decision:** `val_steps`/`test_steps` in `configs/analysis/split.yaml` are
-now sized as a multiple of a conservative reference period T=40 (the upper
-end of the confirmed range): val = 4T = 160 steps, test = 10T = 400 steps,
-with the existing `buffer_steps: 20` (= T/2) now applied at both the
-train/val and val/test boundaries, for the same leakage-avoidance reasoning
-as the original train+val/test buffer. Fixed absolute sizes rather than
-fractions of each dataset's length, so every dataset gets a comparably
-meaningful number of periods regardless of how long it happens to be. Even
-the shortest dataset (`re16k_t400_3`, 907 steps) is left with 307 training
-steps (~7.7T) after both buffers, val and test -- see the "Train / val /
-test split" section above for the resulting per-region ranges.
+**Decision (at the time, since superseded):** `val_steps`/`test_steps` in
+`configs/analysis/split.yaml` were sized as a multiple of a conservative
+reference period T=40 (the upper end of the confirmed range): val = 4T =
+160 steps, test = 10T = 400 steps, with `buffer_steps: 20` (= T/2) applied
+at both the train/val and val/test boundaries. Fixed absolute sizes rather
+than fractions of each dataset's length, so every dataset would get a
+comparably meaningful number of periods regardless of how long it happens
+to be.
+
+That was the right sizing *for a per-dataset time split* -- once it became
+clear all 9 datasets are one regime rather than different ones, the split
+moved to the dataset level instead (see "Train / val / test split" above,
+and its "Earlier: a per-dataset time split" subsection for what this
+decision looked like in practice before that change). T=40 and
+`buffer_steps: 20` are still the right numbers, though: they're properties
+of the flow itself, not of how the split is structured, and still explain
+why `buffer_steps` shows up in the autocorrelation section below.
 
 ## Running the suite across all datasets
 
-`configs/analysis/split.yaml` now lists all 9 available datasets (`re16k_t400_0`
-through `re16k_t400_10`, excluding the two known-bad ones), so
-`uv run scripts/data/split_data.py` builds a manifest covering all of them.
+`configs/analysis/split.yaml` lists 8 of the 9 available datasets
+(`re16k_t400_0` through `re16k_t400_10`, excluding the two known-bad ones
+and `re16k_t400_5`, the model's held-out test set).
 
 Each of the six `check_*.py` scripts accepts `--dataset NAME` (repeatable;
-default: every dataset in the manifest) and now writes a JSON summary of its
+default: every configured dataset) and now writes a JSON summary of its
 key numbers per dataset to `reports/summaries/<dataset>__<script>.json`
 (gitignored, like the figures), in addition to its existing printed output
 and plots — this is what makes cross-dataset comparison possible instead of
-having to read 54 separate walls of text.
+having to read 48 separate walls of text.
 
 ```bash
 uv run scripts/analysis/run_all_checks.py
@@ -870,41 +901,38 @@ uv run scripts/analysis/run_all_checks.py --dataset re16k_t400_0 --dataset re16k
 uv run scripts/analysis/run_all_checks.py --script check_split.py --workers 4
 ```
 
-`scripts/analysis/run_all_checks.py` runs every (script, dataset) pair — 54 by
-default — and builds a comparison table (printed and written to
-`reports/summaries/comparison.csv`) from the resulting JSON summaries, with
-one row per dataset and a handful of headline train+val numbers (step
-counts, divergence residual, enstrophy, the `u_x` field decorrelation time
-and effective sample size, and the `u_x` mean's half-to-half change from
-the stationarity check). The full detail stays in the individual JSON
-files; the table is meant for a quick side-by-side look, not the final word.
+`scripts/analysis/run_all_checks.py` runs every (script, dataset) pair — 48 by
+default (6 scripts x 8 configured datasets) — and builds a comparison table
+(printed and written to `reports/summaries/comparison.csv`) from the
+resulting JSON summaries, with one row per dataset and a handful of
+headline numbers (step count, divergence residual, enstrophy, the `u_x`
+field decorrelation time and effective sample size, and the `u_x` mean's
+half-to-half change from the stationarity check). The full detail stays in
+the individual JSON files; the table is meant for a quick side-by-side
+look, not the final word.
 
 **Parallelization:** each (script, dataset) pair is independent, so this
 dispatches them as separate `python check_*.py --dataset X` subprocesses via
 `mhd_surrogate.utils.parallel` (a thread pool where the threads just block on
 `subprocess.run`; the real numpy/FFT work happens in the child processes, on
 separate cores, with full process isolation — also used by
-`make_all_videos.py` below). All 54 jobs (9 datasets, on the train+val
-region only -- now a fixed step count per dataset rather than a fraction of
-it, see "Train / val / test split" above) completed in ~74s wall time on a
-12-core machine, down from the ~113s measured pre-overhaul against the
-full-length arrays -- the added check_stationarity.py job is cheap
-(~6-8s/dataset, similar to check_split.py) and barely moved the total.
-A distributed
+`make_all_videos.py` below). All 48 jobs (8 configured datasets, each read
+in full now rather than a fixed-size train+val region -- see "Train / val /
+test split" above) completed in ~134s wall time on a 12-core machine, up
+from the ~74s measured for the same suite against the smaller per-dataset
+region -- expected, since every job now reads more data per dataset (up to
+the full length, vs. previously ~54-66% of it). A distributed
 framework like Ray was considered but is not warranted for a workload this
-size (a minute, one machine); it would earn its keep once training actually
-needs a cluster, distributed GPUs, or data beyond single-machine scale.
+size (a couple of minutes, one machine); it would earn its keep once
+training actually needs a cluster, distributed GPUs, or data beyond
+single-machine scale.
 
-**First cross-dataset result (train+val, post-overhaul):** the divergence
-residual clusters tightly across all 9 datasets (0.4152-0.4328), and so does
-enstrophy (26.4-28.0) — consistent with the `re16k_t400_0` numbers above
-being representative of this simulation family rather than a fluke of one
-run. The `check_split`/`check_vorticity` flags this section used to mention
-are gone along with the train-vs-test comparison that produced them (see
-the Train / val / test split section above); this table now only describes
-train+val, so it has nothing to flag against. The tooling working
-end-to-end across all 9 datasets, on the new (val/test-sized) split, is
-confirmed.
+**First cross-dataset result:** the divergence residual clusters tightly
+across all 8 configured datasets (0.4146-0.4251), and so does enstrophy
+(26.6-27.5) — consistent with the `re16k_t400_0` numbers above being
+representative of this simulation family rather than a fluke of one run.
+The tooling working end-to-end on the new dataset-level split, with every
+configured dataset read in full, is confirmed.
 
 ## Video
 
@@ -960,35 +988,39 @@ tools and don't need config composition. New training/model code uses
 [Hydra](https://hydra.cc) instead, since that will need config groups (model,
 optimizer, trainer, ...) that compose, with CLI overrides and later multirun
 sweeps. `configs/config.yaml` is the root config (currently `data`, `dataset`
-and `seed`); `configs/data/` holds data-source configs (zarr store + array
-name), selected via the `data` default.
+and `seed`); `configs/data/re16k.yaml` holds the zarr store path and the
+dataset-level split (`train_datasets`, `val_dataset`, `test_dataset` -- see
+"Train / val / test split" above), selected via the `data` default.
 
 Model code will be in [JAX](https://jax.readthedocs.io). `jax` runs on CPU
 here; there's an NVIDIA GPU on this machine but no CUDA-enabled `jaxlib`
 installed yet.
 
-`configs/dataset/` holds sample-windowing configs (`window`/`horizon`/
-`stride`/the split manifest path), selected via the `dataset` default.
-`src/mhd_surrogate/data/dataset.py`'s `WindowedDataset` turns one train/test
-region into fixed-size samples: `window` consecutive time steps as input,
-the following `horizon` steps as target, a new sample every `stride` steps.
-It reads directly from the zarr array (no data is preloaded into memory) and
-never lets a sample cross the train/test boundary, since it's built from one
-region's `[start, end)` range in the split manifest. `windowed.yaml`'s
-`window=4, horizon=1, stride=1` are placeholder defaults (short history,
-one-step-ahead prediction), not tied to any model yet. Values are returned
-as-is, float32; normalization is not implemented yet.
+`configs/dataset/` holds sample-windowing config (`window`/`horizon`/
+`stride`), selected via the `dataset` default.
+`src/mhd_surrogate/data/dataset.py`'s `WindowedDataset` turns one region
+into fixed-size samples: `window` consecutive time steps as input, the
+following `horizon` steps as target, a new sample every `stride` steps. It
+reads directly from the zarr array (no data is preloaded into memory);
+`load_full_dataset` builds one over a dataset's entire recorded length, for
+a dataset used wholesale (every train and val dataset now, since there's no
+more internal region to bound reads by -- only whole-dataset exclusion,
+`test_dataset`, matters). `windowed.yaml`'s `window=4, horizon=1, stride=1`
+are placeholder defaults (short history, one-step-ahead prediction), not
+tied to any model yet. Values are returned as-is, float32; normalization is
+not implemented yet.
 
-No model exists yet, so `scripts/training/train.py` currently only resolves the
-config, confirms the configured dataset is reachable (shape/dtype), builds
-the train/test `WindowedDataset`s (sample count, one sample's shapes), and
-logs the run to MLflow (see below), as a smoke test of the plumbing it will
-grow into the real training loop on top of. Each run's resolved config and
-logs are written to `outputs/<date>/<time>/` (gitignored, like the other run
-artifacts). `hydra.job.chdir` is set to `false` so the working directory
-stays the repo root; without it, Hydra's default of chdir-ing into the run
-directory would break every relative path used throughout this project
-(`data/raw/...`, `configs/...`, etc.).
+No model exists yet, so `scripts/training/train.py` currently only resolves
+the config, confirms every train/val dataset is reachable (shape/dtype,
+sample count, one sample's shapes), and logs the run to MLflow (see below),
+as a smoke test of the plumbing it will grow into the real training loop on
+top of -- it deliberately never opens `test_dataset`, not even for a shape
+check. Each run's resolved config and logs are written to
+`outputs/<date>/<time>/` (gitignored, like the other run artifacts).
+`hydra.job.chdir` is set to `false` so the working directory stays the repo
+root; without it, Hydra's default of chdir-ing into the run directory would
+break every relative path used throughout this project (`data/raw/...`,
+`configs/...`, etc.).
 
 ### Experiment tracking (MLflow)
 

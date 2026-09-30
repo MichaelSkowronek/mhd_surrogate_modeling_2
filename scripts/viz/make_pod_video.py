@@ -4,7 +4,7 @@ check_pod.py's mode-shape plot shows a single static snapshot (the mode
 shape itself, with no time information -- a POD mode has no single
 frequency, unlike a DMD mode) of each top mode; this instead animates its
 *recorded* contribution to the flow, `coefficients[i, t] * mode_i` frame by
-frame, over the actual train+val snapshots. Unlike make_dmd_video.py, there
+frame, over the dataset's actual recorded snapshots. Unlike make_dmd_video.py, there
 is no analytic model to extrapolate from (POD gives no dynamics, just a
 decomposition of the given data): frames replay the real, fitted
 coefficient, so `--start`/`--end`/`--stride` (same convention as
@@ -36,7 +36,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 from pathlib import Path
 
@@ -47,6 +46,7 @@ matplotlib.rcParams["animation.ffmpeg_path"] = imageio_ffmpeg.get_ffmpeg_exe()
 
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
+import yaml  # noqa: E402
 import zarr  # noqa: E402
 from matplotlib.animation import FFMpegWriter  # noqa: E402
 
@@ -58,7 +58,7 @@ from mhd_surrogate.utils.logging_config import add_log_level_arg, setup_logging 
 
 log = logging.getLogger(__name__)
 
-DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
+DEFAULT_CONFIG = Path("configs/analysis/split.yaml")
 DEFAULT_OUT_DIR = Path("reports/videos")
 CHANNEL_NAMES = ["u_x", "u_y"]
 N_VIDEOS = 2
@@ -68,8 +68,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
-    parser.add_argument("--dataset", required=True, help="Dataset name in the split manifest")
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--dataset", required=True, help="Dataset name (must be configured)")
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument("--field", choices=sorted(FIELDS), default="vorticity")
     parser.add_argument(
@@ -92,7 +92,7 @@ def parse_args() -> argparse.Namespace:
         help="Sum the selected modes into one video instead of one each",
     )
     parser.add_argument("--start", type=int, default=0)
-    parser.add_argument("--end", type=int, default=None, help="Default: the whole train+val region")
+    parser.add_argument("--end", type=int, default=None, help="Default: the dataset's full length")
     parser.add_argument("--stride", type=int, default=1, help="Render every Nth time step")
     parser.add_argument("--fps", type=int, default=24)
     parser.add_argument("--dx", type=float, default=None, help="Override spacing along axis 2")
@@ -144,9 +144,13 @@ def render_video(
 def main() -> None:
     args = parse_args()
     setup_logging(args.log_level)
-    manifest = json.loads(args.manifest.read_text())
-    root = zarr.open_group(store=manifest["config"]["zarr_store"], mode="r")
-    split = manifest["splits"][args.dataset]
+    config = yaml.safe_load(args.config.read_text())
+    if args.dataset not in config["datasets"]:
+        raise SystemExit(
+            f"{args.dataset!r} is not a configured dataset (configs/analysis/split.yaml); "
+            "re16k_t400_5 in particular is the model's held-out test set and must never be read"
+        )
+    root = zarr.open_group(store=config["zarr_store"], mode="r")
 
     arr = root[args.dataset]
     if arr.ndim != 4 or arr.shape[1] != len(CHANNEL_NAMES):
@@ -156,11 +160,9 @@ def main() -> None:
     dx = args.dx if args.dx is not None else dx
     dy = args.dy if args.dy is not None else dy
 
-    train_end = split["trainval"][1]
-    log.info(
-        "running POD on %s (train+val: [0,%d)); this is the expensive part", args.dataset, train_end
-    )
-    data = arr[:train_end].astype(np.float64)
+    n_steps = arr.shape[0]
+    log.info("running POD on %s (%d steps); this is the expensive part", args.dataset, n_steps)
+    data = arr[:n_steps].astype(np.float64)
     state = build_dmd_state(data)
     modes, energy_fraction, coefficients = pod(state)
     log.info("computed %d POD modes", modes.shape[1])
@@ -174,7 +176,7 @@ def main() -> None:
     else:
         selected = list(range(args.n_videos))
 
-    end = args.end if args.end is not None else train_end
+    end = args.end if args.end is not None else n_steps
     steps = np.arange(args.start, end, args.stride)
     if steps.size == 0:
         raise SystemExit(f"no time steps in range [{args.start}, {end}) with stride {args.stride}")

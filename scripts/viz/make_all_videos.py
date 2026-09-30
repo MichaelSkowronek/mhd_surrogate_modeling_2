@@ -4,9 +4,10 @@ Each dataset's video is completely independent, so this dispatches them in
 parallel via mhd_surrogate.utils.parallel (see its docstring for how, and the
 README for why a distributed framework like Ray isn't warranted yet).
 
-Dataset names come from the split manifest (same source as
+Dataset names come from configs/analysis/split.yaml (same source as
 scripts/analysis/run_all_checks.py), not from --store directly, so the set of
-datasets stays consistent with the rest of the suite.
+datasets stays consistent with the rest of the suite (and re16k_t400_5, the
+model's held-out test set, stays excluded).
 
 Usage:
     uv run scripts/viz/make_all_videos.py
@@ -17,11 +18,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import os
 import time
 from pathlib import Path
+
+import yaml
 
 from mhd_surrogate.analysis.summary import filter_datasets
 from mhd_surrogate.utils.logging_config import add_log_level_arg, setup_logging
@@ -29,7 +31,7 @@ from mhd_surrogate.utils.parallel import log_failures, run_parallel
 
 log = logging.getLogger(__name__)
 
-DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
+DEFAULT_CONFIG = Path("configs/analysis/split.yaml")
 DEFAULT_STORE = Path("data/processed/re16k_t400.zarr")
 DEFAULT_OUT_DIR = Path("reports/videos")
 FIELDS = ["vorticity", "u_x", "u_y", "speed"]
@@ -37,12 +39,12 @@ FIELDS = ["vorticity", "u_x", "u_y", "speed"]
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument(
         "--dataset",
         action="append",
         default=None,
-        help="Limit to this dataset (repeatable); default: all datasets in the manifest",
+        help="Limit to this dataset (repeatable); default: all configured datasets",
     )
     parser.add_argument("--store", type=Path, default=DEFAULT_STORE)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
@@ -57,9 +59,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     setup_logging(args.log_level)
-    manifest = json.loads(args.manifest.read_text())
-    splits = filter_datasets(manifest["splits"], args.dataset)
-    dataset_names = list(splits)
+    config = yaml.safe_load(args.config.read_text())
+    dataset_names = filter_datasets(config["datasets"], args.dataset)
     workers = args.workers or os.cpu_count()
 
     jobs = [
