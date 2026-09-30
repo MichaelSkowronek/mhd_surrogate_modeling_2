@@ -104,6 +104,24 @@ conventions below; it shifts which tools are worth reaching for at all.
   (`setup_logging` already does this).
 - See the README's "Logging" section for the full rationale.
 
+## Git workflow
+
+- Trunk-based: `main` only, no long-lived `develop`. Work happens on
+  short-lived branches (`feat/...`, `fix/...`, `refactor/...`,
+  `experiment/...`) branched from `main`, opened as a pull request back
+  into `main`, and squash-merged -- `main`'s history ends up one commit per
+  PR. Delete the branch after merge.
+- Keep PRs small: one script, one feature, or one coherent change per PR --
+  roughly the granularity of a single "commit this" request in a session,
+  not a batch of unrelated work.
+- CI (`tests.yml`, `docker.yml`, `pre-commit.yml`) runs on PRs into `main`
+  and on push to `main`; branch protection on `main` requires a PR and a
+  green CI run before merging.
+- Tag milestones with an annotated git tag (e.g. `v0.1.0-eda-complete`)
+  paired with a GitHub Release summarizing what the milestone covers -- not
+  strict semver, since this project has no release artifact in the
+  traditional sense yet.
+
 ## Maintaining this file
 
 - After finishing a piece of work, consider whether it introduced a
