@@ -169,7 +169,7 @@ def main() -> None:
             log.warning("skipping %s: expected shape (T, 2, Nx, Ny), got %s", name, arr.shape)
             continue
 
-        train_end = split["train"][1]
+        train_end = split["trainval"][1]
         print(f"\n=== {name} (train+val: [0,{train_end})) ===")
 
         spectra: dict[str, dict[str, dict[str, tuple[np.ndarray, np.ndarray]]]] = {}

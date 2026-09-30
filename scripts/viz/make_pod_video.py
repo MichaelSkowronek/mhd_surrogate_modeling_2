@@ -156,7 +156,7 @@ def main() -> None:
     dx = args.dx if args.dx is not None else dx
     dy = args.dy if args.dy is not None else dy
 
-    train_end = split["train"][1]
+    train_end = split["trainval"][1]
     log.info(
         "running POD on %s (train+val: [0,%d)); this is the expensive part", args.dataset, train_end
     )

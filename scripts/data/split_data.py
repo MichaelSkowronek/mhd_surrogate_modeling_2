@@ -42,19 +42,26 @@ def main() -> None:
 
     for name in config["datasets"]:
         n_steps = root[name].shape[0]
-        split = trailing_split(n_steps, config["test_fraction"], config["buffer_steps"])
+        split = trailing_split(
+            n_steps, config["val_steps"], config["test_steps"], config["buffer_steps"]
+        )
         manifest["splits"][name] = {
             "n_steps": split.n_steps,
             "train": [split.train_start, split.train_end],
-            "buffer": [split.train_end, split.test_start],
+            "train_val_buffer": [split.train_end, split.val_start],
+            "val": [split.val_start, split.val_end],
+            "trainval": [split.train_start, split.val_end],
+            "buffer": [split.val_end, split.test_start],
             "test": [split.test_start, split.test_end],
         }
         log.info(
-            "%s: n_steps=%d train=[0,%d) buffer=[%d,%d) test=[%d,%d)",
+            "%s: n_steps=%d train=[0,%d) val=[%d,%d) buffer=[%d,%d) test=[%d,%d)",
             name,
             n_steps,
             split.train_end,
-            split.train_end,
+            split.val_start,
+            split.val_end,
+            split.val_end,
             split.test_start,
             split.test_start,
             n_steps,

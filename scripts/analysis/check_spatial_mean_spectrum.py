@@ -158,7 +158,7 @@ def main() -> None:
             log.warning("skipping %s: expected shape (T, 2, Nx, Ny), got %s", name, arr.shape)
             continue
 
-        train_end = split["train"][1]
+        train_end = split["trainval"][1]
         means, energy = spatial_series(arr, args.chunk_t, n_steps=train_end)
         series = {
             "u_x": means[:, 0],

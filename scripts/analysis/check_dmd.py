@@ -155,7 +155,7 @@ def main() -> None:
             log.warning("skipping %s: expected shape (T, 2, Nx, Ny), got %s", name, arr.shape)
             continue
 
-        train_end = split["train"][1]
+        train_end = split["trainval"][1]
         nx, ny = arr.shape[2], arr.shape[3]
         data = arr[:train_end].astype(np.float64)  # (T, 2, Nx, Ny)
         fluctuation = build_dmd_state(data)  # (state_dim, T)

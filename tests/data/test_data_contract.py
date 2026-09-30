@@ -112,5 +112,10 @@ def test_values_within_sanity_bounds(root, dataset_names):
 def test_enough_steps_for_configured_split(root, dataset_names, split_config):
     for name in dataset_names:
         n_steps = root[name].shape[0]
-        # Raises ValueError if there aren't enough steps for test_fraction/buffer_steps.
-        trailing_split(n_steps, split_config["test_fraction"], split_config["buffer_steps"])
+        # Raises ValueError if there aren't enough steps for val_steps/test_steps/buffer_steps.
+        trailing_split(
+            n_steps,
+            split_config["val_steps"],
+            split_config["test_steps"],
+            split_config["buffer_steps"],
+        )

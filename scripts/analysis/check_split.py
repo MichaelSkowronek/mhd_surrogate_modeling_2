@@ -11,9 +11,9 @@ drift or trend within the region is visible rather than hidden inside a
 single aggregate number.
 
 This used to compare train against test; now that test is off limits, it
-just describes train+val. Once the train/val boundary within this region is
-decided, comparing train against val the way this used to compare train
-against test belongs here again.
+just describes train+val. The train/val boundary within this region is now
+decided (see configs/analysis/split.yaml), but comparing train against val
+the way this used to compare train against test isn't wired up here yet.
 
 Usage:
     uv run scripts/analysis/check_split.py
@@ -219,14 +219,15 @@ def main() -> None:
 
     splits = filter_datasets(manifest["splits"], args.dataset)
     for name, split in splits.items():
-        train_end = split["train"][1]
+        train_end = split["trainval"][1]
         arr = root[name]
         means, stds, mins, maxs, energy, correlation = per_timestep_stats(
             arr, args.chunk_t, n_steps=train_end
         )
 
         print(
-            f"\n=== {name} (train+val: [0,{train_end}) of {split['n_steps']} total; "
+            f"\n=== {name} (train+val: [0,{train_end}) of {split['n_steps']} total, "
+            f"within it train: {split['train']}, val: {split['val']}; "
             f"buffer: {split['buffer']}, test: {split['test']} held out) ==="
         )
         channel_summary = print_stats(means, stds, mins, maxs)
@@ -262,7 +263,9 @@ def main() -> None:
             "check_split",
             {
                 "n_steps": split["n_steps"],
+                "trainval_range": split["trainval"],
                 "train_range": split["train"],
+                "val_range": split["val"],
                 "buffer_range": split["buffer"],
                 "test_range": split["test"],
                 "channels": channel_summary,

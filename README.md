@@ -103,7 +103,7 @@ shape is `(T, 2, Nx, Ny)`, dtype is `float32`, all values are finite, values
 stay within a broad sanity bound (`MAX_ABS_VALUE = 100`, meant to catch
 corrupted data, not enforce a tight physical range), spatial shape is
 consistent across datasets, and there are enough time steps for the
-configured split (`test_fraction`/`buffer_steps`). It does **not** check
+configured split (`val_steps`/`test_steps`/`buffer_steps`). It does **not** check
 statistical representativeness or physical plausibility — that stays with
 `check_split.py` and the other `check_*.py` scripts.
 
@@ -248,45 +248,52 @@ root = zarr.open_group("data/processed/re16k_t400.zarr", mode="r")
 root["re16k_t400_0"]  # shape (1248, 2, 1151, 127)
 ```
 
-## Train+val / test split
+## Train / val / test split
 
-Split parameters live in `configs/analysis/split.yaml` (which datasets, test fraction,
-buffer). The split is time-based (trailing): the last `test_fraction` of each
-dataset's time steps become the held-out test set, since these are temporally
-autocorrelated snapshots and a random split would leak information across
-the boundary. The rest — still called "train" in the split manifest — is the
-train+val region analyzed below; the actual train/val boundary within it
-isn't decided yet.
+Split parameters live in `configs/analysis/split.yaml` (which datasets,
+`val_steps`, `test_steps`, `buffer_steps`). The split is time-based
+(trailing): the last `test_steps` snapshots of each dataset become the held-
+out test set, and the `val_steps` immediately before that (minus a buffer)
+become validation, since these are temporally autocorrelated snapshots and a
+random split would leak information across a boundary. Everything before
+that is train; train+val combined (`split["trainval"]` in the manifest) is
+the region analyzed below.
 
 **Analysis scripts never read the test region.** Every `scripts/analysis/*.py`
-script only ever reads `[0, train_end)`, i.e. the train+val region — not just
-its own summary statistics being excluded, the test region's raw values are
-never loaded at all. Looking at the held-out set, even just its aggregate
-statistics, is data snooping: it lets the choices made while developing the
-analysis and later the model be (even unconsciously) informed by data the
-final evaluation is supposed to be blind to. This didn't matter much while
-still exploring what the data looks like at all, but the tooling now exists
-to actually train and compare models, so it's worth doing properly before
-that starts, rather than after. `check_split.py` used to compare train
-against test directly for exactly this purpose (below); that comparison is
-gone for now, and will return as train-vs-val once the split within
-train+val is decided.
+script only ever reads `[0, train_end)`, i.e. the train+val region (`split["trainval"][1]`
+in the manifest) — not just its own summary statistics being excluded, the
+test region's raw values are never loaded at all. Looking at the held-out
+set, even just its aggregate statistics, is data snooping: it lets the
+choices made while developing the analysis and later the model be (even
+unconsciously) informed by data the final evaluation is supposed to be blind
+to. `check_split.py` used to compare train against test directly for
+exactly this purpose (below); that comparison is gone for now, and belongs
+back here as a train-vs-val comparison (the train/val boundary is decided,
+but that comparison isn't wired up yet).
 
-`test_fraction` (0.4) is a conservative placeholder, not a derived value —
-pending an actual decision on dataset/split sizing (see `CLAUDE.md`), once
-the analysis below has been reviewed in full.
+`val_steps` (160) and `test_steps` (400) are fixed absolute step counts, not
+fractions of each dataset's length. Seven independent analyses below (pooled
+autocorrelation, point spectrum, domain-mean spectrum, 2D wavenumber
+spectrum, joint space-time spectrum, DMD, POD, SPOD) all converge on the
+same ~24-40 step (dataset-dependent) dominant oscillation as this flow's
+best-characterized timescale; sizing val/test as a fraction of a dataset's
+length would size them arbitrarily relative to that timescale instead, so
+both are defined as a multiple of a conservative reference period T=40 (the
+upper end of that range): val = 4T, test = 10T — see "Where this leaves the
+split-sizing question" below for the full reasoning.
 
-`buffer_steps` (20) drops that many snapshots from the *end of the train+val
-region*, so its last snapshot is separated from the first test snapshot; the
-test set keeps its full `test_fraction`. Unlike `test_fraction`, this one is
-derived, from the autocorrelation check below: the direct (monotone) field
-decorrelation crosses zero within 6-11 steps and drops below 0.05 within
-6-10 steps, checked across all 9 datasets, so 20 clears that with margin.
-The recurring quasi-periodic component found in every dataset (period
-~24-40 steps) is not removed by any practical buffer size -- see "Implication
-for the split" in the autocorrelation section for why 20 rather than
-something larger. For `re16k_t400_0` (1248 steps) this gives train+val
-`[0, 729)`, buffer `[729, 749)`, test `[749, 1248)`.
+`buffer_steps` (20 = T/2) drops that many snapshots between train and val,
+and again between val and test, so neither region's last snapshot is
+adjacent to the one that immediately follows it; val and test each keep
+their full requested size. This is derived, from the autocorrelation check
+below: the direct (monotone) field decorrelation crosses zero within 6-11
+steps and drops below 0.05 within 6-10 steps, checked across all 9 datasets,
+so 20 clears that with margin at either boundary. The recurring
+quasi-periodic component found in every dataset (period ~24-40 steps) is not
+removed by any practical buffer size -- see "Implication for the split" in
+the autocorrelation section for why 20 rather than something larger. For
+`re16k_t400_0` (1248 steps) this gives train `[0, 648)`, val `[668, 828)`,
+test `[848, 1248)`.
 
 ```bash
 uv run scripts/data/split_data.py   # writes data/processed/splits/split_manifest.json
@@ -302,14 +309,14 @@ and a value histogram per channel (`<name>_split_hist.png`) — so a drift or
 trend within the region would be visible rather than hidden inside a single
 aggregate number.
 
-For `re16k_t400_0`'s train+val region: `u_x` mean 1.0, std 0.824, range
-[-3.23, 4.64]; `u_y` mean ~0 (-0.0003), std 0.421, range [-2.97, 2.63] --
+For `re16k_t400_0`'s train+val region: `u_x` mean 1.0, std 0.822, range
+[-3.23, 4.87]; `u_y` mean ~0 (-0.0002), std 0.424, range [-2.97, 2.63] --
 `u_x` (streamwise) carries most of the flow's energy and variance, as
-expected. Kinetic energy is 0.840 (`u_x`) + 0.089 (`u_y`) = 0.929 total,
+expected. Kinetic energy is 0.838 (`u_x`) + 0.090 (`u_y`) = 0.928 total,
 with small std relative to the mean (~2%) -- consistent with the "slow
 energy variation" found in the autocorrelation section being a real but
 modest-amplitude effect. `u_x`-`u_y` correlation is essentially zero
-(0.007 +- 0.036), i.e. the two velocity components are spatially
+(0.006 +- 0.039), i.e. the two velocity components are spatially
 uncorrelated on average, as expected for a shear-dominated channel flow.
 
 ## Incompressibility check
@@ -476,9 +483,8 @@ For `re16k_t400_0`'s train+val region (729 steps):
 - **Slow energy variation.** The kinetic energy per direction has much
   longer memory than the field autocorrelation (`tau_int` 30.9 steps for
   `u_x`, 16.7 for `u_y`), with `N_eff` over train+val of only ~12 (`u_x`)
-  and ~22 (`u_y`) — a short held-out window would hold just a handful of
-  effectively independent samples of this slow variation, worth keeping in
-  mind once the train/val/test sizes are decided. This estimate is itself
+  and ~22 (`u_y`) — even the sized-up val/test windows below hold just a
+  handful of effectively independent samples of this slow variation. This estimate is itself
   sensitive to how much of the series is available (an earlier, longer
   pre-overhaul window found a noticeably different tail), since the tail of
   the FFT-based estimate is noisy for a diagnostic this slowly varying
@@ -509,12 +515,13 @@ length scales) and the enstrophy autocorrelation are not.
 
 The autocorrelation check above found a persistent quasi-periodic
 component but could only infer its period indirectly, from zero crossings.
-The four scripts below read it off directly as spectral peaks, from
-several independent angles, toward eventually sizing train/val/test off
-the slowest well-characterized frequency (see the Train+val / test split
-section above). They are exploratory and, unlike the check scripts above,
-not wired into `run_all_checks.py`. The shared FFT machinery
-(`power_spectrum`, `welch_spectrum`, `dominant_periods`) lives in
+The seven scripts below read it off directly, from several independent
+angles -- four spectral (FFT-based), then three based on data-driven mode
+decompositions (DMD, POD, SPOD) -- and are what train/val/test ended up
+sized off of (see the Train / val / test split section above). They are
+exploratory and, unlike the check scripts above, not wired into
+`run_all_checks.py`. The shared FFT machinery (`power_spectrum`,
+`welch_spectrum`, `dominant_periods`) lives in
 `src/mhd_surrogate/analysis/spectral.py`, used by the first two scripts
 below.
 
@@ -646,19 +653,132 @@ single-tone wave. (A minor cross-check note: this script's single-bin peak
 the same dataset -- expected, since the ridge is not perfectly uniform
 across `omega`, not a discrepancy between the two analyses.)
 
+### Dynamic Mode Decomposition (DMD)
+
+```bash
+uv run scripts/analysis/check_dmd.py --dataset re16k_t400_0
+uv run scripts/viz/make_dmd_video.py --dataset re16k_t400_0
+```
+
+The scripts above all assume energy sits on a fixed grid of FFT
+frequencies. DMD instead fits the best linear dynamical system `A` (in a
+least-squares sense, `x_{t+1} ~= A x_t`) directly to the snapshot sequence
+and eigendecomposes it: each eigenvalue gives a mode's frequency *and*
+growth/decay rate, at whatever frequency the data actually supports, not a
+grid-locked bin. Uses "exact DMD" (Tu et al., 2014); `u_x` and `u_y` are
+stacked into one state vector per snapshot (DMD models their joint
+dynamics, not each channel independently), with the time-mean field
+subtracted first. The SVD is truncated to rank 100 for robustness against
+small, noise-dominated singular values -- standard DMD practice; for
+`re16k_t400_0` this captures 91.5% of the variance.
+
+Modes are selected by "power" (amplitude at the first snapshot, the
+standard DMD convention), but a fast-decaying mode can have high power yet
+vanish within a handful of steps, contributing far less to the actual
+recorded series than a lower-power but near-neutral mode that persists
+throughout. `re16k_t400_0` shows this directly: mode 94 has the highest raw
+power (101) of the top 5, but decays at -0.0255/step (half-life ~27
+steps), giving it an rms-power-over-the-whole-window of only 15.8 --
+*fourth* of the five once decay is accounted for. Mode 70 (period 29.3
+steps, matching the range found above) has lower raw power (85.2) but
+barely decays (-0.00236/step, half-life ~294 steps), so its rms power
+(42.7) is actually the highest of the five -- the opposite ranking. Fixed
+by adding an `rms_power` (root-mean-square power over the whole recorded
+window) alongside `power`; `check_dmd.py` prints modes sorted by it, and
+both the mode-shape plot and `make_dmd_video.py`'s default mode selection
+use it too. The top `rms_power` mode's shape matches the same coherent
+structure the spectral methods above found -- a genuinely different method
+(a fitted linear operator, not any kind of FFT) arriving at the same
+answer.
+
+### Proper Orthogonal Decomposition (POD)
+
+```bash
+uv run scripts/analysis/check_pod.py --dataset re16k_t400_0
+uv run scripts/viz/make_pod_video.py --dataset re16k_t400_0
+uv run scripts/viz/make_pod_video.py --dataset re16k_t400_0 --mode-index 0 --mode-index 1 --combine
+```
+
+POD (aka PCA) gives up DMD's per-mode frequency (a POD mode's time
+coefficient typically mixes many frequencies) in exchange for modes that
+are mutually orthogonal and exactly ranked by the variance ("energy") they
+capture over the whole window, with no eigenvalue problem or complex
+arithmetic -- just the SVD of the same (channel-stacked,
+mean-subtracted) state matrix DMD uses. It's also cheaper: no
+eigendecomposition or least-squares step.
+
+Across all 9 datasets, modes 0 and 1 have nearly identical energy --
+e.g. `re16k_t400_0`: 12.79% vs 12.43%; `re16k_t400_4`: 21.38% vs 21.24%;
+`re16k_t400_10`: 17.08% vs 16.77% (`re16k_t400_5` is the one partial
+exception, at 17.08% vs 13.56%). This is the textbook signature of POD
+needing *two* modes in spatial quadrature to represent one traveling
+structure, since a single real orthogonal mode can't do it alone -- and it
+was confirmed visually too: both modes show the same vortex-street pattern,
+spatially offset. `make_pod_video.py --combine` sums a chosen set of modes'
+actual (recorded, non-extrapolated) time coefficients into one video;
+combining modes 0+1 this way visibly travels, while either mode alone just
+pulses in place -- direct confirmation of the quadrature reading. Together
+the two modes capture 24-43% of all velocity-fluctuation variance,
+dataset-dependent; 53-84 modes are needed to reach 90% of the variance
+overall, consistently ~10-14% of each dataset's total mode count (487-828,
+i.e. `min(state_dim, n_snapshots)`).
+
+### Spectral Proper Orthogonal Decomposition (SPOD)
+
+```bash
+uv run scripts/analysis/check_spod.py --dataset re16k_t400_0
+```
+
+SPOD (Towne, Schmidt & Colonius, 2018) gets DMD's single-frequency modes
+*and* POD's spatial orthogonality at once: split the snapshot sequence into
+overlapping, Hann-windowed segments (same Welch convention as the point/
+domain-mean spectra above), Fourier transform each segment in time, then --
+independently at each frequency -- take the SVD of that frequency's
+segment coefficients, exactly as POD does in the time domain. The result is
+a set of modes *at each frequency*, ranked by the share of that frequency's
+energy they capture; each oscillates at exactly one frequency, like a DMD
+mode, but with no growth/decay to estimate, since SPOD assumes the process
+is statistically stationary. Verified directly: summing the eigenvalues at
+a frequency exactly equals summing that frequency's Welch power spectral
+density over every channel -- SPOD only reorganizes each frequency's
+energy into orthogonal modes, it doesn't add or remove any of it.
+
+For `re16k_t400_0`, energy concentrates sharply in the leading mode around
+T=28.6 (22.1% of the total), T=33.3 (18.0%) and T=40.0 (15.1%) --
+`re16k_t400_4` similarly at T=28.6 (33.9%), T=33.3 (20.7%) and T=25.0
+(9.8%), a visibly *more* concentrated spectrum, consistent with that
+dataset's higher POD mode-0/1 energy above. In both cases the leading
+mode's shape is the same vortex-street structure DMD and POD found -- yet
+another confirmation (see "Where this leaves the split-sizing question"
+below), and a third genuinely different method (per-frequency
+eigendecomposition, neither a whole-window SVD nor a fitted linear
+operator) arriving at it.
+
 ### Where this leaves the split-sizing question
 
-Four independent analyses (pooled autocorrelation, per-point, domain-mean,
-and joint space-time spectra) now agree on the same ~24-40 step
-(dataset-dependent) oscillation as the flow's best-characterized frequency
--- confirmed, not just detected once. It is a broad, quasi-periodic
-feature rather than a pure tone, which is itself useful to know: it argues
-for buffer/margin choices with headroom rather than a razor-precise
-period. Kinetic energy's slow variation remains a genuine open question --
-its own characterizing timescale exceeds what a single train+val window
-can resolve, which matters for deciding how much data a final split needs,
-not just how it should be divided. The actual train/val/test size decision
-is still pending, per `CLAUDE.md`.
+Seven independent analyses (pooled autocorrelation, per-point, domain-mean,
+and joint space-time spectra above, plus DMD, POD and SPOD) all agree on
+the same ~24-40 step (dataset-dependent) oscillation as the
+flow's best-characterized frequency -- confirmed independently, not just
+detected once. It is a broad, quasi-periodic feature rather than a pure
+tone, which is itself useful to know: it argues for buffer/margin choices
+with headroom rather than a razor-precise period. Kinetic energy's slow
+variation remains a genuine open question -- its own characterizing
+timescale exceeds what a single train+val window can resolve, and even the
+sizing below only holds a handful of effectively independent samples of it
+(see the autocorrelation section's `N_eff` estimate).
+
+**Decision:** `val_steps`/`test_steps` in `configs/analysis/split.yaml` are
+now sized as a multiple of a conservative reference period T=40 (the upper
+end of the confirmed range): val = 4T = 160 steps, test = 10T = 400 steps,
+with the existing `buffer_steps: 20` (= T/2) now applied at both the
+train/val and val/test boundaries, for the same leakage-avoidance reasoning
+as the original train+val/test buffer. Fixed absolute sizes rather than
+fractions of each dataset's length, so every dataset gets a comparably
+meaningful number of periods regardless of how long it happens to be. Even
+the shortest dataset (`re16k_t400_3`, 907 steps) is left with 307 training
+steps (~7.7T) after both buffers, val and test -- see the "Train / val /
+test split" section above for the resulting per-region ranges.
 
 ## Running the suite across all datasets
 
@@ -706,11 +826,12 @@ enstrophy (26.4-28.0) — consistent with the `re16k_t400_0` numbers above
 being representative of this simulation family rather than a fluke of one
 run. The `check_split`/`check_vorticity` flags this section used to mention
 are gone along with the train-vs-test comparison that produced them (see
-the Train+val / test split section above); this table now only describes
+the Train / val / test split section above); this table now only describes
 train+val, so it has nothing to flag against. The tooling working
-end-to-end across all 9 datasets, on the new split, is confirmed; the
-dataset-selection/split-size decision itself is a separate step, still
-pending, from reviewing this table.
+end-to-end across all 9 datasets, on the new split, is confirmed. (These
+numbers predate the val/test sizing decision above and haven't been
+re-run against the resulting, slightly larger, train+val regions --
+`uv run scripts/analysis/run_all_checks.py` refreshes them.)
 
 ## Video
 

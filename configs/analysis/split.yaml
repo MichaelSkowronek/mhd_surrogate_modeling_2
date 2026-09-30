@@ -1,17 +1,29 @@
-# Train+val / test split configuration.
+# Train / val / test split configuration.
 #
-# Splitting is time-based (trailing): the last `test_fraction` of each
-# dataset's time steps become the held-out test set; the rest, still called
-# "train" in the split manifest below, is the train+val region -- the actual
-# train/val boundary within it isn't decided yet. scripts/analysis/*.py only
-# ever read this region, never the test region, to avoid data snooping (see
+# Splitting is time-based (trailing): the last `test_steps` snapshots of
+# each dataset become the held-out test set, and the `val_steps` snapshots
+# immediately before that (minus a buffer) become validation; everything
+# before that is train. scripts/analysis/*.py only ever read the combined
+# train+val region (`splits[name]["trainval"]` in the manifest), never the
+# buffers or the held-out test region, to avoid data snooping (see
 # CLAUDE.md's Testing section). A random split would also leak information
 # between temporally autocorrelated snapshots, hence trailing rather than
 # random.
 #
-# test_fraction is a conservative placeholder; the actual dataset
-# selection/split sizing is decided later (see CLAUDE.md), once the analysis
-# this config feeds has been reviewed in full.
+# val_steps and test_steps are fixed absolute step counts, not fractions of
+# each dataset's length: seven independent analyses (autocorrelation, point
+# spectrum, domain-mean spectrum, 2D wavenumber spectrum, joint space-time
+# spectrum, DMD, POD, SPOD) all converge on the same ~24-40 step
+# (dataset-dependent) dominant oscillation as this flow's best-characterized
+# timescale. Sizing val/test as a fraction of a dataset's length would size
+# them arbitrarily relative to that timescale instead; a fixed multiple of
+# it gives every dataset a comparably meaningful number of periods,
+# regardless of how long the dataset happens to be. See the README's
+# "Where this leaves the split-sizing question" section for the full
+# reasoning.
+#
+# Reference period T = 40 (the conservative upper end of the ~24-40 range
+# found above; buffer_steps below was already derived from it as T/2).
 
 zarr_store: data/processed/re16k_t400.zarr
 
@@ -26,22 +38,24 @@ datasets:
   - re16k_t400_9
   - re16k_t400_10
 
-test_fraction: 0.4  # train+val gets the remaining, conservative 60%
+val_steps: 160   # 4T: a handful of periods for a low-variance validation
+                 # metric, without eating heavily into train
+test_steps: 400  # 10T: a generous, stable held-out estimate
 
-# Snapshots dropped from the END of the train+val region, so its last
-# snapshot is separated from the first test snapshot. The test set keeps its
-# full `test_fraction`. In snapshot steps (the physical time step is
-# unknown).
+# Snapshots dropped between train and val, and again between val and test,
+# so neither's last snapshot is adjacent to the region that immediately
+# follows it; val and test each keep their full requested size. In snapshot
+# steps (the physical time step is unknown).
 #
-# 20 is derived from scripts/analysis/check_autocorrelation.py, checked
-# across all 9 datasets above: the direct (monotone) field decorrelation
-# crosses zero within 6-11 steps and drops below 0.05 within 6-10 steps in
-# every dataset/channel, so 20 clears that with margin. Every dataset also
-# shows a persistent quasi-periodic component (period ~24-40 steps,
-# dataset-dependent) whose amplitude does *not* decay away -- it is still
-# routinely 0.2-0.5 correlated at lag ~150 in every dataset checked -- so no
-# buffer size within a practical fraction of the train+val region removes
-# it; buffering past the fast decorrelation has diminishing returns against
-# shrinking train+val further. See the README's "Temporal autocorrelation"
+# 20 (= T/2) is derived from scripts/analysis/check_autocorrelation.py,
+# checked across all 9 datasets above: the direct (monotone) field
+# decorrelation crosses zero within 6-11 steps and drops below 0.05 within
+# 6-10 steps in every dataset/channel, so 20 clears that with margin at
+# either boundary. The persistent quasi-periodic component (period ~24-40
+# steps, dataset-dependent) does *not* decay away -- it is still routinely
+# 0.2-0.5 correlated at lag ~150 in every dataset checked -- so no buffer
+# size within a practical fraction of the train+val region removes it;
+# buffering past the fast decorrelation has diminishing returns against
+# shrinking train further. See the README's "Temporal autocorrelation"
 # section for the full analysis.
 buffer_steps: 20

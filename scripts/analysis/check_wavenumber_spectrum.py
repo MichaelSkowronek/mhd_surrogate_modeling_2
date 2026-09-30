@@ -173,7 +173,7 @@ def main() -> None:
         dx, dy = grid_spacing(arr.shape[2], arr.shape[3])
         dx = args.dx if args.dx is not None else dx
         dy = args.dy if args.dy is not None else dy
-        train_end = split["train"][1]
+        train_end = split["trainval"][1]
         print(f"\n=== {name} (dx={dx:.5g}, dy={dy:.5g}, train+val: [0,{train_end})) ===")
 
         spectra = {}
