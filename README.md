@@ -117,6 +117,22 @@ later — zarr supports both through the same API. Since the ~9GB store isn't
 checked into git, these tests skip themselves automatically when it isn't
 present locally, including in CI.
 
+`tests/analysis/test_pipeline_integration.py` is the same idea, one level
+up: instead of checking the raw data's structural contract, it runs the
+real CLI entry points as subprocesses -- `scripts/data/split_data.py`
+building a manifest, then `scripts/analysis/run_all_checks.py`'s six check
+scripts against one dataset -- and checks the *pipeline* still wires
+together, not that any result is correct or physically reasonable (still a
+human judgement call, unchanged). Concretely: every script runs without
+error, and the comparison table's `trainval_steps` column is cross-checked
+against the manifest's own `trainval` range, since each script already has
+thorough unit tests in isolation but nothing previously checked the wiring
+between them -- which is exactly how a real bug (`run_all_checks.py`
+silently reading the wrong manifest key after a schema refactor, reporting
+the train-only length as `trainval_steps`) slipped through unnoticed until
+caught by hand. Same skip-if-store-absent behavior as the data contract
+tests above.
+
 ## Logging
 
 Every `scripts/**/*.py` CLI script accepts `--log-level` (`DEBUG`/`INFO`/
