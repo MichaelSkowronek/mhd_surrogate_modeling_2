@@ -35,3 +35,20 @@ def pod(state: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     energy_fraction = s**2 / (s**2).sum()
     coefficients = s[:, None] * vh
     return u, energy_fraction, coefficients
+
+
+def pod_reconstruction(
+    modes: np.ndarray, coefficients: np.ndarray, mode_indices: list[int]
+) -> np.ndarray:
+    """Time series of the summed contribution of just the given POD modes:
+    `sum_i outer(modes[:, i], coefficients[i, :])`, shape (state_dim,
+    n_snapshots). A single mode's own time progression is the `len(
+    mode_indices) == 1` case; passing every mode index reconstructs the
+    original state exactly (matching `pod`'s own `state ~= modes @
+    coefficients` property) -- this is a partial version of that same sum.
+    Useful for e.g. watching a pair of near-equal-energy modes (the
+    signature of a single traveling structure that POD, unlike DMD, can
+    only represent as two modes in spatial quadrature -- see check_pod.py)
+    travel together, isolated from the rest of the flow.
+    """
+    return modes[:, mode_indices] @ coefficients[mode_indices, :]

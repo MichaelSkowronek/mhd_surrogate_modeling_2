@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from mhd_surrogate.analysis.pod import pod
+from mhd_surrogate.analysis.pod import pod, pod_reconstruction
 
 
 def test_pod_recovers_two_orthogonal_patterns_ranked_by_energy():
@@ -59,3 +59,34 @@ def test_pod_energy_fractions_sum_to_one():
     _, energy_fraction, _ = pod(state)
 
     assert energy_fraction.sum() == pytest.approx(1.0, rel=1e-9)
+
+
+def test_pod_reconstruction_of_all_modes_matches_the_full_state():
+    rng = np.random.default_rng(0)
+    state = rng.standard_normal((10, 6))
+    modes, _, coefficients = pod(state)
+
+    full = pod_reconstruction(modes, coefficients, list(range(modes.shape[1])))
+
+    np.testing.assert_allclose(full, state, atol=1e-9)
+
+
+def test_pod_reconstruction_of_a_subset_matches_a_manual_sum():
+    rng = np.random.default_rng(0)
+    state = rng.standard_normal((10, 6))
+    modes, _, coefficients = pod(state)
+
+    pair = pod_reconstruction(modes, coefficients, [0, 2])
+
+    expected = np.outer(modes[:, 0], coefficients[0]) + np.outer(modes[:, 2], coefficients[2])
+    np.testing.assert_allclose(pair, expected, atol=1e-9)
+
+
+def test_pod_reconstruction_of_a_single_mode_is_its_own_outer_product():
+    rng = np.random.default_rng(0)
+    state = rng.standard_normal((10, 6))
+    modes, _, coefficients = pod(state)
+
+    single = pod_reconstruction(modes, coefficients, [1])
+
+    np.testing.assert_allclose(single, np.outer(modes[:, 1], coefficients[1]), atol=1e-9)
