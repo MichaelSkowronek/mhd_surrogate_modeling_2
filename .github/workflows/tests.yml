@@ -18,7 +18,12 @@ jobs:
 
       # uv sync auto-provisions the pinned Python version (.python-version);
       # no separate Python setup step needed. Installs the dev dependency
-      # group (pytest) by default.
+      # group (pytest, pytest-cov) by default.
       - run: uv sync
 
-      - run: uv run pytest
+      # Coverage (src/mhd_surrogate/ only, gated at 95% -- see pyproject.toml's
+      # [tool.coverage] comment for why scripts/ is out of scope) is wired in
+      # here rather than via pytest addopts, so a local `pytest tests/foo.py`
+      # subset run stays fast and doesn't spuriously fail the threshold --
+      # only this full-suite CI run is gated.
+      - run: uv run pytest --cov --cov-report=term-missing

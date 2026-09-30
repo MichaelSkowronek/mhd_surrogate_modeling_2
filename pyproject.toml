@@ -38,6 +38,7 @@ build-backend = "uv_build"
 dev = [
     "pre-commit>=4.6.2",
     "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
     "ruff>=0.16.8",
 ]
 
@@ -50,3 +51,15 @@ select = ["E", "F", "W", "I"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+# src/mhd_surrogate/ only, not scripts/**/*.py: CLAUDE.md's Testing section
+# deliberately excludes CLI/argparse/plotting glue from the "must be
+# unit-tested" rule, and that glue dominates line counts in scripts/,
+# so a coverage number there would be meaningless (and a gate on it would
+# pressure writing tests for argparse setup just to hit a target).
+source = ["src/mhd_surrogate"]
+
+[tool.coverage.report]
+fail_under = 95
+show_missing = true
