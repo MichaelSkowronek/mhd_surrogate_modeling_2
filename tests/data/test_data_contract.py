@@ -12,10 +12,10 @@ API), and they read in chunks rather than loading full arrays, so they stay
 cheap to run against a remote store too.
 
 These assert only objective, storage-agnostic structural properties (shape,
-dtype, finiteness, a broad sanity value range, enough time steps for the
-configured split) -- not statistical representativeness or physical
-plausibility, which stay human judgement calls made via check_split.py and
-the other check_*.py scripts (see their README sections).
+dtype, finiteness, a broad sanity value range) -- not statistical
+representativeness or physical plausibility, which stay human judgement
+calls made via check_split.py and the other check_*.py scripts (see their
+README sections).
 """
 
 from __future__ import annotations
@@ -26,8 +26,6 @@ import numpy as np
 import pytest
 import yaml
 import zarr
-
-from mhd_surrogate.data.splitting import trailing_split
 
 SPLIT_CONFIG = Path("configs/analysis/split.yaml")
 CHUNK_T = 64
@@ -107,15 +105,3 @@ def test_values_within_sanity_bounds(root, dataset_names):
             assert max_abs < MAX_ABS_VALUE, (
                 f"{name}: |value|={max_abs} exceeds sanity bound {MAX_ABS_VALUE}"
             )
-
-
-def test_enough_steps_for_configured_split(root, dataset_names, split_config):
-    for name in dataset_names:
-        n_steps = root[name].shape[0]
-        # Raises ValueError if there aren't enough steps for val_steps/test_steps/buffer_steps.
-        trailing_split(
-            n_steps,
-            split_config["val_steps"],
-            split_config["test_steps"],
-            split_config["buffer_steps"],
-        )

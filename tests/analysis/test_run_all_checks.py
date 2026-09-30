@@ -1,22 +1,6 @@
 import json
 
-from run_all_checks import build_comparison_table, count_flags, discover_dataset_names
-
-
-def test_count_flags_counts_nested_true_flags_only():
-    data = {
-        "channels": {
-            "u_x": {"flagged": True, "mean": 1.0},
-            "u_y": {"flagged": False, "mean": 2.0},
-        },
-        "energy": {"total": {"flagged": True}},
-        "other": "flagged",  # a string value, not a "flagged" key -- must not count
-    }
-    assert count_flags(data) == 2
-
-
-def test_count_flags_zero_for_no_flags():
-    assert count_flags({"a": {"flagged": False}, "b": [1, 2, {"flagged": False}]}) == 0
+from run_all_checks import build_comparison_table, discover_dataset_names
 
 
 def test_discover_dataset_names_reads_summary_filenames(tmp_path):
@@ -38,11 +22,7 @@ def test_build_comparison_table_survives_a_partial_run(tmp_path):
     """
     full = {
         "n_steps": 100,
-        "trainval_range": [0, 80],
-        "train_range": [0, 60],
-        "val_range": [60, 80],
-        "test_range": [80, 100],
-        "channels": {"u_x": {"flagged": False}},
+        "channels": {"u_x": {"mean": 1.0}},
     }
     (tmp_path / "ds_a__check_split.json").write_text(json.dumps(full))
     (tmp_path / "ds_b__check_split.json").write_text(json.dumps(full))

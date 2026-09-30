@@ -26,12 +26,13 @@ subtracted first via the shared `build_dmd_state`. The SPOD machinery
 itself (`spod`/`leading_frequencies`) lives in
 `src/mhd_surrogate/analysis/spod.py`.
 
-Like check_dmd.py and check_pod.py, this loads the whole train+val region
-into memory at once, never the held-out test region. Frequency is in
+Like check_dmd.py and check_pod.py, this loads a dataset's whole recorded
+length into memory at once, never re16k_t400_5, the model's held-out test
+set (excluded entirely from configs/analysis/split.yaml). Frequency is in
 radians per snapshot step, like the other scripts here (the physical time
 step is not stored in the data). The Welch segment length --nperseg
 defaults to 200, matching check_point_spectrum.py's choice for this
-project's ~500-730 step train+val regions.
+project's ~900-1250 step datasets.
 
 Peaks at ~6-8 GB per dataset (similar to check_pod.py, since it starts from
 the same state matrix, plus the segment FFTs). Deliberately not wired into
@@ -48,12 +49,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import yaml
 import zarr
 
 from mhd_surrogate.analysis.dmd import build_dmd_state
@@ -63,7 +64,7 @@ from mhd_surrogate.utils.logging_config import setup_logging
 
 log = logging.getLogger(__name__)
 
-DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
+DEFAULT_CONFIG = Path("configs/analysis/split.yaml")
 DEFAULT_OUT_DIR = Path("reports/figures")
 CHANNEL_NAMES = ["u_x", "u_y"]
 N_PEAKS = 3
@@ -75,7 +76,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument(
         "--nperseg",
@@ -106,7 +107,7 @@ def plot_eigenvalue_spectrum(
     period = 2 * np.pi / omega[1:]
     for i in range(min(n_mode_ranks, eigenvalues.shape[1])):
         ax.loglog(period, eigenvalues[1:, i], label=f"mode {i}")
-    ax.set_title(f"{name}: SPOD eigenvalue spectrum (train+val)")
+    ax.set_title(f"{name}: SPOD eigenvalue spectrum")
     ax.set_xlabel("period T (snapshot steps)")
     ax.set_ylabel("eigenvalue (energy)")
     ax.legend()
@@ -139,26 +140,26 @@ def main() -> None:
     args = parse_args()
     setup_logging(args.log_level)
     noverlap = args.noverlap if args.noverlap is not None else args.nperseg // 2
-    manifest = json.loads(args.manifest.read_text())
-    root = zarr.open_group(store=manifest["config"]["zarr_store"], mode="r")
+    config = yaml.safe_load(args.config.read_text())
+    root = zarr.open_group(store=config["zarr_store"], mode="r")
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    splits = filter_datasets(manifest["splits"], args.dataset)
-    for name, split in splits.items():
+    dataset_names = filter_datasets(config["datasets"], args.dataset)
+    for name in dataset_names:
         arr = root[name]
         if arr.ndim != 4 or arr.shape[1] != len(CHANNEL_NAMES):
             log.warning("skipping %s: expected shape (T, 2, Nx, Ny), got %s", name, arr.shape)
             continue
 
-        train_end = split["trainval"][1]
+        n_steps = arr.shape[0]
         nx, ny = arr.shape[2], arr.shape[3]
-        data = arr[:train_end].astype(np.float64)  # (T, 2, Nx, Ny)
+        data = arr[:n_steps].astype(np.float64)  # (T, 2, Nx, Ny)
         state = build_dmd_state(data)  # (state_dim, T)
 
         omega, modes, eigenvalues = spod(state, args.nperseg, noverlap)
         peaks = leading_frequencies(omega, eigenvalues, args.n_peaks)
 
-        print(f"\n=== {name} (train+val: [0,{train_end}), nperseg={args.nperseg}) ===")
+        print(f"\n=== {name} ({n_steps} steps, nperseg={args.nperseg}) ===")
         for p in peaks:
             print(
                 f"  T={p['period']:.1f} (omega={p['omega']:.3g} rad/step): "

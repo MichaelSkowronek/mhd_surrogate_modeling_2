@@ -7,23 +7,23 @@ from mhd_surrogate.analysis.summary import filter_datasets, write_summary
 
 
 def test_filter_datasets_returns_everything_when_only_is_none():
-    splits = {"a": 1, "b": 2, "c": 3}
-    assert filter_datasets(splits, None) == splits
+    datasets = ["a", "b", "c"]
+    assert filter_datasets(datasets, None) == datasets
 
 
 def test_filter_datasets_returns_everything_when_only_is_empty():
-    splits = {"a": 1, "b": 2}
-    assert filter_datasets(splits, []) == splits
+    datasets = ["a", "b"]
+    assert filter_datasets(datasets, []) == datasets
 
 
-def test_filter_datasets_preserves_manifest_order_not_request_order():
-    splits = {"a": 1, "b": 2, "c": 3}
-    assert list(filter_datasets(splits, ["c", "a"]).keys()) == ["a", "c"]
+def test_filter_datasets_preserves_original_order_not_request_order():
+    datasets = ["a", "b", "c"]
+    assert filter_datasets(datasets, ["c", "a"]) == ["a", "c"]
 
 
 def test_filter_datasets_rejects_unknown_dataset():
     with pytest.raises(ValueError, match="unknown dataset"):
-        filter_datasets({"a": 1}, ["a", "nonexistent"])
+        filter_datasets(["a"], ["a", "nonexistent"])
 
 
 def test_write_summary_round_trips_numpy_scalars_and_arrays(tmp_path):

@@ -23,8 +23,9 @@ pattern. The POD machinery itself (`pod`) lives in
 `src/mhd_surrogate/analysis/pod.py`; `build_dmd_state` is reused directly
 from `src/mhd_surrogate/analysis/dmd.py`.
 
-Like check_dmd.py, this loads the whole train+val region into memory at
-once, never the held-out test region. Frequency is not reported at all
+Like check_dmd.py, this loads a dataset's whole recorded length into memory
+at once, never re16k_t400_5, the model's held-out test set (excluded
+entirely from configs/analysis/split.yaml). Frequency is not reported at all
 (POD modes don't have one); the closest analogue -- roughly what timescale
 a mode's coefficient varies on -- is a question for the coefficient's own
 spectrum, not computed here.
@@ -43,12 +44,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import yaml
 import zarr
 
 from mhd_surrogate.analysis.dmd import build_dmd_state
@@ -58,7 +59,7 @@ from mhd_surrogate.utils.logging_config import setup_logging
 
 log = logging.getLogger(__name__)
 
-DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
+DEFAULT_CONFIG = Path("configs/analysis/split.yaml")
 DEFAULT_OUT_DIR = Path("reports/figures")
 CHANNEL_NAMES = ["u_x", "u_y"]
 N_MODES = 3
@@ -66,7 +67,7 @@ N_MODES = 3
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument(
         "--n-modes",
@@ -93,7 +94,7 @@ def plot_energy_spectrum(name: str, energy_fraction: np.ndarray, out_dir: Path) 
     ax2.tick_params(axis="y", labelcolor="tab:orange")
     ax2.set_ylim(0, 1.05)
 
-    ax1.set_title(f"{name}: POD energy spectrum (train+val)")
+    ax1.set_title(f"{name}: POD energy spectrum")
     fig.tight_layout()
     out_path = out_dir / f"{name}_pod_spectrum.png"
     fig.savefig(out_path, dpi=150)
@@ -129,26 +130,26 @@ def plot_mode_shapes(
 def main() -> None:
     args = parse_args()
     setup_logging(args.log_level)
-    manifest = json.loads(args.manifest.read_text())
-    root = zarr.open_group(store=manifest["config"]["zarr_store"], mode="r")
+    config = yaml.safe_load(args.config.read_text())
+    root = zarr.open_group(store=config["zarr_store"], mode="r")
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    splits = filter_datasets(manifest["splits"], args.dataset)
-    for name, split in splits.items():
+    dataset_names = filter_datasets(config["datasets"], args.dataset)
+    for name in dataset_names:
         arr = root[name]
         if arr.ndim != 4 or arr.shape[1] != len(CHANNEL_NAMES):
             log.warning("skipping %s: expected shape (T, 2, Nx, Ny), got %s", name, arr.shape)
             continue
 
-        train_end = split["trainval"][1]
+        n_steps = arr.shape[0]
         nx, ny = arr.shape[2], arr.shape[3]
-        data = arr[:train_end].astype(np.float64)  # (T, 2, Nx, Ny)
+        data = arr[:n_steps].astype(np.float64)  # (T, 2, Nx, Ny)
         state = build_dmd_state(data)  # (state_dim, T)
 
         modes, energy_fraction, coefficients = pod(state)
         cumulative = np.cumsum(energy_fraction)
 
-        print(f"\n=== {name} (train+val: [0,{train_end}), {len(energy_fraction)} POD modes) ===")
+        print(f"\n=== {name} ({n_steps} steps, {len(energy_fraction)} POD modes) ===")
         for i in range(args.n_modes):
             print(
                 f"  mode {i}: energy={energy_fraction[i]:.2%}, "

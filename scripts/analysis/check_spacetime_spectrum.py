@@ -12,9 +12,10 @@ structure (a traveling wave, with a phase velocity = omega/kx), not a
 coincidence of two separate analyses.
 
 Unlike every other scripts/analysis/*.py script, this cannot process time in
-independent chunks -- time is one of the FFT axes -- so it loads the whole
-train+val region for one channel into memory at once (matching
-check_autocorrelation.py's field_acf), never the held-out test region.
+independent chunks -- time is one of the FFT axes -- so it loads a whole
+dataset's full recorded length for one channel into memory at once (matching
+check_autocorrelation.py's field_acf), never re16k_t400_5, the model's
+held-out test set (excluded entirely from configs/analysis/split.yaml).
 
 The channel's time-mean field is subtracted first (matching
 check_wavenumber_spectrum.py's u' = u - <u>_t convention -- see its
@@ -45,12 +46,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import yaml
 import zarr
 from matplotlib.colors import LogNorm
 
@@ -60,14 +61,14 @@ from mhd_surrogate.utils.logging_config import setup_logging
 
 log = logging.getLogger(__name__)
 
-DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
+DEFAULT_CONFIG = Path("configs/analysis/split.yaml")
 DEFAULT_OUT_DIR = Path("reports/figures")
 CHANNEL_NAMES = ["u_x", "u_y"]
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument("--dx", type=float, default=None, help="Override spacing along axis 2")
     parser.add_argument("--dy", type=float, default=None, help="Override spacing along axis 3")
@@ -164,7 +165,7 @@ def plot_dispersion(
         s=100,
         label=f"peak: T={peak['period']:.1f}, ky={peak['ky']:.3g}",
     )
-    ax.set_title(f"{name}: {cname} dispersion, ky={ky[ky_idx]:.3g} slice (train+val)")
+    ax.set_title(f"{name}: {cname} dispersion, ky={ky[ky_idx]:.3g} slice")
     ax.set_xlabel("kx")
     ax.set_ylabel("omega (rad/step)")
     ax.legend()
@@ -180,12 +181,12 @@ def plot_dispersion(
 def main() -> None:
     args = parse_args()
     setup_logging(args.log_level)
-    manifest = json.loads(args.manifest.read_text())
-    root = zarr.open_group(store=manifest["config"]["zarr_store"], mode="r")
+    config = yaml.safe_load(args.config.read_text())
+    root = zarr.open_group(store=config["zarr_store"], mode="r")
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    splits = filter_datasets(manifest["splits"], args.dataset)
-    for name, split in splits.items():
+    dataset_names = filter_datasets(config["datasets"], args.dataset)
+    for name in dataset_names:
         arr = root[name]
         if arr.ndim != 4 or arr.shape[1] != len(CHANNEL_NAMES):
             log.warning("skipping %s: expected shape (T, 2, Nx, Ny), got %s", name, arr.shape)
@@ -194,12 +195,12 @@ def main() -> None:
         dx, dy = grid_spacing(arr.shape[2], arr.shape[3])
         dx = args.dx if args.dx is not None else dx
         dy = args.dy if args.dy is not None else dy
-        train_end = split["trainval"][1]
-        print(f"\n=== {name} (dx={dx:.5g}, dy={dy:.5g}, train+val: [0,{train_end})) ===")
+        n_steps = arr.shape[0]
+        print(f"\n=== {name} (dx={dx:.5g}, dy={dy:.5g}, {n_steps} steps) ===")
 
         channel_summary = {}
         for c, cname in enumerate(CHANNEL_NAMES):
-            omega, kx, ky, power = spacetime_spectrum_3d(arr, c, dx, dy, n_steps=train_end)
+            omega, kx, ky, power = spacetime_spectrum_3d(arr, c, dx, dy, n_steps=n_steps)
             peak = peak_wavenumber_frequency(omega, kx, ky, power)
             wavelength_x = 2 * np.pi / abs(peak["kx"]) if peak["kx"] != 0 else float("inf")
             wavelength_y = 2 * np.pi / peak["ky"] if peak["ky"] != 0 else float("inf")

@@ -1,10 +1,8 @@
-import json
-
 import numpy as np
 import pytest
 import zarr
 
-from mhd_surrogate.data.dataset import WindowedDataset, load_dataset, load_full_dataset
+from mhd_surrogate.data.dataset import WindowedDataset, load_full_dataset
 
 
 def test_windowed_dataset_length_and_sample_content():
@@ -54,31 +52,7 @@ def test_windowed_dataset_rejects_region_too_short_for_window_and_horizon():
         WindowedDataset(arr, start=0, end=3, window=4, horizon=1, stride=1)
 
 
-def test_load_dataset_reads_manifest_and_zarr_store(tmp_path):
-    store_path = tmp_path / "store.zarr"
-    root = zarr.open_group(store=str(store_path), mode="w")
-    data = np.arange(10 * 2 * 3 * 4).reshape(10, 2, 3, 4).astype(np.float32)
-    root.create_array("ds0", data=data)
-
-    manifest_path = tmp_path / "manifest.json"
-    manifest = {
-        "config": {"zarr_store": str(store_path)},
-        "splits": {"ds0": {"n_steps": 10, "train": [0, 7], "test": [7, 10]}},
-    }
-    manifest_path.write_text(json.dumps(manifest))
-
-    train_ds = load_dataset(manifest_path, "ds0", "train", window=2, horizon=1, stride=1)
-    test_ds = load_dataset(manifest_path, "ds0", "test", window=2, horizon=1, stride=1)
-
-    assert len(train_ds) == 5  # (7 - 3) // 1 + 1
-    assert len(test_ds) == 1  # (3 - 3) // 1 + 1
-
-    x, y = test_ds[0]
-    np.testing.assert_array_equal(np.asarray(x), data[7:9])
-    np.testing.assert_array_equal(np.asarray(y), data[9:10])
-
-
-def test_load_full_dataset_covers_the_whole_array_ignoring_any_manifest(tmp_path):
+def test_load_full_dataset_covers_the_whole_array(tmp_path):
     store_path = tmp_path / "store.zarr"
     root = zarr.open_group(store=str(store_path), mode="w")
     data = np.arange(10 * 2 * 3 * 4).reshape(10, 2, 3, 4).astype(np.float32)

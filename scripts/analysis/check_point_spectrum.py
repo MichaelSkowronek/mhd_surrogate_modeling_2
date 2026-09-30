@@ -11,8 +11,9 @@ unlike autocorrelation, reads off periods directly as spectral peaks rather
 than inferring them from zero crossings.
 
 For each of a few grid points, computes the FFT of u_x(t) and u_y(t) at that
-point over the train+val region only -- like every scripts/analysis/*.py
-script, this never reads the held-out test region.
+point over each dataset's full recorded length -- like every
+scripts/analysis/*.py script, this never reads re16k_t400_5, the model's
+held-out test set (excluded entirely from configs/analysis/split.yaml).
 
 Two estimators are computed and plotted together: a plain periodogram
 (`power_spectrum`, one FFT over the whole series) and Welch's method
@@ -49,12 +50,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import yaml
 import zarr
 
 from mhd_surrogate.analysis.spectral import (
@@ -68,7 +69,7 @@ from mhd_surrogate.utils.logging_config import setup_logging
 
 log = logging.getLogger(__name__)
 
-DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
+DEFAULT_CONFIG = Path("configs/analysis/split.yaml")
 DEFAULT_OUT_DIR = Path("reports/figures")
 CHANNEL_NAMES = ["u_x", "u_y"]
 DEFAULT_POINTS = "core_mid:500:63,core_downstream:900:63,wall_bottom:900:5,wall_top:900:121"
@@ -76,8 +77,8 @@ N_PEAKS = 3
 # 50% overlap is the standard choice for a Hann window (satisfies the
 # constant-overlap-add condition, and is close to the variance-minimizing
 # overlap for it). 200 resolves periods well below the ~25-40 steps already
-# found, while still leaving several segments (4-6, given this project's
-# ~500-730 step train+val regions) to average over.
+# found, while still leaving several segments (given this project's
+# ~900-1250 step datasets) to average over.
 NPERSEG = 200
 
 
@@ -94,7 +95,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument(
         "--point",
@@ -140,7 +141,7 @@ def plot_point_spectra(
             ax.loglog(2 * np.pi / omega[1:], power[1:], color=colors[c], alpha=0.3, linewidth=1)
             omega, power = spectra[label][cname]["welch"]
             ax.loglog(2 * np.pi / omega[1:], power[1:], color=colors[c], label=f"{cname} (Welch)")
-        ax.set_title(f"{name}: point '{label}' (x={x}, y={y}) temporal spectrum (train+val)")
+        ax.set_title(f"{name}: point '{label}' (x={x}, y={y}) temporal spectrum")
         ax.set_xlabel("period T (snapshot steps)")
         ax.set_ylabel("power spectral density")
         ax.legend()
@@ -158,24 +159,24 @@ def main() -> None:
     setup_logging(args.log_level)
     points = parse_points(",".join(args.points) if args.points else DEFAULT_POINTS)
     noverlap = args.noverlap if args.noverlap is not None else args.nperseg // 2
-    manifest = json.loads(args.manifest.read_text())
-    root = zarr.open_group(store=manifest["config"]["zarr_store"], mode="r")
+    config = yaml.safe_load(args.config.read_text())
+    root = zarr.open_group(store=config["zarr_store"], mode="r")
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    splits = filter_datasets(manifest["splits"], args.dataset)
-    for name, split in splits.items():
+    dataset_names = filter_datasets(config["datasets"], args.dataset)
+    for name in dataset_names:
         arr = root[name]
         if arr.ndim != 4 or arr.shape[1] != len(CHANNEL_NAMES):
             log.warning("skipping %s: expected shape (T, 2, Nx, Ny), got %s", name, arr.shape)
             continue
 
-        train_end = split["trainval"][1]
-        print(f"\n=== {name} (train+val: [0,{train_end})) ===")
+        n_steps = arr.shape[0]
+        print(f"\n=== {name} ({n_steps} steps) ===")
 
         spectra: dict[str, dict[str, dict[str, tuple[np.ndarray, np.ndarray]]]] = {}
         point_summary: dict[str, dict] = {}
         for label, (x, y) in points.items():
-            series = arr[:train_end, :, x, y]  # (train_end, C); a single grid point, tiny read
+            series = arr[:, :, x, y]  # (n_steps, C); a single grid point, tiny read
             print(f"  point '{label}' (x={x}, y={y}):")
             spectra[label] = {}
             channel_summary = {}

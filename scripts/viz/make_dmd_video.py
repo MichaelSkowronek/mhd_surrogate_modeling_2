@@ -32,7 +32,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 from pathlib import Path
 
@@ -43,6 +42,7 @@ matplotlib.rcParams["animation.ffmpeg_path"] = imageio_ffmpeg.get_ffmpeg_exe()
 
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
+import yaml  # noqa: E402
 import zarr  # noqa: E402
 from matplotlib.animation import FFMpegWriter  # noqa: E402
 
@@ -59,7 +59,7 @@ from mhd_surrogate.utils.logging_config import add_log_level_arg, setup_logging 
 
 log = logging.getLogger(__name__)
 
-DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
+DEFAULT_CONFIG = Path("configs/analysis/split.yaml")
 DEFAULT_OUT_DIR = Path("reports/videos")
 CHANNEL_NAMES = ["u_x", "u_y"]
 DEFAULT_RANK = 100
@@ -71,8 +71,8 @@ FALLBACK_FRAMES = 150  # for a non-oscillating (period=inf) mode
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
-    parser.add_argument("--dataset", required=True, help="Dataset name in the split manifest")
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--dataset", required=True, help="Dataset name (must be configured)")
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument("--field", choices=sorted(FIELDS), default="vorticity")
     parser.add_argument("--rank", type=int, default=DEFAULT_RANK, help="SVD truncation rank")
@@ -170,9 +170,13 @@ def render_mode_video(
 def main() -> None:
     args = parse_args()
     setup_logging(args.log_level)
-    manifest = json.loads(args.manifest.read_text())
-    root = zarr.open_group(store=manifest["config"]["zarr_store"], mode="r")
-    split = manifest["splits"][args.dataset]
+    config = yaml.safe_load(args.config.read_text())
+    if args.dataset not in config["datasets"]:
+        raise SystemExit(
+            f"{args.dataset!r} is not a configured dataset (configs/analysis/split.yaml); "
+            "re16k_t400_5 in particular is the model's held-out test set and must never be read"
+        )
+    root = zarr.open_group(store=config["zarr_store"], mode="r")
 
     arr = root[args.dataset]
     if arr.ndim != 4 or arr.shape[1] != len(CHANNEL_NAMES):
@@ -182,17 +186,15 @@ def main() -> None:
     dx = args.dx if args.dx is not None else dx
     dy = args.dy if args.dy is not None else dy
 
-    train_end = split["trainval"][1]
-    log.info(
-        "running DMD on %s (train+val: [0,%d)); this is the expensive part", args.dataset, train_end
-    )
-    data = arr[:train_end].astype(np.float64)
+    n_steps = arr.shape[0]
+    log.info("running DMD on %s (%d steps); this is the expensive part", args.dataset, n_steps)
+    data = arr[:n_steps].astype(np.float64)
     fluctuation = build_dmd_state(data)
     x, xprime = fluctuation[:, :-1], fluctuation[:, 1:]
     eigenvalues, modes, energy_fraction = exact_dmd(x, xprime, rank=args.rank)
     amplitudes = mode_amplitudes(modes, x[:, 0])
     top = dominant_modes(
-        eigenvalues, amplitudes, modes, dt=1.0, n_steps=train_end, n_modes=args.n_modes
+        eigenvalues, amplitudes, modes, dt=1.0, n_steps=n_steps, n_modes=args.n_modes
     )
     log.info("rank %d captures %.1f%% of variance", args.rank, 100 * energy_fraction)
 

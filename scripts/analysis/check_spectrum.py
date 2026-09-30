@@ -1,9 +1,10 @@
-"""Spatial power spectrum of the 2D velocity field, train+val region.
+"""Spatial power spectrum of the 2D velocity field.
 
 Computes 1D power spectra E(k) of u_x and u_y along x (axis 2, streamwise)
 and along y (axis 3), each averaged over the other spatial axis and over
-time, over the train+val region only. Like every scripts/analysis/*.py
-script, this never reads the held-out test region.
+time, over each dataset's full recorded length. Like every
+scripts/analysis/*.py script, this never reads re16k_t400_5, the model's
+held-out test set (excluded entirely from configs/analysis/split.yaml).
 
 The domain is not periodic (inlet region, walls in y), so each line has its
 mean removed and a Hann window applied before the FFT to limit spectral
@@ -24,12 +25,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import yaml
 import zarr
 
 from mhd_surrogate.analysis.summary import add_common_args, filter_datasets, write_summary
@@ -38,14 +39,14 @@ from mhd_surrogate.utils.logging_config import setup_logging
 
 log = logging.getLogger(__name__)
 
-DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
+DEFAULT_CONFIG = Path("configs/analysis/split.yaml")
 DEFAULT_OUT_DIR = Path("reports/figures")
 CHANNEL_NAMES = ["u_x", "u_y"]
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument("--dx", type=float, default=None, help="Override spacing along axis 2")
     parser.add_argument("--dy", type=float, default=None, help="Override spacing along axis 3")
@@ -81,18 +82,19 @@ def spectrum_sum(block: np.ndarray, axis: int, spacing: float) -> np.ndarray:
 
 
 def compute_spectrum(
-    arr, train_end: int, dx: float, dy: float, chunk_t: int
+    arr, n_steps: int, dx: float, dy: float, chunk_t: int
 ) -> dict[str, np.ndarray]:
-    """Mean spectrum per direction over the train+val region: {direction: (C, K)}.
+    """Mean spectrum per direction over `arr[:n_steps]`: {direction: (C, K)}.
 
-    Reads `arr` in chunks bounded by `train_end`; never reads at or past it.
+    Reads `arr` in chunks bounded by `n_steps` rather than loading it all at
+    once.
     """
     directions = {"x": (2, dx), "y": (3, dy)}
     sums = {d: 0.0 for d in directions}
     count = 0
 
-    for start in range(0, train_end, chunk_t):
-        end = min(start + chunk_t, train_end)
+    for start in range(0, n_steps, chunk_t):
+        end = min(start + chunk_t, n_steps)
         block = arr[start:end].astype(np.float64)
         for direction, (axis, spacing) in directions.items():
             sums[direction] = sums[direction] + spectrum_sum(block, axis, spacing)
@@ -135,7 +137,7 @@ def plot_spectrum(
     for ax, (direction, k) in zip(np.atleast_1d(axes), k_by_direction.items()):
         for c, cname in enumerate(CHANNEL_NAMES):
             ax.loglog(k[1:], spectrum[direction][c][1:], label=cname)
-        ax.set_title(f"{name}: power spectrum along {direction} (train+val)")
+        ax.set_title(f"{name}: power spectrum along {direction}")
         ax.set_xlabel("angular wavenumber k")
         ax.set_ylabel("E(k)")
         ax.legend()
@@ -151,12 +153,12 @@ def plot_spectrum(
 def main() -> None:
     args = parse_args()
     setup_logging(args.log_level)
-    manifest = json.loads(args.manifest.read_text())
-    root = zarr.open_group(store=manifest["config"]["zarr_store"], mode="r")
+    config = yaml.safe_load(args.config.read_text())
+    root = zarr.open_group(store=config["zarr_store"], mode="r")
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    splits = filter_datasets(manifest["splits"], args.dataset)
-    for name, split in splits.items():
+    dataset_names = filter_datasets(config["datasets"], args.dataset)
+    for name in dataset_names:
         arr = root[name]
         if arr.ndim != 4 or arr.shape[1] != len(CHANNEL_NAMES):
             log.warning("skipping %s: expected shape (T, 2, Nx, Ny), got %s", name, arr.shape)
@@ -165,15 +167,15 @@ def main() -> None:
         dx, dy = grid_spacing(arr.shape[2], arr.shape[3])
         dx = args.dx if args.dx is not None else dx
         dy = args.dy if args.dy is not None else dy
-        train_end = split["trainval"][1]
+        n_steps = arr.shape[0]
 
-        spectrum = compute_spectrum(arr, train_end, dx, dy, args.chunk_t)
+        spectrum = compute_spectrum(arr, n_steps, dx, dy, args.chunk_t)
         k_by_direction = {
             "x": wavenumbers(arr.shape[2], dx),
             "y": wavenumbers(arr.shape[3], dy),
         }
 
-        print(f"\n=== {name} (dx={dx:.5g}, dy={dy:.5g}, train+val: [0,{train_end})) ===")
+        print(f"\n=== {name} (dx={dx:.5g}, dy={dy:.5g}, {n_steps} steps) ===")
         spectrum_summary = print_summary(spectrum, k_by_direction)
         print(f"  plot: {plot_spectrum(name, spectrum, k_by_direction, args.out_dir)}")
 

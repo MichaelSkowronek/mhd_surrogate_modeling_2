@@ -14,10 +14,11 @@ DNS grid, so y-derivatives are piecewise-constant approximations.
 
 Per time step it reports the RMS divergence and that RMS normalized by the
 RMS of the two derivative terms (a scale-free measure: ~0 for a
-divergence-free field, order 1 when the terms do not cancel), over the
-train+val region only -- like every scripts/analysis/*.py script, this never
-reads the held-out test region. It plots both over time, plus divergence
-maps at the first, middle and last time step.
+divergence-free field, order 1 when the terms do not cancel), over each
+dataset's full recorded length -- like every scripts/analysis/*.py script,
+this never reads re16k_t400_5, the model's held-out test set (excluded
+entirely from configs/analysis/split.yaml). It plots both over time, plus
+divergence maps at the first, middle and last time step.
 
 Usage:
     uv run scripts/analysis/check_divergence.py
@@ -27,12 +28,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import yaml
 import zarr
 
 from mhd_surrogate.analysis.summary import add_common_args, filter_datasets, write_summary
@@ -41,13 +42,13 @@ from mhd_surrogate.utils.logging_config import setup_logging
 
 log = logging.getLogger(__name__)
 
-DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
+DEFAULT_CONFIG = Path("configs/analysis/split.yaml")
 DEFAULT_OUT_DIR = Path("reports/figures")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument("--dx", type=float, default=None, help="Override spacing along axis 2")
     parser.add_argument("--dy", type=float, default=None, help="Override spacing along axis 3")
@@ -114,7 +115,7 @@ def plot_divergence_over_time(
     ]
     for (label, values), ax in zip(panels, axes[:, 0]):
         ax.plot(values)
-        ax.set_title(f"{name}: {label} over time (train+val)")
+        ax.set_title(f"{name}: {label} over time")
         ax.set_xlabel("time step")
 
     fig.tight_layout()
@@ -144,27 +145,27 @@ def plot_divergence_maps(name: str, snapshots: dict[int, np.ndarray], out_dir: P
 def main() -> None:
     args = parse_args()
     setup_logging(args.log_level)
-    manifest = json.loads(args.manifest.read_text())
-    root = zarr.open_group(store=manifest["config"]["zarr_store"], mode="r")
+    config = yaml.safe_load(args.config.read_text())
+    root = zarr.open_group(store=config["zarr_store"], mode="r")
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    splits = filter_datasets(manifest["splits"], args.dataset)
-    for name, split in splits.items():
+    dataset_names = filter_datasets(config["datasets"], args.dataset)
+    for name in dataset_names:
         arr = root[name]
         if arr.ndim != 4 or arr.shape[1] != 2:
             log.warning("skipping %s: expected shape (T, 2, Nx, Ny), got %s", name, arr.shape)
             continue
 
-        train_end = split["trainval"][1]
-        snapshot_steps = sorted({0, train_end // 2, train_end - 1})
+        n_steps = arr.shape[0]
+        snapshot_steps = sorted({0, n_steps // 2, n_steps - 1})
         dx, dy = grid_spacing(arr.shape[2], arr.shape[3])
         dx = args.dx if args.dx is not None else dx
         dy = args.dy if args.dy is not None else dy
         rms_div, rel_div, snapshots = divergence_stats(
-            arr, dx, dy, args.chunk_t, snapshot_steps, n_steps=train_end
+            arr, dx, dy, args.chunk_t, snapshot_steps, n_steps=n_steps
         )
 
-        print(f"\n=== {name} (dx={dx:.5g}, dy={dy:.5g}, train+val: [0,{train_end})) ===")
+        print(f"\n=== {name} (dx={dx:.5g}, dy={dy:.5g}, {n_steps} steps) ===")
         print(
             f"  RMS divergence mean={rms_div.mean():.4g} max={rms_div.max():.4g} | "
             f"normalized mean={rel_div.mean():.4g} max={rel_div.max():.4g}"
