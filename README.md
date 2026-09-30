@@ -8,12 +8,15 @@ flow. Working with a 2D slice is itself a research hypothesis: the imposed
 magnetic field drives the flow toward a near-uniform state along one of the
 three spatial axes, so a 2D slice is treated as a reasonable stand-in for the
 full 3D field. There are 9 datasets (`re16k_t400_0.npy` through
-`re16k_t400_10.npy`, excluding two known-bad ones; same setup, different
-simulation parameters). The analysis suite (see "Running the suite across
-all datasets") now runs across all 9, to support the eventual decision on
-final test set size and which dataset(s) to train on; the training config
-(`configs/data/`) still targets just `re16k_t400_0` for now, since that
-decision hasn't been made yet.
+`re16k_t400_10.npy`, excluding two known-bad ones): the same DNS run
+(Re=16000 for all nine) restarted, with enough small randomness in each
+restart that the nine are distinct, not identical, realizations of the
+same regime. The analysis suite (see "Running the suite across all
+datasets") now runs across all 9, to support the eventual decision on final
+test set size and which dataset(s) to train on; the training config
+(`configs/data/`) still targets just `re16k_t400_0` for now -- the plan is
+to get a surrogate working on one dataset first, before training across
+multiple (or all) of them for robustness across realizations.
 
 ## Status
 
