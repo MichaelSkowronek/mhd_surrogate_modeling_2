@@ -95,6 +95,13 @@ conventions below; it shifts which tools are worth reaching for at all.
   (`parallel.SCRIPTS_DIR`'s old `parents[3]`-from-`__file__` lookup worked
   under an editable install but silently broke non-editably, inside the
   image). Don't remove either on the assumption they're the same check.
+- `tests.yml`'s pytest run is coverage-gated at 95% (`pyproject.toml`'s
+  `[tool.coverage]`), scoped to `src/mhd_surrogate/` only — not `scripts/`,
+  where CLI/argparse/plotting glue (deliberately untested, per above) would
+  make a coverage number meaningless. Not in pytest's default `addopts`, so
+  a local `pytest tests/foo.py` subset run stays fast and isn't gated on
+  partial coverage; only the full-suite CI run is. If new `src/` code drops
+  coverage below 95%, add the missing test rather than lowering the gate.
 - See the README's "Tests" section for the full rationale and examples.
 
 ## Logging
