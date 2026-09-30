@@ -34,6 +34,7 @@ SCRIPTS = [
     "check_vorticity.py",
     "check_spectrum.py",
     "check_autocorrelation.py",
+    "check_stationarity.py",
 ]
 DEFAULT_MANIFEST = Path("data/processed/splits/split_manifest.json")
 # Subdirectory of scripts/ holding the SCRIPTS above; --script takes bare filenames.
@@ -105,7 +106,7 @@ def build_comparison_table(dataset_names: list[str], summary_dir: Path) -> list[
         split = summaries.get("check_split")
         if split:
             row["n_steps"] = split["n_steps"]
-            row["trainval_steps"] = split["train_range"][1] - split["train_range"][0]
+            row["trainval_steps"] = split["trainval_range"][1] - split["trainval_range"][0]
             row["test_steps"] = split["test_range"][1] - split["test_range"][0]
 
         vorticity = summaries.get("check_vorticity")
@@ -121,6 +122,12 @@ def build_comparison_table(dataset_names: list[str], summary_dir: Path) -> list[
             row["ux_tau_int"] = round(autocorr["field"]["u_x"]["tau_int"], 2)
             n_eff = autocorr["field"]["u_x"]["n_eff"]
             row["ux_n_eff"] = round(n_eff, 1) if n_eff is not None else None
+
+        stationarity = summaries.get("check_stationarity")
+        if stationarity:
+            before = stationarity["first"]["u_x"]["mean"]
+            after = stationarity["second"]["u_x"]["mean"]
+            row["ux_mean_half_change"] = round((after - before) / abs(before), 4)
 
         rows.append(row)
     return rows

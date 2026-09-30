@@ -202,10 +202,11 @@ part of the dataset.
   is the same unit as the snapshot spacing used elsewhere in this README
   (autocorrelation lags, `buffer_steps`) is not known — it may be the DNS's
   internal integration steps, which are not necessarily saved 1:1 with
-  snapshots. This is consistent with the stationarity found in the train/test
-  split and autocorrelation checks: no early-time transient is visible,
-  though a slower ~500-700 step oscillation is present (see Train/test
-  split).
+  snapshots. This is consistent with the "Stationarity check" section below,
+  which directly compares the first and second half of train+val and finds
+  no meaningful shift in mean or dominant period across all 9 datasets --
+  no early-time transient is visible, though a slow, small drift in
+  variance is (see that section for the full picture).
 
 ### Grid
 
@@ -511,6 +512,57 @@ For `re16k_t400_0`'s train+val region (729 steps):
 Only temporal autocorrelation is covered; spatial autocorrelation (integral
 length scales) and the enstrophy autocorrelation are not.
 
+## Stationarity check
+
+```bash
+uv run scripts/analysis/check_stationarity.py
+uv run scripts/analysis/check_stationarity.py --dataset re16k_t400_0
+```
+
+Every method below (Welch spectra, DMD, POD, SPOD) implicitly assumes the
+process is statistically stationary over the analysis window -- Welch
+averages segments together, DMD fits one linear operator for the whole
+window, SPOD averages cross-spectral density across segments -- but none of
+them test that assumption directly. The DNS discards a 400-step warm-up
+(spin-up) phase before the saved series begins (see "Origin: from the 3D
+DNS to this dataset" above), so a strong startup transient wasn't expected
+in what's recorded, but that's a design choice made upstream of this
+project, not something verified against the actual data here until now.
+
+This is a lightweight, direct check: split train+val into two contiguous
+halves and compare, per channel, the spatial mean/std, the kinetic energy
+proxy, and the domain-mean series' own dominant period (a plain periodogram
+per half -- each half is already short, and Welch would need to shrink
+segments further to fit). A meaningful shift between halves would be direct
+evidence of non-stationarity within the window.
+
+Across all 9 datasets, the mean is flat: `u_x`'s half-to-half change is
+under 0.3% everywhere, and `u_y`'s (reported as an absolute delta, not a
+percentage, since its mean is ~0 by the channel's own symmetry -- a
+relative change there is a near-zero-denominator artifact, not a
+meaningful number) stays at the ~1e-4 level in both halves. `u_y`'s
+dominant period -- the meaningful one to check, since `u_y` (unlike `u_x`)
+has a sharp, isolated spectral peak to begin with -- stays firmly in the
+already-established ~24-40 step range in both halves of every dataset,
+several nearly unchanged (`re16k_t400_10`: 29.5 -> 29.5, `re16k_t400_9`:
+34.6 -> 34.7): direct evidence the dominant oscillation itself is a stable,
+recurring feature, not an artifact of analyzing the whole window at once.
+(`u_x`'s own "dominant period" swings much more between halves, e.g.
+51.8 -> 207.0 for `re16k_t400_0` -- expected, not new evidence of
+non-stationarity, since `u_x`'s spectrum has no clean isolated peak to
+begin with, a broad low bump as already found in the domain-mean spectrum
+section below; a short periodogram on a peakless spectrum bounces around
+regardless of stationarity.)
+
+One honest secondary finding: `std`/energy shows a small, fairly consistent
+*increase* from first to second half for `u_x` in 8 of 9 datasets
+(+0.8% to +3.7%; `re16k_t400_9` is the one decrease, -2.2%), and a more
+variable one for `u_y` (-3.3% to +21.4%, `re16k_t400_10` notably higher
+than the rest). Small enough not to undermine the spectral/DMD/POD/SPOD
+methods' stationarity assumption, but a real, small, mostly-consistent
+drift in variance worth keeping in mind rather than treating the question
+as fully closed.
+
 ## Frequency analysis
 
 The autocorrelation check above found a persistent quasi-periodic
@@ -786,12 +838,12 @@ test split" section above for the resulting per-region ranges.
 through `re16k_t400_10`, excluding the two known-bad ones), so
 `uv run scripts/data/split_data.py` builds a manifest covering all of them.
 
-Each of the five `check_*.py` scripts accepts `--dataset NAME` (repeatable;
+Each of the six `check_*.py` scripts accepts `--dataset NAME` (repeatable;
 default: every dataset in the manifest) and now writes a JSON summary of its
 key numbers per dataset to `reports/summaries/<dataset>__<script>.json`
 (gitignored, like the figures), in addition to its existing printed output
 and plots — this is what makes cross-dataset comparison possible instead of
-having to read 45 separate walls of text.
+having to read 54 separate walls of text.
 
 ```bash
 uv run scripts/analysis/run_all_checks.py
@@ -799,12 +851,13 @@ uv run scripts/analysis/run_all_checks.py --dataset re16k_t400_0 --dataset re16k
 uv run scripts/analysis/run_all_checks.py --script check_split.py --workers 4
 ```
 
-`scripts/analysis/run_all_checks.py` runs every (script, dataset) pair — 45 by
+`scripts/analysis/run_all_checks.py` runs every (script, dataset) pair — 54 by
 default — and builds a comparison table (printed and written to
 `reports/summaries/comparison.csv`) from the resulting JSON summaries, with
 one row per dataset and a handful of headline train+val numbers (step
 counts, divergence residual, enstrophy, the `u_x` field decorrelation time
-and effective sample size). The full detail stays in the individual JSON
+and effective sample size, and the `u_x` mean's half-to-half change from
+the stationarity check). The full detail stays in the individual JSON
 files; the table is meant for a quick side-by-side look, not the final word.
 
 **Parallelization:** each (script, dataset) pair is independent, so this
@@ -812,12 +865,13 @@ dispatches them as separate `python check_*.py --dataset X` subprocesses via
 `mhd_surrogate.utils.parallel` (a thread pool where the threads just block on
 `subprocess.run`; the real numpy/FFT work happens in the child processes, on
 separate cores, with full process isolation — also used by
-`make_all_videos.py` below). All 45 jobs (9 datasets, on the train+val
+`make_all_videos.py` below). All 54 jobs (9 datasets, on the train+val
 region only -- now a fixed step count per dataset rather than a fraction of
-it, see "Train / val / test split" above) completed in ~70s wall time on a
+it, see "Train / val / test split" above) completed in ~74s wall time on a
 12-core machine, down from the ~113s measured pre-overhaul against the
-full-length arrays — consistent with reading and processing noticeably less
-data per job. A distributed
+full-length arrays -- the added check_stationarity.py job is cheap
+(~6-8s/dataset, similar to check_split.py) and barely moved the total.
+A distributed
 framework like Ray was considered but is not warranted for a workload this
 size (a minute, one machine); it would earn its keep once training actually
 needs a cluster, distributed GPUs, or data beyond single-machine scale.

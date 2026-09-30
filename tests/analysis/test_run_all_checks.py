@@ -38,7 +38,9 @@ def test_build_comparison_table_survives_a_partial_run(tmp_path):
     """
     full = {
         "n_steps": 100,
-        "train_range": [0, 80],
+        "trainval_range": [0, 80],
+        "train_range": [0, 60],
+        "val_range": [60, 80],
         "test_range": [80, 100],
         "channels": {"u_x": {"flagged": False}},
     }
