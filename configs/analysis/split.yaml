@@ -27,13 +27,16 @@
 
 zarr_store: data/processed/re16k_t400.zarr
 
+# re16k_t400_5 is deliberately excluded: it's the dataset-level held-out
+# test set for multi-dataset model training (configs/data/re16k.yaml), and
+# must never be read by any script, including this project's own analysis
+# suite, from here on.
 datasets:
   - re16k_t400_0
   - re16k_t400_1
   - re16k_t400_2
   - re16k_t400_3
   - re16k_t400_4
-  - re16k_t400_5
   - re16k_t400_6
   - re16k_t400_9
   - re16k_t400_10
