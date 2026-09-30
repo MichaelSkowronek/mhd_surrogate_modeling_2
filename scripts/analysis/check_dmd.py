@@ -11,13 +11,26 @@ growing nor decaying) at the same frequency check_spacetime_spectrum.py
 already found; this is a genuinely different method arriving at the same
 answer, not another FFT variant.
 
+Modes are selected by "power" (amplitude at the first snapshot, the
+standard DMD convention), but printed sorted by "rms_power" (root-mean-
+square power *over the whole recorded window*) instead: a fast-decaying
+mode can have high power yet vanish within a handful of steps, contributing
+far less to the actual recorded series than a lower-power but near-neutral
+one that persists throughout -- see dominant_modes's docstring for the
+exact definition, and this project's own re16k_t400_0 as a real example
+(the top-power mode's rms_power is roughly a quarter of the second-ranked
+mode's, despite having higher power).
+
 Uses "exact DMD" (Tu et al., 2014), the standard, numerically robust
 formulation. `u_x` and `u_y` are stacked into one state vector per
 snapshot (DMD models the joint dynamics of the whole vector field, not each
 channel independently), and the channel's time-mean field is subtracted
 first (matching check_wavenumber_spectrum.py's u' = u - <u>_t convention),
 so the spectrum isn't dominated by a large near-unit eigenvalue for the
-persistent mean flow.
+persistent mean flow. The DMD machinery itself
+(`build_dmd_state`/`exact_dmd`/`mode_amplitudes`/`dominant_modes`/
+`reconstruct_frames`) lives in `src/mhd_surrogate/analysis/dmd.py`, shared
+with `scripts/viz/make_dmd_video.py`.
 
 Like check_spacetime_spectrum.py, this loads the whole train+val region
 into memory at once (DMD needs the full snapshot sequence for its SVD, not
@@ -49,6 +62,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import zarr
 
+from mhd_surrogate.analysis.dmd import build_dmd_state, dominant_modes, exact_dmd, mode_amplitudes
 from mhd_surrogate.analysis.summary import add_common_args, filter_datasets, write_summary
 from mhd_surrogate.utils.logging_config import setup_logging
 
@@ -81,102 +95,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def exact_dmd(
-    x: np.ndarray, xprime: np.ndarray, rank: int | None = None
-) -> tuple[np.ndarray, np.ndarray, float]:
-    """Exact DMD (Tu et al., 2014): eigenvalues and spatial modes of the
-    best-fit linear operator A satisfying `xprime ~= A @ x`, without forming
-    A explicitly (the state dimension here is far larger than the number of
-    snapshots, so A itself would be too large to form or even fit in
-    memory -- only its action, via a rank-r SVD-based reduction, is
-    computed).
-
-    `x`, `xprime` have shape (state_dim, n_snapshots): consecutive-snapshot
-    pairs, `x[:, i] -> xprime[:, i]` one step later. `rank` truncates the
-    SVD of `x` (default: an automatically-determined numerical rank --
-    singular values below `s[0] * max(x.shape) * eps` are dropped, matching
-    `numpy.linalg.matrix_rank`'s own convention. This only avoids dividing
-    by numerically-negligible singular values, which is unconditionally
-    unsafe -- e.g. exactly-low-rank data, such as a single spatial pattern
-    or few superposed ones, otherwise leaves near-zero values in `s_r` that
-    blow up `1/s_r` into numerical garbage. It is not, by itself, denoising:
-    pass an explicit smaller `rank` to actually filter out noise-dominated
-    small-but-not-negligible singular values, standard DMD practice for
-    real, noisy data).
-
-    Returns (eigenvalues, modes, energy_fraction): eigenvalues (complex,
-    shape (r,)) are the discrete-time DMD eigenvalues (`lambda =
-    exp(mu*dt)` for the continuous-time rate `mu`); modes (complex, shape
-    (state_dim, r)) are the corresponding spatial mode shapes, each defined
-    only up to an arbitrary complex scale/phase; energy_fraction is the
-    share of `x`'s variance the rank-r truncation retains.
-    """
-    u, s, vh = np.linalg.svd(x, full_matrices=False)
-    if rank is None:
-        tol = max(x.shape) * np.finfo(s.dtype).eps
-        r = int(np.count_nonzero(s > s[0] * tol))
-    else:
-        r = min(rank, s.shape[0])
-    energy_fraction = float((s[:r] ** 2).sum() / (s**2).sum())
-    u_r, s_r, v_r = u[:, :r], s[:r], vh[:r].conj().T
-
-    a_tilde = u_r.conj().T @ xprime @ v_r @ np.diag(1.0 / s_r)
-    eigenvalues, w = np.linalg.eig(a_tilde)
-    modes = xprime @ v_r @ np.diag(1.0 / s_r) @ w
-    return eigenvalues, modes, energy_fraction
-
-
-def mode_amplitudes(modes: np.ndarray, x0: np.ndarray) -> np.ndarray:
-    """Least-squares amplitude of each DMD mode fitting the first snapshot
-    (`x0 ~= modes @ amplitudes`), the standard DMD mode-amplitude convention.
-    """
-    amplitudes, *_ = np.linalg.lstsq(modes, x0, rcond=None)
-    return amplitudes
-
-
-def dominant_modes(
-    eigenvalues: np.ndarray,
-    amplitudes: np.ndarray,
-    modes: np.ndarray,
-    dt: float,
-    n_modes: int,
-) -> list[dict]:
-    """Top `n_modes` DMD modes ranked by `|amplitude| * ||mode||` ("power"),
-    deduplicating complex-conjugate eigenvalue pairs -- which both
-    represent the same real oscillation -- down to one entry each.
-
-    For a real input, complex eigenvalues always occur in exact conjugate
-    pairs (same growth rate, opposite-signed frequency): keeping only
-    `frequency >= 0` keeps exactly one representative of each pair, plus
-    every purely real eigenvalue (frequency exactly 0) once.
-
-    Returns a list of {"mode_index", "frequency", "growth_rate", "period",
-    "amplitude", "power"}, continuous-time (`mu = log(eigenvalue) / dt`):
-    frequency = Im(mu) in radians/step, growth_rate = Re(mu) per step
-    (positive: growing, negative: decaying, ~0: a sustained
-    oscillation/steady structure), period = 2*pi / frequency (inf if ~0).
-    """
-    mu = np.log(eigenvalues) / dt
-    keep = np.flatnonzero(mu.imag >= 0)
-    power = np.abs(amplitudes[keep]) * np.linalg.norm(modes[:, keep], axis=0)
-    order = keep[np.argsort(power)[::-1]][:n_modes]
-
-    result = []
-    for i in order:
-        frequency = float(mu[i].imag)
-        result.append(
-            {
-                "mode_index": int(i),
-                "frequency": frequency,
-                "growth_rate": float(mu[i].real),
-                "period": 2 * np.pi / frequency if frequency != 0 else float("inf"),
-                "amplitude": complex(amplitudes[i]),
-                "power": float(np.abs(amplitudes[i]) * np.linalg.norm(modes[:, i])),
-            }
-        )
-    return result
-
-
 def plot_eigenvalue_spectrum(name: str, mu: np.ndarray, power: np.ndarray, out_dir: Path) -> Path:
     """Continuous-time DMD spectrum: frequency vs. growth rate, colored by
     each mode's power. Above the growth_rate=0 line: growing; below:
@@ -199,9 +117,13 @@ def plot_eigenvalue_spectrum(name: str, mu: np.ndarray, power: np.ndarray, out_d
 def plot_mode_shapes(
     name: str, top: list[dict], modes: np.ndarray, nx: int, ny: int, out_dir: Path
 ) -> Path:
-    oscillating = [m for m in top if m["frequency"] != 0][:2]
+    # Selected by rms_power, not power: a high-power-but-fast-decaying mode
+    # can matter far less to the recorded series than a lower-power but
+    # persistent one -- see dominant_modes's docstring.
+    by_rms = sorted(top, key=lambda m: m["rms_power"], reverse=True)
+    oscillating = [m for m in by_rms if m["frequency"] != 0][:2]
     if not oscillating:
-        oscillating = top[:1]
+        oscillating = by_rms[:1]
 
     fig, axes = plt.subplots(len(oscillating), 2, figsize=(12, 5 * len(oscillating)), squeeze=False)
     for row, m in zip(axes, oscillating):
@@ -236,23 +158,29 @@ def main() -> None:
         train_end = split["train"][1]
         nx, ny = arr.shape[2], arr.shape[3]
         data = arr[:train_end].astype(np.float64)  # (T, 2, Nx, Ny)
-        state = data.reshape(train_end, -1)  # (T, state_dim), channels+space flattened
-        fluctuation = (state - state.mean(axis=0)).T  # (state_dim, T)
+        fluctuation = build_dmd_state(data)  # (state_dim, T)
         x, xprime = fluctuation[:, :-1], fluctuation[:, 1:]
 
         eigenvalues, modes, energy_fraction = exact_dmd(x, xprime, rank=args.rank)
         amplitudes = mode_amplitudes(modes, x[:, 0])
-        top = dominant_modes(eigenvalues, amplitudes, modes, dt=1.0, n_modes=args.n_modes)
+        top = dominant_modes(
+            eigenvalues, amplitudes, modes, dt=1.0, n_steps=train_end, n_modes=args.n_modes
+        )
 
         print(
             f"\n=== {name} (train+val: [0,{train_end}), rank {args.rank} "
             f"captures {energy_fraction:.1%} of variance) ==="
         )
-        for m in top:
+        # Selection above is by power (the standard DMD convention, at the
+        # first snapshot); displayed here sorted by rms_power (how much a
+        # mode actually persists across the recorded window) instead, since
+        # those two can disagree sharply -- see dominant_modes's docstring.
+        for m in sorted(top, key=lambda m: m["rms_power"], reverse=True):
             print(
                 f"  mode {m['mode_index']}: period={m['period']:.1f} "
                 f"(freq={m['frequency']:.3g} rad/step), "
-                f"growth_rate={m['growth_rate']:.3g}/step, power={m['power']:.3g}"
+                f"growth_rate={m['growth_rate']:.3g}/step, "
+                f"power={m['power']:.3g} (rms over window: {m['rms_power']:.3g})"
             )
 
         mu_all = np.log(eigenvalues) / 1.0

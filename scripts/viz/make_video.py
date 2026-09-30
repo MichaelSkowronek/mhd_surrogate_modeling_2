@@ -33,7 +33,7 @@ import numpy as np  # noqa: E402
 import zarr  # noqa: E402
 from matplotlib.animation import FFMpegWriter  # noqa: E402
 
-from mhd_surrogate.analysis.fields import vorticity as compute_vorticity  # noqa: E402
+from mhd_surrogate.analysis.fields import FIELDS, compute_field  # noqa: E402
 from mhd_surrogate.data.grid import grid_spacing  # noqa: E402
 from mhd_surrogate.utils.logging_config import add_log_level_arg, setup_logging  # noqa: E402
 
@@ -41,12 +41,6 @@ log = logging.getLogger(__name__)
 
 DEFAULT_STORE = Path("data/processed/re16k_t400.zarr")
 DEFAULT_OUT_DIR = Path("reports/videos")
-FIELDS = {
-    "vorticity": {"cmap": "RdBu_r", "symmetric": True},
-    "u_x": {"cmap": "viridis", "symmetric": False},
-    "u_y": {"cmap": "viridis", "symmetric": False},
-    "speed": {"cmap": "viridis", "symmetric": False},
-}
 
 
 def parse_args() -> argparse.Namespace:
@@ -81,19 +75,6 @@ def parse_args() -> argparse.Namespace:
     )
     add_log_level_arg(parser)
     return parser.parse_args()
-
-
-def compute_field(block: np.ndarray, field: str, dx: float, dy: float) -> np.ndarray:
-    """`block` is (t, 2, Nx, Ny); returns (t, Nx, Ny)."""
-    if field == "vorticity":
-        return compute_vorticity(block, dx, dy)
-    if field == "u_x":
-        return block[:, 0]
-    if field == "u_y":
-        return block[:, 1]
-    if field == "speed":
-        return np.sqrt(block[:, 0] ** 2 + block[:, 1] ** 2)
-    raise ValueError(f"unknown field: {field}")
 
 
 def color_limits(arr, steps: np.ndarray, field: str, dx: float, dy: float) -> tuple[float, float]:
