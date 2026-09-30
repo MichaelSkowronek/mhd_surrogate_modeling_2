@@ -1,7 +1,12 @@
 import numpy as np
 import pytest
 
-from mhd_surrogate.analysis.spectral import dominant_periods, power_spectrum, welch_spectrum
+from mhd_surrogate.analysis.spectral import (
+    dominant_periods,
+    format_peaks,
+    power_spectrum,
+    welch_spectrum,
+)
 
 
 def test_power_spectrum_recovers_amplitude_and_period_of_a_sine():
@@ -100,3 +105,15 @@ def test_welch_spectrum_rejects_noverlap_not_less_than_nperseg():
 def test_welch_spectrum_rejects_series_shorter_than_nperseg():
     with pytest.raises(ValueError):
         welch_spectrum(np.zeros(30), nperseg=50, noverlap=0)
+
+
+def test_format_peaks_formats_period_and_power_fraction():
+    peaks = [
+        {"period": 24.567, "omega": 0.25, "power_fraction": 0.314},
+        {"period": 8.0, "omega": 0.9, "power_fraction": 0.05},
+    ]
+    assert format_peaks(peaks) == "T=24.6 (31.4%), T=8.0 (5.0%)"
+
+
+def test_format_peaks_empty_list():
+    assert format_peaks([]) == ""

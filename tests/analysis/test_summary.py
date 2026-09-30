@@ -57,3 +57,8 @@ def test_write_summary_creates_output_directory(tmp_path):
     out_dir = tmp_path / "nested" / "summaries"
     path = write_summary("ds0", "check_x", {}, out_dir=out_dir)
     assert path.exists()
+
+
+def test_write_summary_rejects_a_genuinely_unsupported_type(tmp_path):
+    with pytest.raises(TypeError, match="not JSON serializable"):
+        write_summary("ds0", "check_x", {"bad": {1, 2, 3}}, out_dir=tmp_path)
