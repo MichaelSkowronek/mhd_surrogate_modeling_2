@@ -31,6 +31,7 @@ from omegaconf import DictConfig, OmegaConf
 import mlflow
 from mhd_surrogate.data.dataset import load_full_dataset
 from mhd_surrogate.data.normalization import NormalizationStats, Normalizer
+from mhd_surrogate.data.versioning import data_provenance
 from mhd_surrogate.training.tracking import tracked_run
 
 log = logging.getLogger(__name__)
@@ -53,6 +54,15 @@ def main(cfg: DictConfig) -> None:
     with tracked_run(
         cfg.mlflow.tracking_uri, cfg.mlflow.experiment_name, resolved, log_file=log_file
     ):
+        # Which data/stats version this run was started against: the hashes
+        # dvc.lock pins, as params (searchable in the UI), plus the lock and
+        # stats as artifacts. Keeping disk in sync with the lock is `dvc
+        # repro`'s job, not checked here.
+        provenance = {f"data_version.{k}": v for k, v in data_provenance().items()}
+        mlflow.log_params(provenance)
+        mlflow.log_artifact("dvc.lock")
+        mlflow.log_artifact(cfg.normalization.stats_path)
+
         root = zarr.open_group(store=cfg.data.zarr_store, mode="r")
         stats_path = Path(cfg.normalization.stats_path)
         if not stats_path.exists():

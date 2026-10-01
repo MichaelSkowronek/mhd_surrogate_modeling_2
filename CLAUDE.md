@@ -53,6 +53,28 @@ conventions below; it shifts which tools are worth reaching for at all.
   (the earlier per-dataset trailing split it replaced, and why) and
   rationale.
 
+## Data versioning
+
+- The raw `.npy` files are versioned with DVC (`data/raw.dvc`); the data
+  pipeline is `dvc.yaml` (raw -> zarr -> normalization stats), run with
+  `uv run dvc repro`. Don't rebuild the zarr or the stats by running the
+  scripts by hand and leave `dvc.lock` out of date: a new pipeline step or
+  dependency goes in `dvc.yaml`, and `dvc.lock` is committed with the change
+  that produced it.
+- The zarr store stays `cache: false` (a regenerable ~9 GB derivative, not
+  stored in DVC's cache or the remote). Only the raw data and small outputs
+  like the stats file are cached and pushed.
+- The test dataset rule applies to the pipeline too: no stage may read
+  `re16k_t400_5`, and `compute_stats` reads `train_datasets` only. DVC moving
+  the raw directory's bytes (it includes that file) is versioning, not
+  reading.
+- Training entry points log the data version they were started against
+  (`data_provenance`'s `dvc.lock` hashes as MLflow params, plus `dvc.lock`
+  and the stats file as artifacts), as `train.py` does. They don't verify it
+  against disk: staying in sync is the workflow's job (`dvc repro`), and an
+  in-script check was deliberately dropped (see the README).
+- See the README's "Data versioning (DVC)" section for the full rationale.
+
 ## Docker
 
 - The project is containerized (`Dockerfile`, `docker-compose.yml`). Keep
