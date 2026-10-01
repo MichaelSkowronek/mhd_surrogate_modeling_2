@@ -117,6 +117,15 @@ conventions below; it shifts which tools are worth reaching for at all.
   alone) — every third-party dependency inherits from it and leaks internal
   logging as noise. Set the level on this project's own loggers instead
   (`setup_logging` already does this).
+- Training metrics (loss, LR, grad norm, throughput) go to MLflow via
+  `mlflow.log_metrics(..., step=...)`, never into log files or `print`; the
+  log file holds events (checkpoint saved, resumed from, warnings,
+  tracebacks). Training entry points use `training/tracking.py`'s
+  `tracked_run` (uploads the per-run log file even on a crash) and raise
+  `DivergenceError` on NaN/blown-up loss, and they disable Hydra's own job
+  logging (`hydra/job_logging: none`) in favor of `setup_logging(...,
+  log_file=...)`; otherwise Hydra's root-level INFO handler leaks
+  third-party logging.
 - See the README's "Logging" section for the full rationale.
 
 ## Git workflow
