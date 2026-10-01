@@ -31,18 +31,17 @@ from omegaconf import DictConfig, OmegaConf
 import mlflow
 from mhd_surrogate.data.dataset import load_full_dataset
 from mhd_surrogate.training.tracking import tracked_run
-from mhd_surrogate.utils.logging_config import setup_logging
 
 log = logging.getLogger(__name__)
 
 
 @hydra.main(config_path="../../configs", config_name="config")
 def main(cfg: DictConfig) -> None:
-    # Hydra's own job logging is disabled in config.yaml (it would put a
-    # root-level INFO handler on every third-party library); setup_logging
-    # owns it instead, with a DEBUG file in the run's output directory.
-    log_file = Path(HydraConfig.get().runtime.output_dir) / "train.log"
-    setup_logging(cfg.log_level, log_file=log_file)
+    # Logging is Hydra's job_logging config (configs/hydra/job_logging/
+    # project.yaml); this is the DEBUG file it writes in the run's output
+    # directory, which tracked_run uploads to MLflow.
+    hydra_cfg = HydraConfig.get()
+    log_file = Path(hydra_cfg.runtime.output_dir) / f"{hydra_cfg.job.name}.log"
     log.info("resolved config:\n%s", OmegaConf.to_yaml(cfg))
 
     # Silences mlflow's "load this tracing skill" hint on every call, which

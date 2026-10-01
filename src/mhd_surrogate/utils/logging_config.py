@@ -11,11 +11,9 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from pathlib import Path
 
 LOG_FORMAT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
 DATE_FORMAT = "%H:%M:%S"
-FILE_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 def add_log_level_arg(parser: argparse.ArgumentParser) -> None:
@@ -27,16 +25,7 @@ def add_log_level_arg(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def setup_logging(level: str = "INFO", log_file: str | Path | None = None) -> None:
-    """Configure console logging, and optionally a per-run log file.
-
-    `level` is the console verbosity. With `log_file`, the file additionally
-    captures everything this project's own loggers emit down to DEBUG
-    regardless of `level` (it is the post-mortem record, e.g. for a run that
-    diverged overnight), with full dates in the timestamps. Parent
-    directories are created. Calling this again replaces the previous
-    handlers, so the file is never written to twice.
-    """
+def setup_logging(level: str = "INFO") -> None:
     # basicConfig sets the root logger, which every third-party library
     # (matplotlib, zarr, mlflow, ...) inherits from -- setting it to the
     # requested level directly leaks their internal logging as noise (e.g.
@@ -49,28 +38,11 @@ def setup_logging(level: str = "INFO", log_file: str | Path | None = None) -> No
     # (e.g. a library import), rather than logging's default no-op-if-already-
     # configured behavior.
     requested = getattr(logging, level)
-    console = logging.StreamHandler()
-    console.setFormatter(logging.Formatter(LOG_FORMAT, DATE_FORMAT))
-    console.setLevel(requested)
-    handlers: list[logging.Handler] = [console]
-
-    own_level = requested
-    if log_file is not None:
-        path = Path(log_file)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(path, encoding="utf-8")
-        file_handler.setFormatter(logging.Formatter(LOG_FORMAT, FILE_DATE_FORMAT))
-        file_handler.setLevel(logging.DEBUG)
-        handlers.append(file_handler)
-        # The loggers must pass DEBUG records for the file handler to see
-        # them; the console handler's own level keeps the console at
-        # `requested`. Third-party loggers are still gated by the root
-        # level below, so their DEBUG noise stays out of the file too.
-        own_level = logging.DEBUG
-
-    logging.basicConfig(level=max(requested, logging.WARNING), handlers=handlers, force=True)
-    logging.getLogger("__main__").setLevel(own_level)
-    logging.getLogger("mhd_surrogate").setLevel(own_level)
+    logging.basicConfig(
+        level=max(requested, logging.WARNING), format=LOG_FORMAT, datefmt=DATE_FORMAT, force=True
+    )
+    logging.getLogger("__main__").setLevel(requested)
+    logging.getLogger("mhd_surrogate").setLevel(requested)
 
     # print() output (report content) and logging (status/progress, on
     # stderr) interleave correctly in a terminal, but stdout is fully

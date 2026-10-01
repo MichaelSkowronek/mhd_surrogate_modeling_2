@@ -179,15 +179,6 @@ Two things worth knowing about `setup_logging`:
   "late" relative to its own logged status lines under redirection without
   this.
 
-- **Optional per-run log file.** `setup_logging(level, log_file=path)`
-  adds a file handler that records this project's loggers down to `DEBUG`
-  regardless of the console `level`, with full dates in the timestamps
-  (parent directories are created). The file is the post-mortem record for
-  long runs (e.g. training that diverged overnight); the console stays at
-  the requested level. Third-party `DEBUG` noise stays out of it, since
-  the root logger's level still gates those. Calling `setup_logging` again
-  replaces the handlers, so a file is never written twice.
-
 ## Data
 
 Raw `.npy` files are not tracked in git (see `.gitignore`). Copy them into
@@ -1076,12 +1067,13 @@ What goes where: *metrics* (loss, LR, grad norm, throughput) go to MLflow
 via `mlflow.log_metrics(..., step=...)`, never into log files; the log file
 holds *events* ("checkpoint saved", "resumed from ...", warnings,
 tracebacks); params, config and checkpoints are MLflow params/artifacts.
-`train.py` disables Hydra's own job logging (`config.yaml` overrides
-`hydra/job_logging` and `hydra/hydra_logging` to `none`, which would
-otherwise install a root-level INFO handler that lets every third-party
-library's logging through) and calls `setup_logging` instead, writing a
-DEBUG `train.log` into the run's `outputs/<date>/<time>/` directory;
-`log_level=DEBUG` (a Hydra override) changes the console verbosity.
+Logging for training runs is Hydra's own `job_logging`, selected in
+`config.yaml` with a project config (`configs/hydra/job_logging/project.yaml`)
+instead of Hydra's default: the root logger stays at `WARNING` so
+third-party libraries stay quiet, and this project's loggers get `DEBUG`.
+The console shows `INFO` and up (`hydra.job_logging.handlers.console.level=DEBUG`
+changes that); `train.log`, written into the run's `outputs/<date>/<time>/`
+directory, always records `DEBUG` and up. `tracked_run` uploads it to MLflow.
 
 **Dependency note:** `hydra-core` is pinned to the `1.4.0.dev9` pre-release.
 The latest stable release (1.3.7) is broken on Python 3.14 (this project's
