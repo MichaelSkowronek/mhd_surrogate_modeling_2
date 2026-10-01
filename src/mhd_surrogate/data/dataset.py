@@ -8,6 +8,8 @@ from pathlib import Path
 import jax.numpy as jnp
 import zarr
 
+from mhd_surrogate.data.normalization import Normalizer
+
 
 @dataclass(frozen=True)
 class WindowedDataset:
@@ -18,8 +20,9 @@ class WindowedDataset:
     following `horizon` time steps as target, both shape (steps, C, Nx, Ny).
     Samples start every `stride` steps within [start, end).
 
-    Values are returned as-is (float32), not normalized -- normalization is
-    not implemented yet.
+    Values are returned as stored (float32) unless a `normalizer` is given,
+    in which case both input and target are normalized with it (the zarr
+    itself always stays raw).
     """
 
     array: zarr.Array
@@ -28,6 +31,7 @@ class WindowedDataset:
     window: int
     horizon: int
     stride: int
+    normalizer: Normalizer | None = None
 
     def __post_init__(self) -> None:
         span = self.window + self.horizon
@@ -50,6 +54,8 @@ class WindowedDataset:
         sample_start = self.start + i * self.stride
         x = self.array[sample_start : sample_start + self.window]
         y = self.array[sample_start + self.window : sample_start + self.window + self.horizon]
+        if self.normalizer is not None:
+            x, y = self.normalizer(x), self.normalizer(y)
         return jnp.asarray(x), jnp.asarray(y)
 
 
@@ -59,6 +65,7 @@ def load_full_dataset(
     window: int,
     horizon: int,
     stride: int,
+    normalizer: Normalizer | None = None,
 ) -> WindowedDataset:
     """Build a WindowedDataset over `dataset`'s entire recorded length -- for
     a dataset used wholesale (see configs/data/re16k.yaml's dataset-level
@@ -67,4 +74,4 @@ def load_full_dataset(
     """
     root = zarr.open_group(store=str(zarr_store), mode="r")
     arr = root[dataset]
-    return WindowedDataset(arr, 0, arr.shape[0], window, horizon, stride)
+    return WindowedDataset(arr, 0, arr.shape[0], window, horizon, stride, normalizer)

@@ -3,6 +3,7 @@ import pytest
 import zarr
 
 from mhd_surrogate.data.dataset import WindowedDataset, load_full_dataset
+from mhd_surrogate.data.normalization import NormalizationStats, Normalizer
 
 
 def test_windowed_dataset_length_and_sample_content():
@@ -67,3 +68,39 @@ def test_load_full_dataset_covers_the_whole_array(tmp_path):
     x_last, y_last = ds[len(ds) - 1]
     np.testing.assert_array_equal(np.asarray(x_last), data[7:9])
     np.testing.assert_array_equal(np.asarray(y_last), data[9:10])
+
+
+def _normalizer():
+    stats = NormalizationStats(
+        channel_names=["u_x", "u_y"],
+        mean=[1.0, 0.0],
+        std=[0.5, 2.0],
+        n_samples=10,
+        source_datasets=["a"],
+    )
+    return Normalizer.from_stats(stats, "per_channel")
+
+
+def test_windowed_dataset_normalizes_input_and_target():
+    arr = np.arange(20 * 2 * 3 * 4).reshape(20, 2, 3, 4).astype(np.float32)
+    normalizer = _normalizer()
+    ds = WindowedDataset(arr, 0, 20, window=4, horizon=1, stride=1, normalizer=normalizer)
+
+    x, y = ds[2]
+
+    np.testing.assert_allclose(np.asarray(x), normalizer(arr[2:6]), rtol=1e-6)
+    np.testing.assert_allclose(np.asarray(y), normalizer(arr[6:7]), rtol=1e-6)
+    assert x.dtype == np.float32
+
+
+def test_load_full_dataset_passes_normalizer_through(tmp_path):
+    store_path = tmp_path / "store.zarr"
+    root = zarr.open_group(store=str(store_path), mode="w")
+    data = np.random.default_rng(0).standard_normal((10, 2, 3, 3)).astype(np.float32)
+    root.create_array("ds0", data=data)
+    normalizer = _normalizer()
+
+    ds = load_full_dataset(store_path, "ds0", 2, 1, 1, normalizer=normalizer)
+
+    x, _ = ds[0]
+    np.testing.assert_allclose(np.asarray(x), normalizer(data[0:2]), rtol=1e-6)

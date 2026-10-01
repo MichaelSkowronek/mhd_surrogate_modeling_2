@@ -11,14 +11,19 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 DEFAULT_CHUNK_T = 32
+
+# How the std is applied: one per channel, or a single scalar shared by all
+# channels (the RMS of the per-channel stds).
+StdMode = Literal["per_channel", "shared"]
 
 # Running moments of one channel set: (count, mean, M2) with M2 the sum of
 # squared deviations from the mean, each mean/M2 of shape (C,).
@@ -92,6 +97,21 @@ class NormalizationStats(BaseModel):
             raise ValueError(f"duplicate source_datasets: {self.source_datasets}")
         return self
 
+    def effective_std(self, std_mode: StdMode) -> list[float]:
+        """The std actually divided by, one entry per channel.
+
+        `per_channel` equalizes how much each channel contributes to an MSE
+        loss; `shared` keeps the channels' relative amplitudes (a uniform
+        rescaling), so the loss stays proportional to physical kinetic-energy
+        error. The shared scalar is the RMS of the per-channel stds.
+        """
+        if std_mode == "per_channel":
+            return list(self.std)
+        if std_mode == "shared":
+            rms = math.sqrt(sum(v**2 for v in self.std) / len(self.std))
+            return [rms] * len(self.std)
+        raise ValueError(f"unknown std_mode {std_mode!r}, expected 'per_channel' or 'shared'")
+
     def check_compatible(
         self,
         channel_names: Sequence[str],
@@ -124,6 +144,20 @@ class NormalizationStats(BaseModel):
         return cls.model_validate_json(Path(path).read_text())
 
 
+def stats_from_moments(
+    moments: Moments, channel_names: Sequence[str], source_datasets: Sequence[str]
+) -> NormalizationStats:
+    """Turn pooled running moments into a validated NormalizationStats."""
+    n, mean, m2 = moments
+    return NormalizationStats(
+        channel_names=list(channel_names),
+        mean=mean.tolist(),
+        std=np.sqrt(m2 / n).tolist() if n else [],
+        n_samples=n,
+        source_datasets=list(source_datasets),
+    )
+
+
 def compute_normalization_stats(
     arrays: Mapping[str, Any],
     channel_names: Sequence[str],
@@ -137,11 +171,29 @@ def compute_normalization_stats(
         if arr.shape[1] != len(channel_names):
             raise ValueError(f"array has {arr.shape[1]} channels, expected {len(channel_names)}")
         pooled = merge_moments(pooled, channel_moments(arr, chunk_t))
-    n, mean, m2 = pooled
-    return NormalizationStats(
-        channel_names=list(channel_names),
-        mean=mean.tolist(),
-        std=np.sqrt(m2 / n).tolist() if n else [],
-        n_samples=n,
-        source_datasets=list(arrays),
-    )
+    return stats_from_moments(pooled, channel_names, list(arrays))
+
+
+@dataclass(frozen=True)
+class Normalizer:
+    """Applies (and inverts) `(x - mean) / std` on arrays shaped (..., C, H, W).
+
+    Built from a NormalizationStats and a std mode. Works on numpy and jax
+    arrays alike and keeps float32 inputs float32.
+    """
+
+    mean: np.ndarray  # (C, 1, 1), float32
+    std: np.ndarray  # (C, 1, 1), float32
+
+    @classmethod
+    def from_stats(cls, stats: NormalizationStats, std_mode: StdMode) -> Normalizer:
+        return cls(
+            mean=np.asarray(stats.mean, dtype=np.float32).reshape(-1, 1, 1),
+            std=np.asarray(stats.effective_std(std_mode), dtype=np.float32).reshape(-1, 1, 1),
+        )
+
+    def __call__(self, x: Any) -> Any:
+        return (x - self.mean) / self.std
+
+    def inverse(self, x: Any) -> Any:
+        return x * self.std + self.mean

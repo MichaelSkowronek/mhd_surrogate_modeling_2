@@ -1,0 +1,5 @@
+# Normalize all channels by one shared scalar std (the RMS of the per-channel
+# stds). Preserves the channels' relative amplitudes, so the loss stays
+# proportional to physical kinetic-energy error. Means are still per channel.
+stats_path: data/processed/normalization_stats.json
+std_mode: shared

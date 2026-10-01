@@ -4,6 +4,7 @@ from pydantic import ValidationError
 
 from mhd_surrogate.data.normalization import (
     NormalizationStats,
+    Normalizer,
     channel_moments,
     compute_normalization_stats,
     merge_moments,
@@ -154,3 +155,51 @@ def test_check_compatible_rejects(channels, train, test, match):
 def test_compute_stats_with_no_datasets_is_rejected():
     with pytest.raises(ValidationError, match="n_samples"):
         compute_normalization_stats({}, CHANNELS)
+
+
+def test_effective_std_per_channel_and_shared():
+    stats = _stats(std=[0.8, 0.6])
+    assert stats.effective_std("per_channel") == [0.8, 0.6]
+    # RMS of (0.8, 0.6) = sqrt((0.64 + 0.36) / 2)
+    np.testing.assert_allclose(stats.effective_std("shared"), [np.sqrt(0.5)] * 2)
+
+
+def test_effective_std_rejects_unknown_mode():
+    with pytest.raises(ValueError, match="std_mode"):
+        _stats().effective_std("per_pixel")
+
+
+def test_normalizer_per_channel_gives_zero_mean_unit_std():
+    rng = np.random.default_rng(2)
+    arr = _field(rng, (30, 2, 12, 12), mean=[1.0, 0.0], std=[0.8, 0.42])
+    stats = compute_normalization_stats({"a": arr}, CHANNELS)
+
+    out = Normalizer.from_stats(stats, "per_channel")(arr)
+
+    assert out.dtype == np.float32
+    np.testing.assert_allclose(out.mean(axis=(0, 2, 3)), 0.0, atol=1e-5)
+    np.testing.assert_allclose(out.std(axis=(0, 2, 3)), 1.0, atol=1e-5)
+
+
+def test_normalizer_shared_keeps_relative_channel_amplitudes():
+    rng = np.random.default_rng(3)
+    arr = _field(rng, (30, 2, 12, 12), mean=[1.0, 0.0], std=[0.8, 0.42])
+    stats = compute_normalization_stats({"a": arr}, CHANNELS)
+
+    out = Normalizer.from_stats(stats, "shared")(arr)
+
+    np.testing.assert_allclose(out.mean(axis=(0, 2, 3)), 0.0, atol=1e-5)
+    std = out.std(axis=(0, 2, 3))
+    np.testing.assert_allclose(std[1] / std[0], 0.42 / 0.8, rtol=0.02)
+    # The shared scalar is the RMS of the channel stds, so the mean variance is 1.
+    np.testing.assert_allclose(np.sqrt((std**2).mean()), 1.0, rtol=1e-4)
+
+
+@pytest.mark.parametrize("std_mode", ["per_channel", "shared"])
+def test_normalizer_inverse_roundtrip_on_leading_dims(std_mode):
+    rng = np.random.default_rng(4)
+    # (window, C, H, W) as WindowedDataset passes it
+    x = _field(rng, (4, 2, 5, 5), mean=[1.0, 0.0], std=[0.8, 0.42])
+    normalizer = Normalizer.from_stats(_stats(), std_mode)
+
+    np.testing.assert_allclose(normalizer.inverse(normalizer(x)), x, atol=1e-6)
