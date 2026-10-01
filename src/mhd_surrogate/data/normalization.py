@@ -12,7 +12,6 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -73,7 +72,6 @@ class NormalizationStats(BaseModel):
     std: list[float]
     n_samples: int = Field(gt=0, description="Values per channel the statistics are based on")
     source_datasets: list[str]
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @model_validator(mode="after")
     def _check_consistent(self) -> NormalizationStats:

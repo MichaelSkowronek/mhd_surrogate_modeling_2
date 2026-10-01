@@ -1,0 +1,52 @@
+schema: '2.0'
+stages:
+  convert_to_zarr:
+    cmd: uv run scripts/data/convert_to_zarr.py --overwrite
+    deps:
+    - path: data/raw
+      hash: md5
+      md5: 3c4ca0459295b4ca006ce328419636ab.dir
+      size: 10465104936
+      nfiles: 9
+    - path: scripts/data/convert_to_zarr.py
+      hash: md5
+      md5: c3456552a54406384cc850a9c4207371
+      size: 2906
+    outs:
+    - path: data/processed/re16k_t400.zarr
+      hash: md5
+      md5: 2dc98618c845bdf17445bc3b15f59ca7.dir
+      size: 9441145296
+      nfiles: 293
+  compute_stats:
+    cmd: uv run scripts/data/compute_stats.py
+    deps:
+    - path: data/processed/re16k_t400.zarr
+      hash: md5
+      md5: 2dc98618c845bdf17445bc3b15f59ca7.dir
+      size: 9441145296
+      nfiles: 293
+    - path: scripts/data/compute_stats.py
+      hash: md5
+      md5: f716173c53a75393263a4a3ba113ef96
+      size: 2771
+    - path: src/mhd_surrogate/data/normalization.py
+      hash: md5
+      md5: 613812b9e371f38fad35b1edeafd066e
+      size: 7914
+    params:
+      configs/data/re16k.yaml:
+        train_datasets:
+        - re16k_t400_0
+        - re16k_t400_1
+        - re16k_t400_2
+        - re16k_t400_3
+        - re16k_t400_4
+        - re16k_t400_9
+        - re16k_t400_10
+        zarr_store: data/processed/re16k_t400.zarr
+    outs:
+    - path: data/processed/normalization_stats.json
+      hash: md5
+      md5: 603bc434b437b41486a9ecc5639b0df7
+      size: 377

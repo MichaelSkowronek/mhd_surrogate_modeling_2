@@ -56,10 +56,15 @@ services:
     command: ["server", "-dir=/data", "-s3"]
     environment:
       <<: *s3-credentials
+    # S3 gateway published to the host (loopback only) so `dvc push/pull`
+    # can use it as the data remote; containers reach it as seaweedfs:8333.
+    ports:
+      - "127.0.0.1:8333:8333"
     volumes:
       - ./mlflow/seaweedfs:/data
 
-  # One-shot: create the artifact bucket (retrying until SeaweedFS is up).
+  # One-shot: create the buckets -- `mlflow` (run artifacts) and `dvc` (the
+  # DVC remote for raw data) -- retrying until SeaweedFS is up.
   s3-init:
     image: amazon/aws-cli:2.27.0
     depends_on: [seaweedfs]
@@ -69,9 +74,11 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - >
-        until aws --endpoint-url http://seaweedfs:8333 s3api head-bucket --bucket mlflow
-        || aws --endpoint-url http://seaweedfs:8333 s3 mb s3://mlflow;
-        do echo "waiting for seaweedfs..."; sleep 2; done
+        for bucket in mlflow dvc; do
+        until aws --endpoint-url http://seaweedfs:8333 s3api head-bucket --bucket $$bucket
+        || aws --endpoint-url http://seaweedfs:8333 s3 mb s3://$$bucket;
+        do echo "waiting for seaweedfs..."; sleep 2; done;
+        done
     restart: "no"
 
   mlflow:

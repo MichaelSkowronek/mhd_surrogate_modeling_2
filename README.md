@@ -60,6 +60,8 @@ scripts/             CLI entry points, same split (plus viz/)
   viz/               make_video, make_all_videos
   training/          train
 tests/               mirrors src/ and scripts/ (data/, analysis/, training/, utils/, viz/)
+dvc.yaml, dvc.lock  data pipeline (raw -> zarr -> stats) and its pinned hashes
+data/raw.dvc         DVC pointer to the raw .npy files (.dvc/ holds the remote config)
 configs/             Hydra tree: config.yaml + data/, dataset/, normalization/, mlflow/ groups
   analysis/          plain-YAML configs (split.yaml, grid.yaml)
 ```
@@ -181,8 +183,9 @@ Two things worth knowing about `setup_logging`:
 
 ## Data
 
-Raw `.npy` files are not tracked in git (see `.gitignore`). Copy them into
-`data/raw/` before running any scripts:
+Raw `.npy` files are not stored in git; they're versioned with
+[DVC](#data-versioning-dvc) (`data/raw.dvc`). Fetch them with `uv run dvc
+pull` (see below) before running any scripts, which puts them in `data/raw/`:
 
 ```
 data/raw/re16k_t400_0.npy
@@ -282,6 +285,68 @@ import zarr
 root = zarr.open_group("data/processed/re16k_t400.zarr", mode="r")
 root["re16k_t400_0"]  # shape (1248, 2, 1151, 127)
 ```
+
+## Data versioning (DVC)
+
+The raw `.npy` files (~10 GB) are versioned with [DVC](https://dvc.org): git
+holds a small pointer (`data/raw.dvc`, a content hash of the directory) and
+the bytes live in a DVC remote, so any commit identifies exactly which data it
+was run against, and a fresh clone can fetch it. Only the raw files are
+tracked as data; everything derived from them is a pipeline output.
+
+**Remote.** The SeaweedFS S3 gateway already in the compose stack (see
+"Tracking stack") serves a second bucket, `dvc`, next to MLflow's `mlflow`
+one; `s3-init` creates both and the gateway is published on
+`127.0.0.1:8333`. Because it speaks the S3 API, pointing the remote at real
+S3 later is a one-line change. Its files live in the bind-mounted
+`mlflow/seaweedfs/`, i.e. on the same disk as the working copy, so for now it
+guards against accidental deletion and gives the versioning workflow, not
+against disk loss.
+
+```bash
+docker compose up -d seaweedfs s3-init        # remote up, buckets created
+# credentials stay out of git (.dvc/config.local is gitignored); the defaults
+# match docker-compose.yml / .env.example:
+uv run dvc remote modify --local seaweedfs access_key_id mlflow
+uv run dvc remote modify --local seaweedfs secret_access_key mlflow-secret
+uv run dvc pull                               # raw data -> data/raw/
+uv run dvc repro                              # raw -> zarr -> normalization stats
+uv run dvc push                               # after changing tracked data
+```
+
+**Pipeline (`dvc.yaml`).** `convert_to_zarr` turns `data/raw` into the zarr
+store, and `compute_stats` turns the zarr store plus the train split into
+`data/processed/normalization_stats.json`. DVC re-runs a stage only when its
+dependencies changed: the stats stage depends on just the `train_datasets` and
+`zarr_store` keys of `configs/data/re16k.yaml` (via `params`), so editing the
+val/test names doesn't invalidate it. `dvc.lock` pins the hash of every input
+and output, so which data and which stats a commit used is recorded in git.
+The stats file embeds no timestamp, so re-running the stage on the same inputs
+reproduces it byte for byte (the lock file doesn't change).
+
+Design choices:
+
+- **Raw only.** The zarr store is `cache: false`: it's a regenerable ~9 GB
+  derivative, so it isn't copied into DVC's cache or pushed to the remote
+  (its hash is still in `dvc.lock`, and `dvc repro` rebuilds it in about a
+  minute). The small stats file *is* cached and pushed, so `dvc pull` gets the
+  exact stats without re-downloading the raw data.
+- **Directory, not per-file.** `data/raw` is tracked as one directory, so
+  `data/raw/.gitkeep` is gone and the old `.gitignore` entries for it were
+  dropped; DVC writes `data/.gitignore` instead.
+- **Hardlinked cache.** DVC copies by default, which would store the 10 GB
+  twice; this machine's `.dvc/config.local` sets `cache.type =
+  hardlink,copy` (a per-machine choice, not committed). The cache files are
+  read-only, so don't edit raw files in place.
+- **The test dataset.** `re16k_t400_5.npy` is in the tracked directory, and
+  `dvc pull`/`dvc add` move its bytes around. That's versioning, not reading:
+  no stage opens it, and `compute_stats` reads only `train_datasets`.
+- **Not in the container.** DVC is a dev dependency, so the runtime image has
+  no `dvc`; run `dvc pull`/`repro` on the host, and the container sees the
+  results through the `data/` bind mount.
+
+CI doesn't pull data (the remote is local), but `tests.yml` runs `dvc dag`
+so a malformed `dvc.yaml` fails the PR.
 
 ## Train / val / test split
 
@@ -1206,7 +1271,8 @@ This is the layout MLflow recommends for real deployments, run locally:
   to the server, which writes them to the object store, so training code
   needs no S3 credentials or endpoint. Host validation is on
   (`--allowed-hosts`), with the in-network name `mlflow:5000` allow-listed.
-- A one-shot `s3-init` container creates the artifact bucket.
+- A one-shot `s3-init` container creates the buckets: `mlflow` for artifacts
+  and `dvc` for the data remote (see "Data versioning (DVC)").
 - The server's extra dependencies (`psycopg2`, `boto3`) live in the
   `server` extra in `pyproject.toml`; training clients don't need them.
 

@@ -203,3 +203,12 @@ def test_normalizer_inverse_roundtrip_on_leading_dims(std_mode):
     normalizer = Normalizer.from_stats(_stats(), std_mode)
 
     np.testing.assert_allclose(normalizer.inverse(normalizer(x)), x, atol=1e-6)
+
+
+def test_saved_stats_are_deterministic_bytes(tmp_path):
+    # The file is a DVC pipeline output: identical statistics must serialize
+    # to identical bytes (no timestamp), or every re-run changes its hash.
+    a, b = tmp_path / "a.json", tmp_path / "b.json"
+    _stats().save(a)
+    _stats().save(b)
+    assert a.read_bytes() == b.read_bytes()
