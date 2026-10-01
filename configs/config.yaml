@@ -9,9 +9,12 @@ defaults:
   - data: re16k
   - dataset: windowed
   - mlflow: local
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
   - _self_
 
 seed: 42
+log_level: INFO  # console verbosity; the per-run log file is always DEBUG
 
 hydra:
   # Keep the working directory as the repo root: every script in this project

@@ -21,35 +21,38 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 
 import hydra
 import zarr
+from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
 import mlflow
 from mhd_surrogate.data.dataset import load_full_dataset
-from mhd_surrogate.training.mlflow_utils import flatten_for_mlflow
+from mhd_surrogate.training.tracking import tracked_run
+from mhd_surrogate.utils.logging_config import setup_logging
 
 log = logging.getLogger(__name__)
 
 
 @hydra.main(config_path="../../configs", config_name="config")
 def main(cfg: DictConfig) -> None:
+    # Hydra's own job logging is disabled in config.yaml (it would put a
+    # root-level INFO handler on every third-party library); setup_logging
+    # owns it instead, with a DEBUG file in the run's output directory.
+    log_file = Path(HydraConfig.get().runtime.output_dir) / "train.log"
+    setup_logging(cfg.log_level, log_file=log_file)
     log.info("resolved config:\n%s", OmegaConf.to_yaml(cfg))
 
     # Silences mlflow's "load this tracing skill" hint on every call, which
     # is unrelated to this project's plain params/metrics logging.
     os.environ.setdefault("MLFLOW_DISABLE_AGENT_HINT", "1")
 
-    mlflow.set_tracking_uri(cfg.mlflow.tracking_uri)
-    mlflow.set_experiment(cfg.mlflow.experiment_name)
-
-    with mlflow.start_run() as run:
-        log.info("mlflow run: %s (experiment: %s)", run.info.run_id, cfg.mlflow.experiment_name)
-        resolved = OmegaConf.to_container(cfg, resolve=True)
-        mlflow.log_params(flatten_for_mlflow(resolved))
-        mlflow.log_dict(resolved, "config.json")
-
+    resolved = OmegaConf.to_container(cfg, resolve=True)
+    with tracked_run(
+        cfg.mlflow.tracking_uri, cfg.mlflow.experiment_name, resolved, log_file=log_file
+    ):
         root = zarr.open_group(store=cfg.data.zarr_store, mode="r")
         log.info("test_dataset %s: configured, deliberately not opened", cfg.data.test_dataset)
 

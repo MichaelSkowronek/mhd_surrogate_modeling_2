@@ -52,7 +52,7 @@ uv run pre-commit run --all-files
 src/mhd_surrogate/   importable package, split by pipeline stage
   data/              dataset, grid
   analysis/          fields, summary, spectral
-  training/          mlflow_utils
+  training/          mlflow_utils, tracking
   utils/             logging_config, parallel
 scripts/             CLI entry points, same split (plus viz/)
   data/              explore_data, convert_to_zarr
@@ -1062,6 +1062,26 @@ resolved (nested) Hydra config into the flat key-value pairs
 `mlflow.log_params` expects (e.g. `data.dataset`, `dataset.window`); the
 dataset shape/dtype and both splits' sample counts are also logged. There
 are no metrics yet, since there is no training loop to produce them.
+
+`src/mhd_surrogate/training/tracking.py`'s `tracked_run` owns the run
+lifecycle so entry points don't repeat it: it selects the experiment, starts
+the run, logs the resolved config (flattened params plus a `config.json`
+artifact) and, whether the run finishes or crashes, uploads the per-run log
+file as an artifact, so a run that died overnight keeps its post-mortem
+record next to its metrics. A training loop that sees a NaN/blown-up loss
+raises `DivergenceError`: the traceback is logged, the run is tagged
+`diverged=true` (filterable in the UI) and MLflow marks it FAILED.
+
+What goes where: *metrics* (loss, LR, grad norm, throughput) go to MLflow
+via `mlflow.log_metrics(..., step=...)`, never into log files; the log file
+holds *events* ("checkpoint saved", "resumed from ...", warnings,
+tracebacks); params, config and checkpoints are MLflow params/artifacts.
+`train.py` disables Hydra's own job logging (`config.yaml` overrides
+`hydra/job_logging` and `hydra/hydra_logging` to `none`, which would
+otherwise install a root-level INFO handler that lets every third-party
+library's logging through) and calls `setup_logging` instead, writing a
+DEBUG `train.log` into the run's `outputs/<date>/<time>/` directory;
+`log_level=DEBUG` (a Hydra override) changes the console verbosity.
 
 **Dependency note:** `hydra-core` is pinned to the `1.4.0.dev9` pre-release.
 The latest stable release (1.3.7) is broken on Python 3.14 (this project's
