@@ -1,0 +1,5 @@
+[core]
+    remote = seaweedfs
+['remote "seaweedfs"']
+    url = s3://dvc
+    endpointurl = http://localhost:8333

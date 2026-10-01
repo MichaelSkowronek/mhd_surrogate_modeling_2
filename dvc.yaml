@@ -1,0 +1,33 @@
+# Data pipeline, run with `uv run dvc repro` (only stages whose inputs changed
+# re-run). The raw .npy files (data/raw) are tracked by data/raw.dvc and live
+# in the DVC remote (the SeaweedFS `dvc` bucket); everything downstream is
+# derived from them and reproducible.
+#
+# The zarr store is `cache: false`: it's a regenerable ~9 GB derivative, so it
+# isn't copied into DVC's cache or pushed to the remote -- dvc.lock still
+# records its hash. The stats file is small and cached, so `dvc pull` can
+# fetch the exact stats used for a run without re-downloading the raw data.
+stages:
+  convert_to_zarr:
+    cmd: uv run scripts/data/convert_to_zarr.py --overwrite
+    deps:
+      - data/raw
+      - scripts/data/convert_to_zarr.py
+    outs:
+      - data/processed/re16k_t400.zarr:
+          cache: false
+
+  compute_stats:
+    cmd: uv run scripts/data/compute_stats.py
+    deps:
+      - data/processed/re16k_t400.zarr
+      - scripts/data/compute_stats.py
+      - src/mhd_surrogate/data/normalization.py
+    # Only the train split and the store path matter; changing the val/test
+    # names shouldn't invalidate the statistics.
+    params:
+      - configs/data/re16k.yaml:
+          - train_datasets
+          - zarr_store
+    outs:
+      - data/processed/normalization_stats.json

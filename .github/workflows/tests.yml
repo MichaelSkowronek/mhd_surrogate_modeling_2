@@ -26,4 +26,8 @@ jobs:
       # here rather than via pytest addopts, so a local `pytest tests/foo.py`
       # subset run stays fast and doesn't spuriously fail the threshold --
       # only this full-suite CI run is gated.
+      # Validates dvc.yaml/data/raw.dvc structure. No data is pulled: the DVC
+      # remote is the local compose stack, which CI doesn't have.
+      - run: uv run dvc dag
+
       - run: uv run pytest --cov --cov-report=term-missing
