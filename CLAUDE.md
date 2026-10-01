@@ -122,10 +122,11 @@ conventions below; it shifts which tools are worth reaching for at all.
   log file holds events (checkpoint saved, resumed from, warnings,
   tracebacks). Training entry points use `training/tracking.py`'s
   `tracked_run` (uploads the per-run log file even on a crash) and raise
-  `DivergenceError` on NaN/blown-up loss, and they disable Hydra's own job
-  logging (`hydra/job_logging: none`) in favor of `setup_logging(...,
-  log_file=...)`; otherwise Hydra's root-level INFO handler leaks
-  third-party logging.
+  `DivergenceError` on NaN/blown-up loss. Their logging is Hydra's
+  `job_logging` with the project config
+  (`configs/hydra/job_logging/project.yaml`: DEBUG file in the run's output
+  directory, INFO console), not `setup_logging`, which is for the argparse
+  scripts.
 - See the README's "Logging" section for the full rationale.
 
 ## Git workflow

@@ -4,8 +4,20 @@ import pytest
 
 import mlflow
 from mhd_surrogate.training.tracking import DivergenceError, tracked_run
-from mhd_surrogate.utils.logging_config import setup_logging
 from mlflow import MlflowClient
+
+
+@pytest.fixture
+def log_file(tmp_path):
+    """A root-logger file handler, as Hydra's job_logging config installs."""
+    path = tmp_path / "run.log"
+    handler = logging.FileHandler(path)
+    handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+    root = logging.getLogger()
+    root.addHandler(handler)
+    yield path
+    root.removeHandler(handler)
+    handler.close()
 
 
 @pytest.fixture
@@ -30,9 +42,7 @@ def test_logs_flattened_params_and_config_artifact(uri):
     assert "config.json" in [a.path for a in client.list_artifacts(run.info.run_id)]
 
 
-def test_uploads_log_file_on_success(uri, tmp_path):
-    log_file = tmp_path / "run.log"
-    setup_logging("INFO", log_file=log_file)
+def test_uploads_log_file_on_success(uri, log_file):
     with tracked_run(uri, "exp", {}, log_file=log_file) as run:
         logging.getLogger("mhd_surrogate.test").info("epoch 1 done")
 
@@ -40,9 +50,7 @@ def test_uploads_log_file_on_success(uri, tmp_path):
     assert "run.log" in [a.path for a in client.list_artifacts(run.info.run_id)]
 
 
-def test_crash_still_uploads_log_with_traceback_and_fails_run(uri, tmp_path):
-    log_file = tmp_path / "run.log"
-    setup_logging("INFO", log_file=log_file)
+def test_crash_still_uploads_log_with_traceback_and_fails_run(uri, log_file):
     with pytest.raises(ValueError, match="boom"):
         with tracked_run(uri, "exp", {}, log_file=log_file):
             raise ValueError("boom")

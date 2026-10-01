@@ -1,0 +1,38 @@
+# Hydra job logging for training entry points (selected in config.yaml).
+#
+# Replaces Hydra's default, which sets the root logger to INFO: this keeps
+# the root at WARNING (so third-party libraries stay quiet) and gives only
+# this project's loggers ("__main__" for a script run directly,
+# "mhd_surrogate" for library code) DEBUG. The console shows INFO and up
+# (override with hydra.job_logging.handlers.console.level=DEBUG); the file,
+# written into the run's output directory, always records DEBUG and up, as
+# the post-mortem record that tracking.tracked_run uploads to MLflow.
+version: 1
+disable_existing_loggers: false
+formatters:
+  console:
+    format: "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
+    datefmt: "%H:%M:%S"
+  file:
+    format: "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
+    datefmt: "%Y-%m-%d %H:%M:%S"
+handlers:
+  console:
+    class: logging.StreamHandler
+    formatter: console
+    level: INFO
+    stream: ext://sys.stderr
+  file:
+    class: logging.FileHandler
+    formatter: file
+    level: DEBUG
+    filename: ${hydra.runtime.output_dir}/${hydra.job.name}.log
+    encoding: utf-8
+root:
+  level: WARNING
+  handlers: [console, file]
+loggers:
+  __main__:
+    level: DEBUG
+  mhd_surrogate:
+    level: DEBUG
