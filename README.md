@@ -179,6 +179,15 @@ Two things worth knowing about `setup_logging`:
   "late" relative to its own logged status lines under redirection without
   this.
 
+- **Optional per-run log file.** `setup_logging(level, log_file=path)`
+  adds a file handler that records this project's loggers down to `DEBUG`
+  regardless of the console `level`, with full dates in the timestamps
+  (parent directories are created). The file is the post-mortem record for
+  long runs (e.g. training that diverged overnight); the console stays at
+  the requested level. Third-party `DEBUG` noise stays out of it, since
+  the root logger's level still gates those. Calling `setup_logging` again
+  replaces the handlers, so a file is never written twice.
+
 ## Data
 
 Raw `.npy` files are not tracked in git (see `.gitignore`). Copy them into
