@@ -31,6 +31,7 @@ from omegaconf import DictConfig, OmegaConf
 import mlflow
 from mhd_surrogate.data.dataset import load_full_dataset
 from mhd_surrogate.data.normalization import NormalizationStats, Normalizer
+from mhd_surrogate.data.versioning import data_provenance, dvc_status, ensure_up_to_date
 from mhd_surrogate.training.tracking import tracked_run
 
 log = logging.getLogger(__name__)
@@ -49,10 +50,25 @@ def main(cfg: DictConfig) -> None:
     # is unrelated to this project's plain params/metrics logging.
     os.environ.setdefault("MLFLOW_DISABLE_AGENT_HINT", "1")
 
+    # Hard failure on stale data, before any run is created: it's a setup
+    # error, not a training failure. See data/versioning.py.
+    if cfg.verify_data_version:
+        ensure_up_to_date(dvc_status())
+        log.info("data matches dvc.lock")
+    else:
+        log.warning("verify_data_version=false: not checking the data against dvc.lock")
+
     resolved = OmegaConf.to_container(cfg, resolve=True)
     with tracked_run(
         cfg.mlflow.tracking_uri, cfg.mlflow.experiment_name, resolved, log_file=log_file
     ):
+        # Which exact data/stats this run used: the hashes dvc.lock pins, as
+        # params (searchable in the UI), plus the lock and stats as artifacts.
+        provenance = {f"data_version.{k}": v for k, v in data_provenance().items()}
+        mlflow.log_params({**provenance, "data_version.verified": cfg.verify_data_version})
+        mlflow.log_artifact("dvc.lock")
+        mlflow.log_artifact(cfg.normalization.stats_path)
+
         root = zarr.open_group(store=cfg.data.zarr_store, mode="r")
         stats_path = Path(cfg.normalization.stats_path)
         if not stats_path.exists():
