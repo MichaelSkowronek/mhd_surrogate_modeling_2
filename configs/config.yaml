@@ -8,6 +8,7 @@
 defaults:
   - data: re16k
   - dataset: windowed
+  - normalization: per_channel
   - mlflow: local
   - override hydra/job_logging: project
   - override hydra/hydra_logging: none

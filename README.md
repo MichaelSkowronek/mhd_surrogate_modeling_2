@@ -55,12 +55,12 @@ src/mhd_surrogate/   importable package, split by pipeline stage
   training/          mlflow_utils, tracking
   utils/             logging_config, parallel
 scripts/             CLI entry points, same split (plus viz/)
-  data/              explore_data, convert_to_zarr
+  data/              explore_data, convert_to_zarr, compute_stats
   analysis/          check_*.py, run_all_checks
   viz/               make_video, make_all_videos
   training/          train
 tests/               mirrors src/ and scripts/ (data/, analysis/, training/, utils/, viz/)
-configs/             Hydra tree: config.yaml + data/, dataset/, mlflow/ groups
+configs/             Hydra tree: config.yaml + data/, dataset/, normalization/, mlflow/ groups
   analysis/          plain-YAML configs (split.yaml, grid.yaml)
 ```
 
@@ -1020,8 +1020,9 @@ a dataset used wholesale (every train and val dataset now, since there's no
 more internal region to bound reads by -- only whole-dataset exclusion,
 `test_dataset`, matters). `windowed.yaml`'s `window=4, horizon=1, stride=1`
 are placeholder defaults (short history, one-step-ahead prediction), not
-tied to any model yet. Values are returned as-is, float32; normalization is
-not implemented yet.
+tied to any model yet. Values are normalized on the fly when a `Normalizer`
+is passed (see "Normalization statistics" below), otherwise returned as
+stored, float32.
 
 No model exists yet, so `scripts/training/train.py` currently only resolves
 the config, confirms every train/val dataset is reachable (shape/dtype,
@@ -1068,8 +1069,36 @@ computed from a different set of datasets than the current training split,
 or that include `test_dataset`. Hydra configs stay as they are; pydantic is
 used only for this persisted artifact.
 
-The compute script, the normalization transform in `WindowedDataset` and the
-std-mode option are not implemented yet (so values are still returned as-is).
+#### Computing and applying them
+
+```bash
+uv run scripts/data/compute_stats.py
+```
+
+Reads only `train_datasets`, prints per-dataset and pooled mean/std, and
+writes `data/processed/normalization_stats.json` (gitignored with the rest of
+`data/processed/`). The per-dataset rows are the check that the statistics are
+a stable property of the flow rather than of one realization. On this data the
+`u_x` mean is 1.000 and the `u_y` mean 0.000 in every training dataset, `u_x`
+std is 0.81-0.82 and `u_y` std 0.41-0.43, and the pooled values are
+(1.0001, 0.8151) and (0.0001, 0.4206).
+
+`configs/normalization/` is a Hydra group with one option per std mode,
+selected with e.g. `normalization=shared`:
+
+- `per_channel` (default): each channel divided by its own std, which keeps
+  `u_y` (about half the std of `u_x`) from being under-weighted in an MSE loss.
+- `shared`: all channels divided by one scalar, the RMS of the per-channel
+  stds. The channels' relative amplitudes are preserved, so the loss stays
+  proportional to physical kinetic-energy error.
+
+Means are per channel in both modes. `Normalizer.from_stats(stats, std_mode)`
+builds the `(x - mean) / std` transform (and its `inverse`, for turning
+predictions back into physical units); `WindowedDataset`/`load_full_dataset`
+take it as an optional `normalizer`. `train.py` loads the stats file, runs
+`check_compatible` against the configured channels, train datasets and test
+dataset before building the normalizer, and fails with a pointer to
+`compute_stats.py` if the file is missing.
 
 ### Experiment tracking (MLflow)
 

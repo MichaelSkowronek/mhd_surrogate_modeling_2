@@ -30,6 +30,7 @@ from omegaconf import DictConfig, OmegaConf
 
 import mlflow
 from mhd_surrogate.data.dataset import load_full_dataset
+from mhd_surrogate.data.normalization import NormalizationStats, Normalizer
 from mhd_surrogate.training.tracking import tracked_run
 
 log = logging.getLogger(__name__)
@@ -53,6 +54,23 @@ def main(cfg: DictConfig) -> None:
         cfg.mlflow.tracking_uri, cfg.mlflow.experiment_name, resolved, log_file=log_file
     ):
         root = zarr.open_group(store=cfg.data.zarr_store, mode="r")
+        stats_path = Path(cfg.normalization.stats_path)
+        if not stats_path.exists():
+            raise FileNotFoundError(
+                f"{stats_path} not found; run scripts/data/compute_stats.py first"
+            )
+        stats = NormalizationStats.load(stats_path)
+        stats.check_compatible(
+            root.attrs["channel_names"], cfg.data.train_datasets, cfg.data.test_dataset
+        )
+        normalizer = Normalizer.from_stats(stats, cfg.normalization.std_mode)
+        log.info(
+            "normalizing with %s (std_mode=%s): mean=%s std=%s",
+            stats_path,
+            cfg.normalization.std_mode,
+            stats.mean,
+            stats.effective_std(cfg.normalization.std_mode),
+        )
         log.info("test_dataset %s: configured, deliberately not opened", cfg.data.test_dataset)
 
         for name in [*cfg.data.train_datasets, cfg.data.val_dataset]:
@@ -63,6 +81,7 @@ def main(cfg: DictConfig) -> None:
                 cfg.dataset.window,
                 cfg.dataset.horizon,
                 cfg.dataset.stride,
+                normalizer,
             )
             x, y = ds[0]
             role = "val" if name == cfg.data.val_dataset else "train"

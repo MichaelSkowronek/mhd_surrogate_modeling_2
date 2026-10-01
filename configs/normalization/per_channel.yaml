@@ -1,0 +1,8 @@
+# Normalize each channel by its own std. Equalizes how much each channel
+# contributes to an MSE loss (u_y's std is about half of u_x's, so it would
+# otherwise be under-weighted). Compare against `normalization=shared`.
+#
+# The stats file is written by scripts/data/compute_stats.py from the
+# train datasets only.
+stats_path: data/processed/normalization_stats.json
+std_mode: per_channel
