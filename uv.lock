@@ -1231,6 +1231,7 @@ dependencies = [
     { name = "matplotlib" },
     { name = "mlflow" },
     { name = "numpy" },
+    { name = "pydantic" },
     { name = "pyyaml" },
     { name = "zarr" },
 ]
@@ -1259,6 +1260,7 @@ requires-dist = [
     { name = "mlflow", specifier = ">=3.16.1" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "psycopg2-binary", marker = "extra == 'server'", specifier = ">=2.9" },
+    { name = "pydantic", specifier = ">=2.9" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "zarr", specifier = ">=3.4.0" },
 ]

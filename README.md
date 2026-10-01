@@ -50,7 +50,7 @@ uv run pre-commit run --all-files
 
 ```
 src/mhd_surrogate/   importable package, split by pipeline stage
-  data/              dataset, grid
+  data/              dataset, grid, normalization
   analysis/          fields, summary, spectral
   training/          mlflow_utils, tracking
   utils/             logging_config, parallel
@@ -1034,6 +1034,42 @@ check. Each run's resolved config and logs are written to
 root; without it, Hydra's default of chdir-ing into the run directory would
 break every relative path used throughout this project (`data/raw/...`,
 `configs/...`, etc.).
+
+### Normalization statistics
+
+`src/mhd_surrogate/data/normalization.py` computes the per-channel mean and
+standard deviation used to normalize the fields. Decisions, and why:
+
+- **Train datasets only.** The statistics are computed from `train_datasets`
+  and nothing else; using val or test would leak held-out information into
+  the model's inputs, which is exactly what the dataset-level split exists to
+  prevent.
+- **Per channel, global over time and space.** The flow is statistically
+  homogeneous, so per-pixel statistics would only encode a spatial pattern
+  that doesn't generalize, and per-timestep ones would remove the dynamics
+  being predicted. The channels differ a lot (`u_x` has mean ~1, std ~0.8:
+  the flow travels in x; `u_y` has mean ~0, std ~0.42), so each channel gets
+  its own mean. Whether the std is per-channel or one shared scalar is a
+  config option in the next step.
+- **Streaming, float64.** Moments are accumulated `chunk_t` time steps at a
+  time with the parallel (Chan et al.) update, so the 8.8 GB store is never
+  loaded into memory, and pooled across datasets so the std includes
+  between-dataset mean shifts. It's the population std (ddof=0).
+- **Stored raw, normalized on the fly.** The zarr stays unnormalized; the
+  transform is applied at load time from the stats artifact.
+
+The statistics are written once and read back by other processes (training,
+evaluation, inference), so `NormalizationStats` is a pydantic model rather
+than a bare dict: loading a JSON file validates that channel names, mean and
+std agree in length, std is finite and positive, and the source datasets are
+non-empty and unique. `check_compatible(channel_names, train_datasets,
+test_dataset)` then refuses stats whose channel order differs, that were
+computed from a different set of datasets than the current training split,
+or that include `test_dataset`. Hydra configs stay as they are; pydantic is
+used only for this persisted artifact.
+
+The compute script, the normalization transform in `WindowedDataset` and the
+std-mode option are not implemented yet (so values are still returned as-is).
 
 ### Experiment tracking (MLflow)
 
