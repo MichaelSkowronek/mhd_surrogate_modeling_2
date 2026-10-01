@@ -68,11 +68,11 @@ conventions below; it shifts which tools are worth reaching for at all.
   `re16k_t400_5`, and `compute_stats` reads `train_datasets` only. DVC moving
   the raw directory's bytes (it includes that file) is versioning, not
   reading.
-- Training entry points must call `dvc_status`/`ensure_up_to_date` before
-  starting (hard failure on stale data) and log the `data_provenance` hashes
-  to MLflow, as `train.py` does. The container has no DVC, so only compose's
-  `app` service passes `verify_data_version=false`; don't turn it off
-  elsewhere to get around a failure, run `dvc repro` instead.
+- Training entry points log the data version they were started against
+  (`data_provenance`'s `dvc.lock` hashes as MLflow params, plus `dvc.lock`
+  and the stats file as artifacts), as `train.py` does. They don't verify it
+  against disk: staying in sync is the workflow's job (`dvc repro`), and an
+  in-script check was deliberately dropped (see the README).
 - See the README's "Data versioning (DVC)" section for the full rationale.
 
 ## Docker

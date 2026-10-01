@@ -122,8 +122,6 @@ services:
       - scripts/training/train.py
       - mlflow=server
       - mlflow.tracking_uri=http://mlflow:5000
-      # The image has no DVC; the host verifies the data version.
-      - verify_data_version=false
     profiles: ["run"]
 
   test:

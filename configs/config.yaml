@@ -16,11 +16,6 @@ defaults:
 
 seed: 42
 
-# Refuse to train unless `dvc status` says the raw data, zarr store and
-# normalization stats on disk match dvc.lock. The container has no DVC, so
-# compose's `app` service turns this off (the host verifies).
-verify_data_version: true
-
 hydra:
   # Keep the working directory as the repo root: every script in this project
   # (analysis scripts included) uses paths relative to it (e.g. data/raw/...),

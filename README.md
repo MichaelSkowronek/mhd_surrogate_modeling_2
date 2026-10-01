@@ -343,28 +343,29 @@ Design choices:
   no stage opens it, and `compute_stats` reads only `train_datasets`.
 - **Not in the container.** DVC is a dev dependency, so the runtime image has
   no `dvc`; run `dvc pull`/`repro` on the host, and the container sees the
-  results through the `data/` bind mount (and `dvc.lock`, mounted read-only).
+  results through the `data/` bind mount (and `dvc.lock`, mounted read-only,
+  which the provenance logging below reads).
 
-**Training refuses stale data.** `dvc.lock` pins hashes, but a run reads
-whatever is on disk, so raw data edited without re-running `dvc repro` would
-silently train on an out-of-date zarr store. `train.py` therefore runs
-`dvc status --json` (`data/versioning.py`; under a second, DVC caches file
-hashes) before creating an MLflow run and raises `DataVersionError`, naming
-the stale stages, unless the raw data, the zarr store and the normalization
-stats all match `dvc.lock`. It's a setup error, not a training failure, so no
-run is created for it. Editing a dependency of a stage (e.g.
-`normalization.py` or `compute_stats.py`) makes that stage stale too, which is
-intended: the stats must have been produced by the code that's about to use
-them. The container has no DVC, so compose's `app` service sets
-`verify_data_version=false` (the top-level config flag, default `true`) and
-the run logs a warning; the host is where the data is verified.
+**Staying in sync is the workflow's job.** Nothing in `train.py` checks that
+the zarr store and stats on disk match `dvc.lock`; the way to be sure is to
+produce them with `dvc repro`, which re-runs exactly the stages whose inputs
+changed (and `dvc status` shows what's out of date). That's the usual DVC
+division of labor. A training stage in `dvc.yaml` (depending on the zarr
+store, the stats and the config params) is the natural next step once a real
+training loop exists: `dvc repro`/`dvc exp run` would then guarantee fresh
+inputs by construction, with MLflow still doing the tracking. An enforcing
+check inside the training script was tried and dropped: it needed a
+DVC-only image and a compose dependency to cover the container, and could
+still be bypassed by starting the image directly, so it was a guarantee that
+only held on some paths.
 
 **Provenance in MLflow.** Each run logs the hashes `dvc.lock` pins as params
-(`data_version.raw_md5`, `.zarr_md5`, `.stats_md5`, searchable in the UI) with
-`data_version.verified` recording whether the check ran, and uploads
-`dvc.lock` and the normalization stats file as artifacts. Together with
-MLflow's own git-commit tag, a run can be traced to the exact code, raw data
-and statistics it used.
+(`data_version.raw_md5`, `.zarr_md5`, `.stats_md5`, searchable in the UI) and
+uploads `dvc.lock` and the normalization stats file as artifacts. Together
+with MLflow's own git-commit tag, a run can be traced to the code, raw data
+and statistics it was started against. These are the hashes the lock *pins*,
+not a verification of what was on disk: they're right when the pipeline was
+run through `dvc repro`, and wrong if the data was changed behind its back.
 
 CI doesn't pull data (the remote is local), but `tests.yml` runs `dvc dag`
 so a malformed `dvc.yaml` fails the PR.
@@ -1194,9 +1195,9 @@ uv run mlflow ui --backend-store-uri sqlite:///mlruns.db  # view runs at http://
 # or, with the Docker stack running (see "Docker"): train.py mlflow=server
 ```
 
-Each run also records the data version it used (hashes from `dvc.lock` as
-params, `dvc.lock` and the stats file as artifacts), and training refuses to
-start if the data on disk is stale; see "Data versioning (DVC)".
+Each run also records the data version it was started against (hashes from
+`dvc.lock` as params, `dvc.lock` and the stats file as artifacts); see "Data
+versioning (DVC)".
 
 `configs/mlflow/local.yaml` (selected via the `mlflow` default) points at a
 local, self-hosted MLflow backend — no external account needed. It uses a
