@@ -12,6 +12,8 @@
 #   docker compose run --rm app                    # default: training entrypoint
 #   docker compose run --rm app python scripts/analysis/run_all_checks.py
 #   docker compose run --rm test                   # pytest in the container
+#   docker compose run --rm app-gpu                # same, on the NVIDIA GPU (needs the
+#                                                  # NVIDIA Container Toolkit, see README)
 #
 # Credentials below are local-development defaults, overridable via .env
 # (see .env.example).
@@ -125,6 +127,27 @@ services:
       - mlflow=server
       - mlflow.tracking_uri=http://mlflow:5000
     profiles: ["run"]
+
+  # The app on the GPU: the same entrypoint on an image built with the `gpu`
+  # extra (CUDA wheels), with the host GPU reserved for the container. A
+  # separate service so the default image and CI stay CPU-only.
+  app-gpu:
+    extends:
+      service: app
+    build:
+      context: .
+      target: runtime
+      args:
+        UV_EXTRAS: --extra server --extra ray --extra gpu
+    image: mhd-surrogate:gpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    profiles: ["gpu"]
 
   test:
     build:
