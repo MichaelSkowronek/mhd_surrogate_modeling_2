@@ -1,5 +1,7 @@
-"""Temporal power spectrum estimators, shared by scripts/analysis/check_point_spectrum.py
-and check_spatial_mean_spectrum.py.
+"""Power spectrum estimators: temporal ones shared by
+scripts/analysis/check_point_spectrum.py and check_spatial_mean_spectrum.py,
+plus the spatial 1D spectrum (`spectrum_sum`) shared by check_spectrum.py and
+the forecast evaluation.
 
 Two estimators: a plain periodogram (`power_spectrum`, one FFT over the
 whole series) and Welch's method (`welch_spectrum`, the average of
@@ -107,3 +109,24 @@ def dominant_periods(omega: np.ndarray, power: np.ndarray, n_peaks: int) -> list
 
 def format_peaks(peaks: list[dict]) -> str:
     return ", ".join(f"T={p['period']:.1f} ({p['power_fraction']:.1%})" for p in peaks)
+
+
+def spectrum_sum(block: np.ndarray, axis: int, spacing: float) -> np.ndarray:
+    """One-sided spectrum along `axis`, averaged over the other spatial axis
+    and summed over time. `block` has shape (t, C, Nx, Ny); returns (C, K).
+    """
+    n = block.shape[axis]
+    shape = [1, 1, 1, 1]
+    shape[axis] = n
+    window = np.hanning(n).reshape(shape)
+
+    detrended = block - block.mean(axis=axis, keepdims=True)
+    transform = np.fft.rfft(detrended * window, axis=axis)
+    # Per-cycle PSD, converted to a density per unit angular wavenumber.
+    power = np.abs(transform) ** 2 * spacing / (window**2).sum() / (2 * np.pi)
+    # One-sided: fold the negative frequencies onto the positive ones.
+    last = -1 if n % 2 == 0 else None
+    # Move the wavenumber axis last, so the other spatial axis is axis 2.
+    power = np.moveaxis(power, axis, -1)
+    power[..., 1:last] *= 2
+    return power.mean(axis=2).sum(axis=0)

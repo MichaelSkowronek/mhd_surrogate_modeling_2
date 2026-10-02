@@ -13,6 +13,12 @@ def vorticity(block: np.ndarray, dx: float, dy: float) -> np.ndarray:
     return np.gradient(block[:, 1], dx, axis=1) - np.gradient(block[:, 0], dy, axis=2)
 
 
+def divergence(block: np.ndarray, dx: float, dy: float) -> np.ndarray:
+    """Divergence du_x/dx + du_y/dy for a (t, 2, Nx, Ny) block (same scheme as
+    `vorticity`)."""
+    return np.gradient(block[:, 0], dx, axis=1) + np.gradient(block[:, 1], dy, axis=2)
+
+
 def speed(block: np.ndarray) -> np.ndarray:
     """sqrt(u_x^2 + u_y^2) for a (t, 2, Nx, Ny) block."""
     return np.sqrt(block[:, 0] ** 2 + block[:, 1] ** 2)
