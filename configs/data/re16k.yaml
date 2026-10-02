@@ -27,3 +27,10 @@ train_datasets:
   - re16k_t400_10
 val_dataset: re16k_t400_6
 test_dataset: re16k_t400_5
+
+# Forecast-evaluation protocol (see src/mhd_surrogate/evaluation/protocol.py):
+# the first `context_steps` steps of a held-out dataset are context only and
+# are never scored; every model is scored on the same remaining steps. About
+# twice the longest characteristic oscillation (~40 steps) found in the EDA, so
+# a model may be given a full period of input. No model window may exceed it.
+context_steps: 80

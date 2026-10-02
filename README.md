@@ -24,7 +24,8 @@ never be read by any script, analysis included.
 Exploratory data analysis is done (tagged
 [`v0.1.0-eda-complete`](https://github.com/MichaelSkowronek/mhd_surrogate_modeling_2/releases/tag/v0.1.0-eda-complete)),
 and the dataset-level train/val/test split is implemented and verified
-against real data. No surrogate model or training loop exists yet --
+against real data. The forecast-evaluation protocol and metrics are in place
+(see "Forecast evaluation"); no surrogate model or training loop exists yet --
 `scripts/training/train.py` is still just a smoke test of the Hydra/MLflow
 plumbing it will grow into.
 
@@ -65,13 +66,14 @@ src/mhd_surrogate/   importable package, split by pipeline stage
   data/              dataset, grid, normalization, versioning, conversion
   analysis/          fields, summary, spectral
   training/          mlflow_utils, tracking
+  evaluation/        protocol, metrics, diagnostics
   utils/             logging_config, parallel
 scripts/             CLI entry points, same split (plus viz/)
   data/              explore_data, convert_to_zarr, compute_stats
   analysis/          check_*.py, run_all_checks, benchmark_backends
   viz/               make_video, make_all_videos
   training/          train
-tests/               mirrors src/ and scripts/ (data/, analysis/, training/, utils/, viz/)
+tests/               mirrors src/ and scripts/ (data/, analysis/, training/, evaluation/, utils/, viz/)
 dvc.yaml, dvc.lock  data pipeline (raw -> zarr -> stats) and its pinned hashes
 data/raw.dvc         DVC pointer to the raw .npy files (.dvc/ holds the remote config)
 configs/             Hydra tree: config.yaml + data/, dataset/, normalization/, mlflow/ groups
@@ -1354,6 +1356,40 @@ before any user code runs. `1.4.0.dev9` fixes it and was verified to resolve
 config and run cleanly via a plain `uv sync` (no `--prerelease` flag needed,
 since the version is pinned exactly). Swap for the stable 1.4.0 release once
 it ships.
+
+## Forecast evaluation
+
+A surrogate is judged by forecasting a held-out dataset's whole series (917
+steps for the validation dataset), so that every model -- one-step
+autoregressive, whole-series, or a baseline that ignores its input -- is
+scored on the same targets. The code is in `src/mhd_surrogate/evaluation/`.
+
+**Protocol** (`protocol.py`). The first `context_steps = 80` steps of the
+dataset (`configs/data/re16k.yaml`) are context only and are never scored; the
+model is scored on steps 80 onward (837 for validation). Eighty is about twice
+the longest characteristic oscillation (~40 steps) found in the EDA, so a model
+can be given a full period or two of input, and "does more input help?" is a
+comparison on identical targets. A model declares how many of the most recent
+context steps it reads (`window`, 0 for none); `forecast` hands it exactly
+those, and rejects a window longer than the context since it would see scored
+targets. The same protocol applies to the test dataset, but that is read only
+once, for the final evaluation.
+
+**Metrics** come in two groups, because the flow is chaotic: pointwise error
+saturates after some lead time for *any* model, so a low final-step error is
+neither achievable nor the only thing worth measuring.
+
+- *Short horizon* (`metrics.py`): RMSE per lead time, optionally scaled per
+  channel by the training std, and the skill horizon (how many steps stay under
+  an error threshold).
+- *Long horizon* (`diagnostics.py`): does the forecast stay on the attractor?
+  Relative error of the time-averaged kinetic energy and enstrophy, the ratio
+  of RMS divergence to the true field's (the DNS field is only approximately
+  divergence-free on this grid, so the target's own value is the reference, not
+  zero), and the log-spectral distance of the x and y spectra. A model that
+  regresses toward the mean keeps a modest pointwise error but loses the small
+  scales, which these catch. They are computed in chunks, so a long series is
+  never held in float64 at once.
 
 ## Docker
 

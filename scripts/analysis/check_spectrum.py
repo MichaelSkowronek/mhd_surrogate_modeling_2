@@ -33,6 +33,7 @@ import numpy as np
 import yaml
 import zarr
 
+from mhd_surrogate.analysis.spectral import spectrum_sum
 from mhd_surrogate.analysis.summary import add_common_args, filter_datasets, write_summary
 from mhd_surrogate.data.grid import grid_spacing
 from mhd_surrogate.utils.logging_config import setup_logging
@@ -58,27 +59,6 @@ def parse_args() -> argparse.Namespace:
     )
     add_common_args(parser)
     return parser.parse_args()
-
-
-def spectrum_sum(block: np.ndarray, axis: int, spacing: float) -> np.ndarray:
-    """One-sided spectrum along `axis`, averaged over the other spatial axis
-    and summed over time. `block` has shape (t, C, Nx, Ny); returns (C, K).
-    """
-    n = block.shape[axis]
-    shape = [1, 1, 1, 1]
-    shape[axis] = n
-    window = np.hanning(n).reshape(shape)
-
-    detrended = block - block.mean(axis=axis, keepdims=True)
-    transform = np.fft.rfft(detrended * window, axis=axis)
-    # Per-cycle PSD, converted to a density per unit angular wavenumber.
-    power = np.abs(transform) ** 2 * spacing / (window**2).sum() / (2 * np.pi)
-    # One-sided: fold the negative frequencies onto the positive ones.
-    last = -1 if n % 2 == 0 else None
-    # Move the wavenumber axis last, so the other spatial axis is axis 2.
-    power = np.moveaxis(power, axis, -1)
-    power[..., 1:last] *= 2
-    return power.mean(axis=2).sum(axis=0)
 
 
 def compute_spectrum(
