@@ -10,8 +10,12 @@ stages:
       nfiles: 9
     - path: scripts/data/convert_to_zarr.py
       hash: md5
-      md5: c3456552a54406384cc850a9c4207371
-      size: 2906
+      md5: 3a542bbb4c4d1a57d66ecc0a2ed1ccf4
+      size: 2469
+    - path: src/mhd_surrogate/data/conversion.py
+      hash: md5
+      md5: 630fbb46aedca2443cea7e2ba458ddf7
+      size: 2431
     outs:
     - path: data/processed/re16k_t400.zarr
       hash: md5
@@ -28,12 +32,12 @@ stages:
       nfiles: 293
     - path: scripts/data/compute_stats.py
       hash: md5
-      md5: f716173c53a75393263a4a3ba113ef96
-      size: 2771
+      md5: 9945680b3c54e62594e12f3cd2009866
+      size: 2979
     - path: src/mhd_surrogate/data/normalization.py
       hash: md5
-      md5: 613812b9e371f38fad35b1edeafd066e
-      size: 7914
+      md5: ec64ef70263faa54e3fbd7d1d5b620f2
+      size: 9420
     params:
       configs/data/re16k.yaml:
         train_datasets:

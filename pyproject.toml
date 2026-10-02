@@ -30,6 +30,11 @@ server = [
     "psycopg2-binary>=2.9",
     "boto3>=1.35",
 ]
+# Ray backend for the parallel preprocessing/analysis scripts (`--backend
+# ray`); the other backends need nothing extra.
+ray = [
+    "ray>=2.58",
+]
 
 [build-system]
 requires = ["uv_build>=0.12.17,<0.13.0"]

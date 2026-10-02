@@ -75,6 +75,23 @@ conventions below; it shifts which tools are worth reaching for at all.
   in-script check was deliberately dropped (see the README).
 - See the README's "Data versioning (DVC)" section for the full rationale.
 
+## Parallelism
+
+- Parallel work goes through `src/mhd_surrogate/utils/parallel.py`
+  (`run_parallel` for subprocess jobs, `map_tasks` for functions), with
+  `--backend sequential|processes|ray` and `--workers` added via
+  `add_backend_args`; don't add ad-hoc pools or call `ray.init` directly
+  (the layer disables Ray's `uv run` working-directory packaging, which would
+  otherwise upload the repo's ~20 GB of data).
+- Functions run on a pool or Ray must live in `src/` (importable by workers)
+  and be plain Python functions of picklable arguments.
+- Anything merged from parallel tasks must merge in a fixed order (see
+  `pool_moments`): DVC outputs must be byte-identical on every backend.
+- Memory-heavy jobs: order the jobs so heavy ones aren't adjacent, and give
+  Ray a per-script memory request (`JOB_MEMORY_GB` in `run_all_checks.py`);
+  the suite runs ~2.5 GB jobs and exhausted a 16 GB machine at 12 workers.
+- See the README's "Parallel backends" section for measurements and rationale.
+
 ## Docker
 
 - The project is containerized (`Dockerfile`, `docker-compose.yml`). Keep

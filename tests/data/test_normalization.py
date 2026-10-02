@@ -8,6 +8,9 @@ from mhd_surrogate.data.normalization import (
     channel_moments,
     compute_normalization_stats,
     merge_moments,
+    pool_moments,
+    stats_from_moments,
+    store_moments,
 )
 
 CHANNELS = ["u_x", "u_y"]
@@ -212,3 +215,55 @@ def test_saved_stats_are_deterministic_bytes(tmp_path):
     _stats().save(a)
     _stats().save(b)
     assert a.read_bytes() == b.read_bytes()
+
+
+@pytest.fixture
+def small_store(tmp_path):
+    import zarr
+
+    rng = np.random.default_rng(5)
+    root = zarr.open_group(store=str(tmp_path / "store.zarr"), mode="w")
+    for name, t in [("a", 40), ("b", 25), ("c", 33)]:
+        root.create_array(
+            name,
+            data=_field(rng, (t, 2, 8, 8), mean=[1.0, 0.0], std=[0.8, 0.42]),
+            chunks=(8, 2, 8, 8),
+        )
+    return tmp_path / "store.zarr"
+
+
+@pytest.mark.parametrize("backend", ["sequential", "processes", "ray"])
+def test_store_moments_match_direct_computation_on_every_backend(small_store, backend):
+    import zarr
+
+    names = ["c", "a", "b"]
+    got = store_moments(small_store, names, chunk_t=7, backend=backend, workers=2)
+
+    assert list(got) == names
+    root = zarr.open_group(store=str(small_store), mode="r")
+    for name in names:
+        n, mean, m2 = channel_moments(root[name], chunk_t=7)
+        assert got[name][0] == n
+        np.testing.assert_array_equal(got[name][1], mean)
+        np.testing.assert_array_equal(got[name][2], m2)
+
+
+def test_pooled_stats_are_identical_across_backends(small_store, tmp_path):
+    # The stats file is a DVC output: every backend must produce the same
+    # bytes, which a fixed merge order guarantees.
+    names = ["a", "b", "c"]
+    files = []
+    for backend in ["sequential", "processes", "ray"]:
+        per_dataset = store_moments(small_store, names, backend=backend, workers=2)
+        stats = stats_from_moments(pool_moments(per_dataset, 2), CHANNELS, names)
+        path = tmp_path / f"{backend}.json"
+        stats.save(path)
+        files.append(path.read_bytes())
+
+    assert files[0] == files[1] == files[2]
+
+
+def test_pool_moments_of_nothing_is_empty():
+    n, mean, m2 = pool_moments({}, 2)
+    assert n == 0
+    np.testing.assert_array_equal(mean, [0.0, 0.0])

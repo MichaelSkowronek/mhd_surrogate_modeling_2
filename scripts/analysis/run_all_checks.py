@@ -2,13 +2,15 @@
 cross-dataset comparison table from the JSON summaries each check writes.
 
 Each (script, dataset) pair is completely independent, so this dispatches
-them in parallel via mhd_surrogate.utils.parallel (see its docstring for how, and
-the README for why a distributed framework like Ray isn't warranted yet).
+them in parallel via mhd_surrogate.utils.parallel, on a choice of backend
+(--backend sequential|processes|ray; see its docstring, and the README's
+"Parallel backends" section for measured timings).
 
 Usage:
     uv run scripts/analysis/run_all_checks.py
     uv run scripts/analysis/run_all_checks.py --dataset re16k_t400_0 --dataset re16k_t400_1
     uv run scripts/analysis/run_all_checks.py --script check_split.py --workers 4
+    uv run scripts/analysis/run_all_checks.py --backend ray
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ import yaml
 
 from mhd_surrogate.analysis.summary import DEFAULT_SUMMARY_DIR, filter_datasets
 from mhd_surrogate.utils.logging_config import add_log_level_arg, setup_logging
-from mhd_surrogate.utils.parallel import log_failures, run_parallel
+from mhd_surrogate.utils.parallel import add_backend_args, log_failures, run_parallel
 
 log = logging.getLogger(__name__)
 
@@ -41,6 +43,16 @@ SCRIPTS = [
 DEFAULT_CONFIG = Path("configs/analysis/split.yaml")
 # Subdirectory of scripts/ holding the SCRIPTS above; --script takes bare filenames.
 SCRIPTS_SUBDIR = "analysis"
+# Peak memory per job, measured on the largest dataset (re16k_t400_0, 1248
+# steps): check_autocorrelation peaks at 2.2 GB, the other five at 0.2-0.4 GB.
+# Used by the Ray backend to cap how many jobs run at once by memory (12
+# autocorrelation jobs at once would exceed a 16 GB machine); see
+# utils.parallel.run_parallel. Margins included.
+HEAVY_JOB_GB = {"check_autocorrelation.py": 2.5}
+LIGHT_JOB_GB = 0.5
+JOB_MEMORY_GB = {
+    f"{SCRIPTS_SUBDIR}/{script}": HEAVY_JOB_GB.get(script, LIGHT_JOB_GB) for script in SCRIPTS
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -60,7 +72,7 @@ def parse_args() -> argparse.Namespace:
         help="Limit to this check script (repeatable); default: all of them",
     )
     parser.add_argument("--summary-dir", type=Path, default=DEFAULT_SUMMARY_DIR)
-    parser.add_argument("--workers", type=int, default=None, help="Default: os.cpu_count()")
+    add_backend_args(parser)
     add_log_level_arg(parser)
     return parser.parse_args()
 
@@ -163,19 +175,24 @@ def main() -> None:
             ],
             name,
         )
-        for script in scripts
+        # Dataset-major order: all checks for one dataset, then the next. The
+        # backends without memory-aware scheduling run jobs in this order, and
+        # script-major order would queue every memory-heavy autocorrelation
+        # job back to back and run many at once.
         for name in dataset_names
+        for script in scripts
     ]
     log.info(
-        "running %d jobs (%d scripts x %d datasets) with %d workers...",
+        "running %d jobs (%d scripts x %d datasets) with %d workers (%s backend)...",
         len(jobs),
         len(scripts),
         len(dataset_names),
         workers,
+        args.backend,
     )
 
     start = time.monotonic()
-    results = run_parallel(jobs, workers)
+    results = run_parallel(jobs, workers, args.backend, JOB_MEMORY_GB)
     elapsed = time.monotonic() - start
 
     failures = log_failures(results)

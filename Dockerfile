@@ -31,7 +31,7 @@ WORKDIR /app
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     --mount=type=bind,source=uv.lock,target=uv.lock \
-    uv sync --frozen --no-dev --extra server --no-install-project
+    uv sync --frozen --no-dev --extra server --extra ray --no-install-project
 
 # Layer 2: the project itself, installed non-editable so the venv is
 # self-contained and can be copied to the runtime stage as-is.
@@ -39,13 +39,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --extra server --no-editable
+    uv sync --frozen --no-dev --extra server --extra ray --no-editable
 
 
 FROM builder AS test
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --extra server --no-editable
+    uv sync --frozen --extra server --extra ray --no-editable
 COPY scripts ./scripts
 COPY configs ./configs
 COPY tests ./tests

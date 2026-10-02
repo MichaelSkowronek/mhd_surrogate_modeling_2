@@ -16,7 +16,10 @@ from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
+import zarr
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from mhd_surrogate.utils.parallel import map_tasks
 
 DEFAULT_CHUNK_T = 32
 
@@ -60,6 +63,42 @@ def channel_moments(arr: Any, chunk_t: int = DEFAULT_CHUNK_T) -> Moments:
         m2 = ((block - mean[None, :, None, None]) ** 2).sum(axis=(0, 2, 3))
         moments = merge_moments(moments, (count, mean, m2))
     return moments
+
+
+def dataset_moments(zarr_store: str, name: str, chunk_t: int = DEFAULT_CHUNK_T) -> Moments:
+    """Running moments of dataset `name` in the zarr group at `zarr_store`.
+
+    Opens the store itself (a picklable, top-level function of plain
+    arguments), so it can run as a parallel task.
+    """
+    root = zarr.open_group(store=str(zarr_store), mode="r")
+    return channel_moments(root[name], chunk_t)
+
+
+def store_moments(
+    zarr_store: Path | str,
+    names: Sequence[str],
+    chunk_t: int = DEFAULT_CHUNK_T,
+    backend: str = "processes",
+    workers: int | None = None,
+) -> dict[str, Moments]:
+    """Per-dataset moments for `names`, one parallel task each, in `names` order."""
+    tasks = [(str(zarr_store), name, chunk_t) for name in names]
+    return dict(zip(names, map_tasks(dataset_moments, tasks, backend, workers), strict=True))
+
+
+def pool_moments(moments_by_dataset: Mapping[str, Moments], n_channels: int) -> Moments:
+    """Merge per-dataset moments in the mapping's order.
+
+    A fixed merge order makes the result independent of which task finished
+    first, so every backend gives bit-identical statistics (floating-point
+    addition isn't associative, and the stats file is a DVC output whose
+    hash must not change between runs).
+    """
+    pooled: Moments = (0, np.zeros(n_channels), np.zeros(n_channels))
+    for moments in moments_by_dataset.values():
+        pooled = merge_moments(pooled, moments)
+    return pooled
 
 
 class NormalizationStats(BaseModel):
@@ -164,11 +203,12 @@ def compute_normalization_stats(
     """Pool per-channel mean/std over every (T, C, H, W) array in `arrays`
     (dataset name -> array). Pass the training datasets only.
     """
-    pooled: Moments = (0, np.zeros(len(channel_names)), np.zeros(len(channel_names)))
-    for arr in arrays.values():
+    per_dataset = {}
+    for name, arr in arrays.items():
         if arr.shape[1] != len(channel_names):
             raise ValueError(f"array has {arr.shape[1]} channels, expected {len(channel_names)}")
-        pooled = merge_moments(pooled, channel_moments(arr, chunk_t))
+        per_dataset[name] = channel_moments(arr, chunk_t)
+    pooled = pool_moments(per_dataset, len(channel_names))
     return stats_from_moments(pooled, channel_names, list(arrays))
 
 

@@ -18,8 +18,9 @@ jobs:
 
       # uv sync auto-provisions the pinned Python version (.python-version);
       # no separate Python setup step needed. Installs the dev dependency
-      # group (pytest, pytest-cov) by default.
-      - run: uv sync
+      # group (pytest, pytest-cov) by default, plus the `ray` extra (the
+      # parallel-backend tests start a local Ray runtime).
+      - run: uv sync --extra ray
 
       # Coverage (src/mhd_surrogate/ only, gated at 95% -- see pyproject.toml's
       # [tool.coverage] comment for why scripts/ is out of scope) is wired in

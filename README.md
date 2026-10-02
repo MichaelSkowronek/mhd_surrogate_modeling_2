@@ -50,13 +50,13 @@ uv run pre-commit run --all-files
 
 ```
 src/mhd_surrogate/   importable package, split by pipeline stage
-  data/              dataset, grid, normalization, versioning
+  data/              dataset, grid, normalization, versioning, conversion
   analysis/          fields, summary, spectral
   training/          mlflow_utils, tracking
   utils/             logging_config, parallel
 scripts/             CLI entry points, same split (plus viz/)
   data/              explore_data, convert_to_zarr, compute_stats
-  analysis/          check_*.py, run_all_checks
+  analysis/          check_*.py, run_all_checks, benchmark_backends
   viz/               make_video, make_all_videos
   training/          train
 tests/               mirrors src/ and scripts/ (data/, analysis/, training/, utils/, viz/)
@@ -274,7 +274,8 @@ Prints shape, dtype, value range, and NaN/Inf counts for each `.npy` file in
 uv run scripts/data/convert_to_zarr.py
 ```
 
-Writes all simulations in `data/raw/` into a single zarr store at
+(`--backend`/`--workers` choose how the files are converted in parallel; see
+"Parallel backends".) Writes all simulations in `data/raw/` into a single zarr store at
 `data/processed/re16k_t400.zarr` (also gitignored). Since each simulation has
 a different number of time steps on the same spatial grid, they are stored as
 separate arrays within one group rather than stacked into one array:
@@ -1011,21 +1012,13 @@ half-to-half change from the stationarity check). The full detail stays in
 the individual JSON files; the table is meant for a quick side-by-side
 look, not the final word.
 
-**Parallelization:** each (script, dataset) pair is independent, so this
+**Parallelization:** each (script, dataset) pair is independent, so the suite
 dispatches them as separate `python check_*.py --dataset X` subprocesses via
-`mhd_surrogate.utils.parallel` (a thread pool where the threads just block on
-`subprocess.run`; the real numpy/FFT work happens in the child processes, on
-separate cores, with full process isolation — also used by
-`make_all_videos.py` below). All 48 jobs (8 configured datasets, each read
-in full now rather than a fixed-size train+val region -- see "Train / val /
-test split" above) completed in ~134s wall time on a 12-core machine, up
-from the ~74s measured for the same suite against the smaller per-dataset
-region -- expected, since every job now reads more data per dataset (up to
-the full length, vs. previously ~54-66% of it). A distributed
-framework like Ray was considered but is not warranted for a workload this
-size (a couple of minutes, one machine); it would earn its keep once
-training actually needs a cluster, distributed GPUs, or data beyond
-single-machine scale.
+`mhd_surrogate.utils.parallel`, on a backend chosen with `--backend`
+(`sequential`, `processes` — the default, a thread pool whose threads block on
+`subprocess.run` — or `ray`); see "Parallel backends" below for timings and
+for the memory constraint that dominates this workload. `make_all_videos.py`
+uses the same layer.
 
 **First cross-dataset result:** the divergence residual clusters tightly
 across all 8 configured datasets (0.4146-0.4251), and so does enstrophy
@@ -1033,6 +1026,104 @@ across all 8 configured datasets (0.4146-0.4251), and so does enstrophy
 representative of this simulation family rather than a fluke of one run.
 The tooling working end-to-end on the new dataset-level split, with every
 configured dataset read in full, is confirmed.
+
+## Parallel backends
+
+The preprocessing stages and the analysis suite share one parallel layer,
+`mhd_surrogate.utils.parallel`, with three interchangeable backends selected
+by `--backend` (and `--workers`):
+
+| backend | what it does |
+|---|---|
+| `sequential` | a plain loop; the baseline |
+| `processes` (default) | a process pool (`map_tasks`) or, for subprocess jobs, a thread pool whose threads block on `subprocess.run` (`run_parallel`) |
+| `ray` | [Ray](https://www.ray.io) tasks on a local runtime |
+
+Two shapes of work go through it: `run_parallel` for independent
+`python script.py ...` jobs (the analysis suite, video rendering), and
+`map_tasks` for a Python function over a list of arguments (conversion and
+statistics: one task per dataset). Ray is the optional `ray` extra (it's in
+the Docker image and in CI, but not required for the other backends).
+`scripts/data/convert_to_zarr.py`, `compute_stats.py`,
+`scripts/analysis/run_all_checks.py` and `make_all_videos.py` all take
+`--backend`/`--workers`.
+
+**Measured** with `scripts/analysis/benchmark_backends.py` on this machine
+(12 cores, 16 GB; wall seconds, median of n runs after an untimed warmup,
+backends interleaved so the OS page cache doesn't favor one; it times the real
+scripts as subprocesses, so Ray's startup is included):
+
+| workload | sequential | processes | ray |
+|---|---|---|---|
+| `compute_stats` (7 datasets, n=3) | 19.8 | **7.8** (2.5x) | 11.7 (1.7x) |
+| `convert_to_zarr` (9 files, n=2) | 49.8 | **12.1** (4.1x) | 16.9 (2.9x) |
+
+| analysis suite, 48 jobs | workers | wall (s) | vs sequential |
+|---|---|---|---|
+| sequential (n=1) | 1 | 451.0 | 1.0x |
+| processes (n=2) | 5 | 163.2 | 2.8x |
+| ray, memory-aware (n=2) | 5 | 166.6 | 2.7x |
+| ray, memory-aware (n=2) | 12 | **148.1** | **3.0x** |
+
+What this says, honestly:
+
+- **For the preprocessing, Ray is slower than a process pool**, by its fixed
+  ~4 s runtime startup, on a workload that finishes in 8-12 s. The work is
+  7-9 uneven tasks on one machine, which is exactly what a process pool is for;
+  the speedup is capped well below 12x by the task count and the size spread
+  (1248 vs ~900 steps). Default stays `processes`.
+- **For the suite, memory, not cores, is the constraint**, and that's where Ray
+  earns its place. The six checks differ hugely in peak memory (measured on the
+  largest dataset): `check_autocorrelation` 2.2 GB, the other five 0.2-0.4 GB.
+  Run 12 at a time and 8 autocorrelation jobs at once need ~16 GB: the first
+  attempt at this benchmark exhausted the machine's RAM and had to be killed.
+  A thread/process pool runs `--workers` jobs regardless, so it has to be sized
+  by hand (5 workers above). Ray schedules against a declared per-job memory
+  (`JOB_MEMORY_GB` in `run_all_checks.py`: 2.5 GB for autocorrelation, 0.5 GB
+  for the rest), so it can be given all 12 workers and still never overcommit
+  memory — and it's the fastest configuration (148 s) because of it. At the
+  same worker count the two backends tie (166.6 vs 163.2 s, within the run-to-run
+  spread of n=2).
+- **Job order matters too.** The suite used to queue jobs script by script,
+  putting all 8 autocorrelation jobs back to back; it now runs dataset by
+  dataset, which spreads the heavy script out and is what makes the 5-worker
+  `processes` run safe. Both fixes are needed for a backend without memory
+  awareness.
+- The n is small (2-3 runs, one machine); read these as orders of magnitude and
+  the memory finding, not as precise ratios.
+
+**Reproducibility is unaffected by the backend.** Per-dataset moments are merged
+in a fixed order (`pool_moments`) regardless of which task finishes first, and
+each conversion task writes only its own array, so every backend produces
+byte-identical output: `dvc repro` through the parallel path left the hashes of
+the zarr store and the stats file in `dvc.lock` unchanged, and a test asserts
+the stats file is byte-identical across backends.
+
+**Ray notes.**
+
+- Ray's `uv run` integration packages the *whole working directory* (here ~20
+  GB of data) as the workers' environment when the driver runs under `uv run`.
+  `utils.parallel` disables it (`RAY_ENABLE_UV_RUN_RUNTIME_ENV=0`, set before
+  Ray is imported) — don't call `ray.init` yourself; use the layer's helper.
+- Functions run by Ray or a process pool must be importable by the workers,
+  which is why the conversion core lives in `src/mhd_surrogate/data/
+  conversion.py` instead of the script, and why Ray refuses builtins like
+  `pow` as tasks.
+- In a container Ray's object store needs shared memory (`/dev/shm` is 64 MB by
+  default); compose sets `shm_size: 1gb`. The `ray` extra adds ~0.3 GB to the
+  image (2.0 -> 2.3 GB).
+- Ray is not warranted at this data size for its own sake. It earns its keep
+  here through memory-aware scheduling, and is the natural base for the
+  later steps that do need a cluster scheduler (sweeps, KubeRay).
+
+Reproduce:
+
+```bash
+uv run scripts/analysis/benchmark_backends.py --workload stats --repeats 3
+uv run scripts/analysis/benchmark_backends.py --workload convert --repeats 2
+# the suite is memory-heavy: pick --workers to fit your RAM for non-ray backends
+uv run scripts/analysis/benchmark_backends.py --workload suite --backend processes --workers 5
+```
 
 ## Video
 
@@ -1300,7 +1391,10 @@ This is the layout MLflow recommends for real deployments, run locally:
 - A one-shot `s3-init` container creates the buckets: `mlflow` for artifacts
   and `dvc` for the data remote (see "Data versioning (DVC)").
 - The server's extra dependencies (`psycopg2`, `boto3`) live in the
-  `server` extra in `pyproject.toml`; training clients don't need them.
+  `server` extra in `pyproject.toml`; training clients don't need them. The
+  image also installs the `ray` extra (for `--backend ray`; see "Parallel
+  backends"), and compose gives the containers `shm_size: 1gb` for Ray's
+  object store.
 
 **Persistence.** All state lives in bind mounts inside the project —
 `mlflow/postgres/` and `mlflow/seaweedfs/` (gitignored, with tracked
