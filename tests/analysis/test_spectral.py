@@ -4,6 +4,7 @@ import pytest
 from mhd_surrogate.analysis.spectral import (
     dominant_periods,
     format_peaks,
+    interpolated_peak,
     power_spectrum,
     welch_spectrum,
 )
@@ -117,3 +118,25 @@ def test_format_peaks_formats_period_and_power_fraction():
 
 def test_format_peaks_empty_list():
     assert format_peaks([]) == ""
+
+
+@pytest.mark.parametrize("period", [30.0, 36.0, 41.5])
+def test_interpolated_peak_recovers_a_period_that_falls_between_bins(period):
+    """With 200-step segments the bins are at periods 200/k (40, 33.3, ...),
+    so these tones all fall between bins; the refined peak is within 3%."""
+    t = np.arange(200)
+    omega, power = power_spectrum(np.sin(2 * np.pi * t / period))
+
+    peak_omega, peak_power = interpolated_peak(omega, power)
+
+    assert 2 * np.pi / peak_omega == pytest.approx(period, rel=0.03)
+    assert peak_power >= power[1:].max() * 0.99
+
+
+def test_interpolated_peak_does_not_refine_at_the_edges_of_the_spectrum():
+    omega = np.arange(6.0)
+    rising = np.array([0.0, 1.0, 2.0, 3.0, 4.0, 5.0])  # peak at the last bin
+    falling = np.array([9.0, 5.0, 4.0, 3.0, 2.0, 1.0])  # peak at the first bin after 0
+
+    assert interpolated_peak(omega, rising) == (5.0, 5.0)
+    assert interpolated_peak(omega, falling) == (1.0, 5.0)
