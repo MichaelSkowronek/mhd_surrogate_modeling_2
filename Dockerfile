@@ -13,6 +13,9 @@
 # of the code): mount data/ at run time, see docker-compose.yml.
 
 ARG PYTHON_VERSION=3.14
+# Dependency extras installed into the image. The GPU image adds `--extra gpu`
+# (CUDA wheels, a few GB): see docker-compose.yml's `app-gpu` service.
+ARG UV_EXTRAS="--extra server --extra ray"
 
 FROM python:${PYTHON_VERSION}-slim AS builder
 
@@ -24,22 +27,26 @@ ENV UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=never \
     UV_PYTHON_PREFERENCE=only-system
 
+ARG UV_EXTRAS
 WORKDIR /app
 
 # Layer 1: third-party dependencies only. This layer is rebuilt only when
 # pyproject.toml or uv.lock change, not on every source edit.
+# UV_EXTRAS is deliberately unquoted: it expands to several flags.
+# hadolint ignore=SC2086
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     --mount=type=bind,source=uv.lock,target=uv.lock \
-    uv sync --frozen --no-dev --extra server --extra ray --no-install-project
+    uv sync --frozen --no-dev $UV_EXTRAS --no-install-project
 
 # Layer 2: the project itself, installed non-editable so the venv is
 # self-contained and can be copied to the runtime stage as-is.
 # (README.md is needed because pyproject.toml declares it as the readme.)
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
+# hadolint ignore=SC2086
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --extra server --extra ray --no-editable
+    uv sync --frozen --no-dev $UV_EXTRAS --no-editable
 
 
 FROM builder AS test

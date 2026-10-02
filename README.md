@@ -47,8 +47,7 @@ uv sync --extra gpu          # add --extra ray if you use the Ray backend:
 uv run python -c "import jax; print(jax.devices())"   # [CudaDevice(id=0)]
 ```
 
-The Docker image is still CPU-only; GPU passthrough into the container is
-not set up yet.
+The default Docker image is CPU-only; see "GPU image" under Docker below.
 
 Pre-commit hooks ([pre-commit-hooks](https://github.com/pre-commit/pre-commit-hooks):
 whitespace/EOF/YAML-TOML-JSON/large-file/merge-conflict/case-conflict checks,
@@ -1384,6 +1383,28 @@ docker compose down                           # stop; all state stays in ./mlflo
 ```
 
 (`--no-deps` skips starting the tracking stack for scripts that don't log to it.)
+
+### GPU image
+
+`docker compose run --rm app-gpu` runs the same entrypoint on an NVIDIA GPU.
+It is a separate service (profile `gpu`) rather than a change to `app`, so the
+default image and CI stay CPU-only:
+
+- The `Dockerfile` takes a `UV_EXTRAS` build argument (default
+  `--extra server --extra ray`); `app-gpu` builds `mhd-surrogate:gpu` with
+  `--extra gpu` added. The CUDA libraries come from the pip wheels, so the
+  base image is still `python:3.14-slim` (the image is ~8.7 GB vs ~2.3 GB for
+  the CPU one).
+- `docker-compose.yml` reserves the host GPU for the service
+  (`deploy.resources.reservations.devices`).
+- The host needs the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+  registered with Docker (`sudo nvidia-ctk runtime configure --runtime=docker`).
+  Under WSL2 the Windows driver provides the GPU; don't install a Linux driver
+  inside WSL. Check with `docker run --rm --gpus all ubuntu nvidia-smi`.
+- Verify the image sees the GPU:
+  `docker compose run --rm --no-deps app-gpu python -c "import jax; print(jax.devices())"`.
+- CI doesn't build this image (no GPU on the runners, and the CUDA layers are
+  large); `docker compose config -q` still validates the service.
 
 CI (`.github/workflows/docker.yml`) builds both image targets, lints the
 `Dockerfile` with hadolint, runs the `test` image, validates
