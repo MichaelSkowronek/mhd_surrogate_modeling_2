@@ -107,6 +107,32 @@ def dominant_periods(omega: np.ndarray, power: np.ndarray, n_peaks: int) -> list
     ]
 
 
+def interpolated_peak(omega: np.ndarray, power: np.ndarray) -> tuple[float, float]:
+    """(omega, power) of the highest bin of `power` (excluding omega[0]),
+    refined between bins by a parabola through the log power of the peak bin and its
+    two neighbors.
+
+    The bins of a Welch spectrum with short segments are coarse (the period
+    of bin k is nperseg / k), so the raw bin would quantize a period
+    comparison to tens of percent; the parabola recovers a tone that falls
+    between bins to a few percent. A peak at the first or last bin has only
+    one neighbor and is returned unrefined -- as in `dominant_periods`, on a
+    still-rising spectrum that is where the resolvable range ends, not a real
+    line.
+    """
+    i = int(np.argmax(power[1:])) + 1
+    if i == len(power) - 1 or power[i] <= 0:
+        return float(omega[i]), float(power[i])
+    a, b, c = np.log(power[i - 1] + 1e-300), np.log(power[i]), np.log(power[i + 1] + 1e-300)
+    denominator = a - 2 * b + c
+    if i == 1 or denominator == 0:
+        return float(omega[i]), float(power[i])
+    delta = 0.5 * (a - c) / denominator
+    return float(omega[i] + delta * (omega[1] - omega[0])), float(
+        np.exp(b - 0.25 * (a - c) * delta)
+    )
+
+
 def format_peaks(peaks: list[dict]) -> str:
     return ", ".join(f"T={p['period']:.1f} ({p['power_fraction']:.1%})" for p in peaks)
 
