@@ -21,6 +21,8 @@ x-app: &app
     context: .
     target: runtime
   image: mhd-surrogate:latest
+  # Ray's object store lives in /dev/shm (64 MB by default in a container).
+  shm_size: 1gb
   volumes:
     - ./data:/app/data
     - ./reports:/app/reports

@@ -26,11 +26,12 @@ import zarr
 
 from mhd_surrogate.data.normalization import (
     DEFAULT_CHUNK_T,
-    channel_moments,
-    merge_moments,
+    pool_moments,
     stats_from_moments,
+    store_moments,
 )
 from mhd_surrogate.utils.logging_config import add_log_level_arg, setup_logging
+from mhd_surrogate.utils.parallel import add_backend_args
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT_PATH)
     parser.add_argument("--chunk-t", type=int, default=DEFAULT_CHUNK_T)
+    add_backend_args(parser)
     add_log_level_arg(parser)
     return parser.parse_args()
 
@@ -59,13 +61,15 @@ def main() -> None:
     root = zarr.open_group(store=cfg["zarr_store"], mode="r")
     channels = list(root.attrs["channel_names"])
 
-    pooled = (0, np.zeros(len(channels)), np.zeros(len(channels)))
+    # One parallel task per dataset; merged below in `train` order, so the
+    # result (and the DVC-tracked stats file) is identical on every backend.
+    per_dataset = store_moments(
+        cfg["zarr_store"], train, args.chunk_t, backend=args.backend, workers=args.workers
+    )
+    pooled = pool_moments(per_dataset, len(channels))
+
     print(f"{'dataset':<16}{'steps':>7}  " + "  ".join(f"mean_{c:<5} std_{c:<5}" for c in channels))
-    for name in train:
-        log.info("reading %s", name)
-        moments = channel_moments(root[name], args.chunk_t)
-        pooled = merge_moments(pooled, moments)
-        n, mean, m2 = moments
+    for name, (n, mean, m2) in per_dataset.items():
         std = np.sqrt(m2 / n)
         cols = "  ".join(f"{m:>10.4f} {s:>9.4f}" for m, s in zip(mean, std))
         print(f"{name:<16}{root[name].shape[0]:>7}  {cols}")

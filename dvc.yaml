@@ -13,6 +13,7 @@ stages:
     deps:
       - data/raw
       - scripts/data/convert_to_zarr.py
+      - src/mhd_surrogate/data/conversion.py
     outs:
       - data/processed/re16k_t400.zarr:
           cache: false

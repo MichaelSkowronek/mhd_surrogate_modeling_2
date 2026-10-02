@@ -27,7 +27,7 @@ import yaml
 
 from mhd_surrogate.analysis.summary import filter_datasets
 from mhd_surrogate.utils.logging_config import add_log_level_arg, setup_logging
-from mhd_surrogate.utils.parallel import log_failures, run_parallel
+from mhd_surrogate.utils.parallel import add_backend_args, log_failures, run_parallel
 
 log = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--field", choices=FIELDS, default="vorticity")
     parser.add_argument("--stride", type=int, default=1, help="Render every Nth time step")
     parser.add_argument("--fps", type=int, default=24)
-    parser.add_argument("--workers", type=int, default=None, help="Default: os.cpu_count()")
+    add_backend_args(parser)
     add_log_level_arg(parser)
     return parser.parse_args()
 
@@ -84,10 +84,16 @@ def main() -> None:
         )
         for name in dataset_names
     ]
-    log.info("rendering %d videos (field=%s) with %d workers...", len(jobs), args.field, workers)
+    log.info(
+        "rendering %d videos (field=%s) with %d workers (%s backend)...",
+        len(jobs),
+        args.field,
+        workers,
+        args.backend,
+    )
 
     start = time.monotonic()
-    results = run_parallel(jobs, workers)
+    results = run_parallel(jobs, workers, args.backend)
     elapsed = time.monotonic() - start
 
     failures = log_failures(results)
