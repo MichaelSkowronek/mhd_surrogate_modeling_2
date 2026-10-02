@@ -35,6 +35,11 @@ server = [
 ray = [
     "ray>=2.58",
 ]
+# CUDA build of JAX for training on an NVIDIA GPU (needs a recent driver;
+# the CUDA toolkit itself comes from the wheels). Without it JAX runs on CPU.
+gpu = [
+    "jax[cuda13]>=0.11.2",
+]
 
 [build-system]
 requires = ["uv_build>=0.12.17,<0.13.0"]

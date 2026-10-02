@@ -37,6 +37,19 @@ uv sync
 uv run pre-commit install
 ```
 
+**GPU.** A plain `uv sync` installs the CPU build of JAX. For training on an
+NVIDIA GPU add the `gpu` extra (CUDA 13 wheels, a few GB; needs a recent
+driver, no separate CUDA toolkit):
+
+```bash
+uv sync --extra gpu          # add --extra ray if you use the Ray backend:
+                             # `uv sync` is exact and removes unlisted extras
+uv run python -c "import jax; print(jax.devices())"   # [CudaDevice(id=0)]
+```
+
+The Docker image is still CPU-only; GPU passthrough into the container is
+not set up yet.
+
 Pre-commit hooks ([pre-commit-hooks](https://github.com/pre-commit/pre-commit-hooks):
 whitespace/EOF/YAML-TOML-JSON/large-file/merge-conflict/case-conflict checks,
 plus [ruff](https://docs.astral.sh/ruff/) lint + format) run automatically on
