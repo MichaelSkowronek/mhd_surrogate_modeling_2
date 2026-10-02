@@ -1049,7 +1049,8 @@ the Docker image and in CI, but not required for the other backends).
 `--backend`/`--workers`.
 
 **Measured** with `scripts/analysis/benchmark_backends.py` on this machine
-(12 cores, 16 GB; wall seconds, median of n runs after an untimed warmup,
+(12 cores; WSL was capped at 16 GB for the first measurements and later raised
+to 24 GB, both noted below; wall seconds, median of n runs after an untimed warmup,
 backends interleaved so the OS page cache doesn't favor one; it times the real
 scripts as subprocesses, so Ray's startup is included):
 
@@ -1058,12 +1059,14 @@ scripts as subprocesses, so Ray's startup is included):
 | `compute_stats` (7 datasets, n=3) | 19.8 | **7.8** (2.5x) | 11.7 (1.7x) |
 | `convert_to_zarr` (9 files, n=2) | 49.8 | **12.1** (4.1x) | 16.9 (2.9x) |
 
-| analysis suite, 48 jobs | workers | wall (s) | vs sequential |
-|---|---|---|---|
-| sequential (n=1) | 1 | 451.0 | 1.0x |
-| processes (n=2) | 5 | 163.2 | 2.8x |
-| ray, memory-aware (n=2) | 5 | 166.6 | 2.7x |
-| ray, memory-aware (n=2) | 12 | **148.1** | **3.0x** |
+| analysis suite, 48 jobs | WSL RAM | workers | wall (s) | vs sequential |
+|---|---|---|---|---|
+| sequential (n=1) | - | 1 | 451.0 | 1.0x |
+| processes (n=2) | 16 GB | 5 | 163.2 | 2.8x |
+| ray, memory-aware (n=2) | 16 GB | 5 | 166.6 | 2.7x |
+| ray, memory-aware (n=2) | 16 GB | 12 | 148.1 | 3.0x |
+| processes (n=3) | 24 GB | 12 | **120.4** | **3.7x** |
+| ray, memory-aware (n=3) | 24 GB | 12 | 125.2 | 3.6x |
 
 What this says, honestly:
 
@@ -1072,18 +1075,26 @@ What this says, honestly:
   7-9 uneven tasks on one machine, which is exactly what a process pool is for;
   the speedup is capped well below 12x by the task count and the size spread
   (1248 vs ~900 steps). Default stays `processes`.
-- **For the suite, memory, not cores, is the constraint**, and that's where Ray
-  earns its place. The six checks differ hugely in peak memory (measured on the
-  largest dataset): `check_autocorrelation` 2.2 GB, the other five 0.2-0.4 GB.
-  Run 12 at a time and 8 autocorrelation jobs at once need ~16 GB: the first
-  attempt at this benchmark exhausted the machine's RAM and had to be killed.
-  A thread/process pool runs `--workers` jobs regardless, so it has to be sized
-  by hand (5 workers above). Ray schedules against a declared per-job memory
+- **For the suite, memory can be the constraint, and that's where Ray earns
+  its place — but not speed.** The six checks differ hugely in peak memory
+  (measured on the largest dataset): `check_autocorrelation` 2.2 GB, the other
+  five 0.2-0.4 GB. Run 12 at a time script by script, 8 autocorrelation jobs at
+  once need ~16 GB: the first attempt at this benchmark exhausted a 16 GB
+  machine and had to be killed. A thread/process pool runs `--workers` jobs
+  regardless, so under a tight memory cap it has to be sized by hand (5 workers
+  in the 16 GB rows). Ray schedules against a declared per-job memory
   (`JOB_MEMORY_GB` in `run_all_checks.py`: 2.5 GB for autocorrelation, 0.5 GB
-  for the rest), so it can be given all 12 workers and still never overcommit
-  memory — and it's the fastest configuration (148 s) because of it. At the
-  same worker count the two backends tie (166.6 vs 163.2 s, within the run-to-run
-  spread of n=2).
+  for the rest), so it can be given all 12 workers and still not overcommit
+  memory; under the 16 GB cap that made it the fastest configuration (148 s),
+  and at equal workers the backends tie (166.6 vs 163.2 s).
+- **With enough RAM the advantage disappears.** After raising WSL's limit to
+  24 GB, 12 `processes` workers (with the dataset-major ordering below) finish
+  in 120.4 s against Ray's 125.2 s: the process pool is ~4% faster, about the
+  size of Ray's startup, and the run-to-run ranges don't overlap. Available
+  memory bottomed out at ~7.5 GB of ~21.6 GB, so peak use was roughly 14 GB
+  (inferred from that minimum): 12 workers would have been tight on 16 GB even
+  with the better ordering. Ray's value here is that it adapts to whatever the
+  memory limit is without hand-tuning `--workers`, not that it is faster.
 - **Job order matters too.** The suite used to queue jobs script by script,
   putting all 8 autocorrelation jobs back to back; it now runs dataset by
   dataset, which spreads the heavy script out and is what makes the 5-worker
