@@ -1,8 +1,9 @@
 # Dynamic Mode Decomposition: a linear operator fitted to the train datasets'
 # snapshot pairs, applied repeatedly (src/mhd_surrogate/models/dmd.py).
-# The fit holds all training frames in RAM: ~8.3 GB, ~14 GB peak.
+# The fit holds all training frames in RAM: ~8.3 GB, ~14 GB peak. At rank 750
+# the checkpoint (and logged model) is ~880 MB.
 name: dmd
-rank: 100          # POD modes kept; swept on validation
+rank: 750          # POD modes kept; selected by the validation sweep (README "Rank sweep")
 stabilize: true    # move eigenvalues outside the unit circle onto it
 chunk_t: 64        # frames per zarr read while loading
 column_block: 32768  # state entries per device block for the Gram matrix

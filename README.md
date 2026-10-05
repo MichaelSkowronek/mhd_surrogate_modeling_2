@@ -1597,8 +1597,8 @@ column on the diagnostics.
 ## DMD
 
 ```bash
-uv run --extra gpu scripts/training/train.py model=dmd             # rank 100
-uv run --extra gpu scripts/training/train.py model=dmd model.rank=50
+uv run --extra gpu scripts/training/train.py model=dmd             # rank 750
+uv run --extra gpu scripts/training/train.py model=dmd model.rank=100
 ```
 
 Dynamic Mode Decomposition (`src/mhd_surrogate/models/dmd.py`) fits the best
@@ -1631,7 +1631,8 @@ forecaster it can carry that forward, but not the turbulence.
   the Gram matrix; it logs `fit.rank`, `fit.explained_variance` (0.90 at rank
   100), `fit.unstable_modes` and `fit.n_pairs`.
 
-Validation results at rank 100 (RMSE in units of the training std):
+Validation results at rank 100, the first fit (RMSE in units of the training
+std; the default is now rank 750, selected by the sweep below):
 
 | | persistence | mean field | **DMD** | DMD on train |
 |---|---|---|---|---|
@@ -1657,6 +1658,7 @@ realizations' oscillation better than an unseen one's.
 
 ```bash
 uv run --extra gpu scripts/training/train.py -m model=dmd model.rank=25,50,100,150,200,300,500
+uv run --extra gpu scripts/training/train.py -m model=dmd model.rank=750,1000
 ```
 
 A Hydra multirun (`-m`): one training run per rank, in one process, each
@@ -1665,7 +1667,9 @@ model.rank=50`) and tagged with the sweep (`tags.sweep`, the timestamp of its
 `outputs/multirun/<date>/<time>/` directory, plus `tags.sweep_job`), so the
 UI's filter `tags.sweep = '...'` shows one sweep side by side. The jobs share
 the process, so the Gram matmul is compiled once: the first fit takes ~95 s,
-the rest ~55 s, and the 7 ranks ran in ~15 minutes. Validation results:
+the rest ~55 s, and the 7 ranks ran in ~15 minutes; the trend was still
+improving at 500, so 750 and 1000 followed in a second sweep. Validation
+results:
 
 | rank | explained variance | RMSE lead 1 / 10 / 40 | RMSE mean | skill horizon | spectrum distance (x) | `u_y` period error / peak ratio |
 |---|---|---|---|---|---|---|
@@ -1676,13 +1680,18 @@ the rest ~55 s, and the 7 ranks ran in ~15 minutes. Validation results:
 | 200 | 0.94 | 0.30 / 0.68 / 0.83 | 0.85 | 4 | 2.84 | 0.19 / 0.24 |
 | 300 | 0.96 | 0.28 / 0.64 / 0.78 | 0.83 | 4 | 2.76 | 0.18 / 0.21 |
 | 500 | 0.97 | 0.26 / 0.64 / 0.71 | 0.82 | 5 | 2.71 | 0.17 / 0.17 |
+| **750** | 0.98 | 0.26 / 0.62 / 0.68 | 0.81 | 5 | 2.66 | 0.14 / 0.16 |
+| 1000 | 0.99 | 0.26 / 0.63 / 0.65 | 0.80 | 4 | 2.61 | 0.14 / 0.18 |
 
 What the sweep shows:
 
-- **Short leads keep improving with rank** (lead 1: 0.53 -> 0.26), and so
-  does the small-scale content (spectrum distance 3.09 -> 2.71) -- more modes
-  start the forecast closer to the true state. No overfitting is visible up
-  to rank 500: the train/validation gap at lead 1 stays ~0.05.
+- **Short leads improve with rank up to ~500, then saturate** (lead 1: 0.53
+  -> 0.26, flat from 500 on), and the small-scale content keeps improving
+  slowly (spectrum distance 3.09 -> 2.61) -- more modes start the forecast
+  closer to the true state. **Past ~500 overfitting begins:** on the training
+  dataset lead-1 RMSE keeps falling (0.22 -> 0.20 -> 0.19 at 500/750/1000)
+  while validation stays at 0.26, and rank 1000 loses a skill step. The extra
+  modes fit the training realizations, not the dynamics.
 - **The mean RMSE over all leads barely moves (0.80-0.85), and the lowest
   rank scores best.** After a few dozen steps every forecast has decorrelated,
   and a smoother, lower-rank forecast sits closer to the mean, which is what
@@ -1695,6 +1704,14 @@ What the sweep shows:
   validation realization those differences are noise.
 - Energy error (~26%) doesn't depend on rank: the missing energy is in the
   turbulence no linear model carries forward, not in the truncated modes.
+
+**Selected: rank 750**, by the ranking rule in "How candidates are ranked":
+500 and 750 tie on skill horizon (5), 750 wins the tie-break on RMSE at lead
+10 (0.62 vs 0.64), and its physics scores stay within the guardrails of the
+previous default, rank 100 (energy +0.002, enstrophy -0.001, spectra better).
+The margin over 500 is small enough to be realization noise; the rule, not
+the margin, decides. The cost is size: the rank-750 checkpoint and logged
+model are ~880 MB (rank 500: ~590 MB, rank 100: ~117 MB).
 
 ## Docker
 
