@@ -73,7 +73,7 @@ src/mhd_surrogate/   importable package, split by pipeline stage
 scripts/             CLI entry points, same split (plus viz/)
   data/              explore_data, convert_to_zarr, compute_stats
   analysis/          check_*.py, run_all_checks, benchmark_backends
-  viz/               make_video, make_all_videos
+  viz/               make_video, make_all_videos, make_forecast_video
   training/          train
 tests/               mirrors src/ and scripts/ (data/, analysis/, training/, evaluation/, models/, utils/, viz/)
 dvc.yaml, dvc.lock  data pipeline (raw -> zarr -> stats) and its pinned hashes
@@ -1226,6 +1226,30 @@ Same parallel dispatch as `run_all_checks.py` (see "Running the suite across
 all datasets"): one `make_video.py --dataset X` subprocess per dataset,
 concurrently. All 9 default (vorticity) videos took ~157s wall time against
 ~25 minutes of aggregate CPU time on this 12-core machine, ~133 MB total.
+
+### Forecast videos
+
+```bash
+uv run scripts/viz/make_forecast_video.py --model-id <m-...>       # a logged MLflow model
+uv run scripts/viz/make_forecast_video.py --checkpoint outputs/<date>/<time>/model
+uv run scripts/viz/make_forecast_video.py --model-id <m-...> --max-steps 120 --log-to-mlflow
+```
+
+Shows how a model's forecast loses the flow, which the scores only
+summarize: truth, prediction and their difference stacked full width (the
+domain is 1151 x 127, so side by side would leave thin slivers), above the
+scored RMSE-vs-lead-time curve with a cursor at the current frame. The
+forecast is made exactly as it is scored (80 context steps, then frame k is
+lead time k + 1), on the validation dataset by default (training datasets are
+allowed, the test dataset is refused). Color scales are fixed for the whole
+video: truth and prediction share the truth's 1st/99th percentile range, and
+the difference panel is centered on zero with the same half-range, so an
+error as large as the flow itself saturates it. `--field`, `--stride` and
+`--fps` work as in `make_video.py`; `--max-steps` cuts a short clip (120
+frames take ~25 s). With `--log-to-mlflow` the video is attached to the run
+that logged the model, under `videos/`, next to its scores. For the mean field
+the video makes its failure obvious: the prediction is a smooth band, so the
+difference panel is the truth's whole vortex street.
 
 ## Training config (Hydra)
 
