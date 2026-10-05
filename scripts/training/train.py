@@ -3,8 +3,9 @@ validation dataset.
 
 1. Logs the data version the run started against (`dvc.lock` hashes as
    params, `dvc.lock` and the normalization stats as artifacts).
-2. Fits `cfg.model` on the train datasets and saves the checkpoint into the
-   run's output directory, logged to MLflow as the `model` artifact.
+2. Fits `cfg.model` on the train datasets, saves the checkpoint into the
+   run's output directory and logs it as an MLflow model named after the
+   model (`training/mlflow_model.py`); the run is named after it too.
 3. Scores it on `cfg.data.val_dataset` under the forecast protocol
    (`evaluation/protocol.py`): scalar scores as `val.*` metrics and the
    per-lead-time RMSE as the `val.rmse` history (step = lead time).
@@ -44,6 +45,7 @@ from mhd_surrogate.data.normalization import NormalizationStats
 from mhd_surrogate.data.versioning import data_provenance
 from mhd_surrogate.evaluation.evaluate import evaluate, train_eval_datasets
 from mhd_surrogate.models.registry import build_model
+from mhd_surrogate.training.mlflow_model import log_surrogate
 from mhd_surrogate.training.mlflow_utils import finite_metrics, log_metric_series
 from mhd_surrogate.training.tracking import tracked_run
 
@@ -66,7 +68,11 @@ def main(cfg: DictConfig) -> None:
 
     resolved = OmegaConf.to_container(cfg, resolve=True)
     with tracked_run(
-        cfg.mlflow.tracking_uri, cfg.mlflow.experiment_name, resolved, log_file=log_file
+        cfg.mlflow.tracking_uri,
+        cfg.mlflow.experiment_name,
+        resolved,
+        log_file=log_file,
+        run_name=cfg.model.name,
     ):
         # Which data/stats version this run was started against: the hashes
         # dvc.lock pins, as params (searchable in the UI), plus the lock and
@@ -101,8 +107,9 @@ def main(cfg: DictConfig) -> None:
 
         checkpoint = output_dir / "model"
         model.save(checkpoint)
-        mlflow.log_artifacts(str(checkpoint), artifact_path="model")
-        log.info("checkpoint saved to %s", checkpoint)
+        frame_shape = tuple(next(iter(train.values())).shape[1:])
+        model_info = log_surrogate(model, checkpoint, frame_shape, params=resolved["model"])
+        log.info("checkpoint saved to %s, logged as model %s", checkpoint, model_info.model_id)
 
         # Validation is what decisions are made on; the training dataset(s)
         # are scored the same way as a sanity check (can the model fit at all,
@@ -115,12 +122,15 @@ def main(cfg: DictConfig) -> None:
         ]
         scale = np.asarray(stats.effective_std(cfg.normalization.std_mode))
         for name, prefix in targets:
-            _score_and_log(model, root[name], name, prefix, scale, cfg)
+            _score_and_log(model, root[name], name, prefix, scale, cfg, model_info.model_id)
 
 
-def _score_and_log(model, series, name: str, prefix: str, scale: np.ndarray, cfg) -> None:
+def _score_and_log(
+    model, series, name: str, prefix: str, scale: np.ndarray, cfg, model_id: str
+) -> None:
     """Score `model` on one dataset under the forecast protocol and log the
-    scalar scores as `<prefix>.*` metrics and the RMSE curve as `<prefix>.rmse`."""
+    scalar scores as `<prefix>.*` metrics and the RMSE curve as `<prefix>.rmse`,
+    on the run and linked to the logged model `model_id`."""
     dx, dy = grid_spacing(series.shape[2], series.shape[3])
     start = time.perf_counter()
     result = evaluate(
@@ -136,10 +146,10 @@ def _score_and_log(model, series, name: str, prefix: str, scale: np.ndarray, cfg
     log.info("evaluated on %s in %.1f s", name, time.perf_counter() - start)
 
     finite, undefined = finite_metrics(result.scores)
-    mlflow.log_metrics({f"{prefix}.{k}": v for k, v in finite.items()})
+    mlflow.log_metrics({f"{prefix}.{k}": v for k, v in finite.items()}, model_id=model_id)
     if undefined:
         log.info("%s: undefined for this model, not logged: %s", prefix, ", ".join(undefined))
-    log_metric_series(f"{prefix}.rmse", result.rmse, start_step=1)
+    log_metric_series(f"{prefix}.rmse", result.rmse, start_step=1, model_id=model_id)
     log.info(
         "%s scores:\n%s",
         prefix,

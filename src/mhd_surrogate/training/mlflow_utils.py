@@ -43,12 +43,18 @@ def finite_metrics(metrics: Mapping[str, float]) -> tuple[dict[str, float], list
     return finite, [k for k in metrics if k not in finite]
 
 
-def log_metric_series(key: str, values: Sequence[float], start_step: int = 0) -> None:
+def log_metric_series(
+    key: str, values: Sequence[float], start_step: int = 0, model_id: str | None = None
+) -> None:
     """Log `values` as one metric's history, value i at step `start_step + i`,
-    in batches rather than one request per step."""
+    in batches rather than one request per step; `model_id` links it to a
+    logged model as well as the run."""
     run_id = mlflow.active_run().info.run_id
     timestamp = int(time.time() * 1000)
-    metrics = [Metric(key, float(v), timestamp, start_step + i) for i, v in enumerate(values)]
+    metrics = [
+        Metric(key, float(v), timestamp, start_step + i, model_id=model_id, run_id=run_id)
+        for i, v in enumerate(values)
+    ]
     client = mlflow.MlflowClient()
     for i in range(0, len(metrics), MAX_BATCH):
         client.log_batch(run_id, metrics=metrics[i : i + MAX_BATCH])

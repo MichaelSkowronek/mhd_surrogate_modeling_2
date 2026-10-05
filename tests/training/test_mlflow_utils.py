@@ -48,3 +48,19 @@ def test_log_metric_series_logs_each_value_at_its_step_across_batches(tmp_path, 
 
     history = mlflow.MlflowClient().get_metric_history(run.info.run_id, "val.rmse")
     assert sorted((m.step, m.value) for m in history) == list(enumerate(values, start=1))
+
+
+def test_log_metric_series_links_the_history_to_a_logged_model(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    mlflow.set_tracking_uri(f"sqlite:///{tmp_path / 'mlruns.db'}")
+    mlflow.set_experiment("exp")
+
+    with mlflow.start_run() as run:
+        model = mlflow.create_external_model(name="m", source_run_id=run.info.run_id)
+        log_metric_series("val.rmse", [0.5, 0.7], start_step=1, model_id=model.model_id)
+
+    logged = mlflow.get_logged_model(model.model_id)
+    assert sorted((m.step, m.value) for m in logged.metrics if m.key == "val.rmse") == [
+        (1, 0.5),
+        (2, 0.7),
+    ]
