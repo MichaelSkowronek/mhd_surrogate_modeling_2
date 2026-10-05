@@ -1,0 +1,4 @@
+# Climatology baseline: the per-pixel temporal mean of the train datasets,
+# predicted at every step (src/mhd_surrogate/models/baselines.py).
+name: mean_field
+chunk_t: 64  # time steps per chunk streamed through the device

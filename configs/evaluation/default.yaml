@@ -1,0 +1,10 @@
+# Validation scoring after training (src/mhd_surrogate/evaluation/evaluate.py).
+# The context length is part of the data protocol: data.context_steps.
+#
+# skill_threshold: RMSE in units of the training std; the skill horizon is how
+#   many lead steps stay at or below it. Persistence is already at ~0.5 one
+#   step ahead and the mean field at ~0.85, so a model with skill beats both.
+# report_leads: lead times (1-based) also logged as scalars, besides the full
+#   per-step curve; 40 is the longest characteristic period found in the EDA.
+skill_threshold: 0.5
+report_leads: [1, 10, 40, 100]

@@ -17,8 +17,8 @@ conventions below; it shifts which tools are worth reaching for at all.
 ## Layout
 
 - Organize code by pipeline stage. Under `src/mhd_surrogate/` the
-  subpackages are `data/`, `analysis/`, `training/`, `evaluation/` and
-  `utils/`; under `scripts/` the subdirectories are `data/`, `analysis/`,
+  subpackages are `data/`, `analysis/`, `models/`, `training/`,
+  `evaluation/` and `utils/`; under `scripts/` the subdirectories are `data/`, `analysis/`,
   `viz/` and `training/`. Put new code in the one matching its stage rather
   than at the top level of `src/mhd_surrogate/` or `scripts/`, and add a new
   subpackage/subdirectory only when a genuinely new stage appears.
@@ -73,6 +73,13 @@ conventions below; it shifts which tools are worth reaching for at all.
   against disk: staying in sync is the workflow's job (`dvc repro`), and an
   in-script check was deliberately dropped (see the README).
 - See the README's "Data versioning (DVC)" section for the full rationale.
+
+## Models
+
+- New models implement `src/mhd_surrogate/models/base.py`'s interface,
+  register in `models/registry.py` with a `configs/model/` file, and take and
+  return raw fields (normalizing internally), so every model is scored in the
+  same units.
 
 ## Parallelism
 

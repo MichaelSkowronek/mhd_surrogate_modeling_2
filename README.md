@@ -25,9 +25,10 @@ Exploratory data analysis is done (tagged
 [`v0.1.0-eda-complete`](https://github.com/MichaelSkowronek/mhd_surrogate_modeling_2/releases/tag/v0.1.0-eda-complete)),
 and the dataset-level train/val/test split is implemented and verified
 against real data. The forecast-evaluation protocol and metrics are in place
-(see "Forecast evaluation"); no surrogate model or training loop exists yet --
-`scripts/training/train.py` is still just a smoke test of the Hydra/MLflow
-plumbing it will grow into.
+(see "Forecast evaluation"), and the two baselines every model has to beat --
+persistence and the mean field -- are fitted, checkpointed and scored on the
+validation dataset through the training entry point (see "Baselines"). No
+learned model exists yet.
 
 ## Setup
 
@@ -66,17 +67,18 @@ src/mhd_surrogate/   importable package, split by pipeline stage
   data/              dataset, grid, normalization, versioning, conversion
   analysis/          fields, summary, spectral
   training/          mlflow_utils, tracking
-  evaluation/        protocol, metrics, diagnostics
+  evaluation/        protocol, metrics, diagnostics, evaluate
+  models/            base (interface), baselines, registry
   utils/             logging_config, parallel
 scripts/             CLI entry points, same split (plus viz/)
   data/              explore_data, convert_to_zarr, compute_stats
   analysis/          check_*.py, run_all_checks, benchmark_backends
   viz/               make_video, make_all_videos
   training/          train
-tests/               mirrors src/ and scripts/ (data/, analysis/, training/, evaluation/, utils/, viz/)
+tests/               mirrors src/ and scripts/ (data/, analysis/, training/, evaluation/, models/, utils/, viz/)
 dvc.yaml, dvc.lock  data pipeline (raw -> zarr -> stats) and its pinned hashes
 data/raw.dvc         DVC pointer to the raw .npy files (.dvc/ holds the remote config)
-configs/             Hydra tree: config.yaml + data/, dataset/, normalization/, mlflow/ groups
+configs/             Hydra tree: config.yaml + data/, dataset/, normalization/, model/, evaluation/, mlflow/ groups
   analysis/          plain-YAML configs (split.yaml, grid.yaml)
 ```
 
@@ -1194,8 +1196,9 @@ concurrently. All 9 default (vorticity) videos took ~157s wall time against
 ## Training config (Hydra)
 
 ```bash
-uv run scripts/training/train.py
-uv run scripts/training/train.py data=re16k seed=123
+uv run scripts/training/train.py                     # model=mean_field
+uv run scripts/training/train.py model=persistence
+uv run --extra gpu scripts/training/train.py        # on the GPU (see Setup)
 ```
 
 The exploration/analysis scripts above stay on plain argparse + PyYAML
@@ -1203,14 +1206,14 @@ The exploration/analysis scripts above stay on plain argparse + PyYAML
 tools and don't need config composition. New training/model code uses
 [Hydra](https://hydra.cc) instead, since that will need config groups (model,
 optimizer, trainer, ...) that compose, with CLI overrides and later multirun
-sweeps. `configs/config.yaml` is the root config (currently `data`, `dataset`
-and `seed`); `configs/data/re16k.yaml` holds the zarr store path and the
+sweeps. `configs/config.yaml` is the root config (`data`, `dataset`,
+`normalization`, `model`, `evaluation`, `mlflow` and `seed`); `configs/data/re16k.yaml` holds the zarr store path and the
 dataset-level split (`train_datasets`, `val_dataset`, `test_dataset` -- see
 "Train / val / test split" above), selected via the `data` default.
 
-Model code will be in [JAX](https://jax.readthedocs.io). `jax` runs on CPU
-here; there's an NVIDIA GPU on this machine but no CUDA-enabled `jaxlib`
-installed yet.
+Model code is in [JAX](https://jax.readthedocs.io), on the GPU when the
+`gpu` extra is installed (see Setup); each run logs which backend it used as
+the `jax_backend` param.
 
 `configs/dataset/` holds sample-windowing config (`window`/`horizon`/
 `stride`), selected via the `dataset` default.
@@ -1227,12 +1230,10 @@ tied to any model yet. Values are normalized on the fly when a `Normalizer`
 is passed (see "Normalization statistics" below), otherwise returned as
 stored, float32.
 
-No model exists yet, so `scripts/training/train.py` currently only resolves
-the config, confirms every train/val dataset is reachable (shape/dtype,
-sample count, one sample's shapes), and logs the run to MLflow (see below),
-as a smoke test of the plumbing it will grow into the real training loop on
-top of -- it deliberately never opens `test_dataset`, not even for a shape
-check. Each run's resolved config and logs are written to
+`scripts/training/train.py` fits the model selected by the `model` group on
+the train datasets, saves its checkpoint, and scores it on the validation
+dataset (see "Baselines" below for what it logs). It deliberately never opens
+`test_dataset`, not even for a shape check. Each run's resolved config and logs are written to
 `outputs/<date>/<time>/` (gitignored, like the other run artifacts).
 `hydra.job.chdir` is set to `false` so the working directory stays the repo
 root; without it, Hydra's default of chdir-ing into the run directory would
@@ -1300,8 +1301,8 @@ builds the `(x - mean) / std` transform (and its `inverse`, for turning
 predictions back into physical units); `WindowedDataset`/`load_full_dataset`
 take it as an optional `normalizer`. `train.py` loads the stats file, runs
 `check_compatible` against the configured channels, train datasets and test
-dataset before building the normalizer, and fails with a pointer to
-`compute_stats.py` if the file is missing.
+dataset, and fails with a pointer to `compute_stats.py` if the file is
+missing; it uses the effective std to scale the validation RMSE.
 
 ### Experiment tracking (MLflow)
 
@@ -1415,6 +1416,57 @@ and a peak power ratio of 0.95-1.14 (the true validation peak is at period
 off only when they clearly exceed those values; a period error under ~0.2 is
 indistinguishable from simply being a different realization.
 
+## Baselines
+
+Every model implements one interface (`src/mhd_surrogate/models/base.py`):
+`fit` on the train datasets, `predict(context, n_steps)` under the forecast
+protocol, and `save`/`load` of a checkpoint directory (`model.json` naming the
+model, plus its arrays), so `models/registry.py` can build a model from its
+`model` config group or load any checkpoint by name. Models take and return
+raw velocity fields; one that wants normalized inputs normalizes internally,
+so every model is scored in the same units.
+
+The two baselines bracket what a real model has to do:
+
+- **Persistence** (`model=persistence`) repeats the last context frame. It is
+  the best simple forecast one step ahead and useless once the flow has
+  decorrelated.
+- **Mean field** (`model=mean_field`, the default) predicts the per-pixel
+  temporal mean of all 7,115 training steps at every lead time --
+  "climatology". Its parameters are the mean field, so it is fitted, saved
+  and logged like any other model, not computed as a data-pipeline output. The
+  fit streams the train datasets in chunks and sums them on JAX's default
+  device (the GPU with the `gpu` extra): 13 s, almost all of it zarr reads.
+
+`train.py` logs, per run: the checkpoint as the `model` artifact,
+`fit_seconds`, every scalar score as a `val.*` metric, and the RMSE curve as
+the `val.rmse` history with step = lead time (one batched request rather than
+837). Scores that are undefined for a model (the oscillation period of a
+forecast with no oscillation) are left out and named in the log.
+
+Validation results (`re16k_t400_6`, 837 scored steps; RMSE in units of the
+training std):
+
+| | persistence | mean field | different realization* |
+|---|---|---|---|
+| RMSE at lead 1 / 10 / 40 | 0.51 / 1.40 / 1.23 | 0.91 / 0.90 / 0.89 | -- |
+| RMSE, mean over all leads | 1.24 | 0.96 | -- |
+| energy / enstrophy error | 2% / 11% | 29% / 76% | <1% / <3% |
+| divergence ratio | 1.14 | 0.16 | ~1 |
+| spatial spectrum distance (x / y) | 0.08 / 0.05 | 3.9 / 2.6 | 0.02-0.03 / 0.01-0.03 |
+| `u_y` period error / peak power ratio | undefined / 0 | undefined / 0 | 0.15-0.19 / 0.95-1.14 |
+
+\* train datasets 0 and 10 scored against the validation targets, from
+"Forecast evaluation" above: the right dynamics, the wrong phase.
+
+Neither baseline has any skill at the 0.5 threshold (persistence is already
+at 0.51 one step ahead). Persistence beats the mean field only at lead 1 and
+keeps realistic snapshot statistics but no dynamics; the mean field has the
+lower pointwise error from lead ~2 on but no small scales, almost no
+divergence and no oscillation. A useful surrogate has to beat persistence
+early and the mean field late while scoring near the "different realization"
+column on the diagnostics.
+
 ## Docker
 
 The project ships as a container image so the exact environment (Python
@@ -1520,7 +1572,8 @@ scripts/training/train.py mlflow=server` logs to it via `localhost:5000`
 (the `mlflow/server.yaml` config); the default `mlflow=local` still uses the
 SQLite file and needs no containers.
 
-The image is CPU-only, like the local setup (no CUDA build of JAX yet).
+The default image is CPU-only; `app-gpu` adds the CUDA build of JAX (see
+"GPU image").
 
 `scripts/` is located relative to the working directory (`/app` in the
 container), not relative to the installed package, since in the image the

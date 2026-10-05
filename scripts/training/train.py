@@ -1,9 +1,13 @@
-"""Training entry point.
+"""Training entry point: fit the configured model, then score it on the
+validation dataset.
 
-No model exists yet, so this currently just resolves the Hydra config,
-confirms the configured train/val datasets are reachable, and logs the
-config and dataset info to MLflow, as a smoke test of the plumbing this
-will grow into the real training loop on top of.
+1. Logs the data version the run started against (`dvc.lock` hashes as
+   params, `dvc.lock` and the normalization stats as artifacts).
+2. Fits `cfg.model` on the train datasets and saves the checkpoint into the
+   run's output directory, logged to MLflow as the `model` artifact.
+3. Scores it on `cfg.data.val_dataset` under the forecast protocol
+   (`evaluation/protocol.py`): scalar scores as `val.*` metrics and the
+   per-lead-time RMSE as the `val.rmse` history (step = lead time).
 
 Deliberately never opens `cfg.data.test_dataset`, not even to check its
 shape -- see configs/data/re16k.yaml's docstring: it's the dataset-level
@@ -11,8 +15,8 @@ held-out test set and must never be read by any script, including this
 one, until final evaluation.
 
 Usage:
-    uv run scripts/training/train.py
-    uv run scripts/training/train.py data=re16k seed=123
+    uv run scripts/training/train.py                       # model=mean_field
+    uv run scripts/training/train.py model=persistence
     uv run scripts/training/train.py mlflow=server  # Docker stack, see README
     uv run mlflow ui --backend-store-uri sqlite:///mlruns.db  # view runs
 """
@@ -21,17 +25,23 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from pathlib import Path
 
 import hydra
+import jax
+import numpy as np
 import zarr
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
 import mlflow
-from mhd_surrogate.data.dataset import load_full_dataset
-from mhd_surrogate.data.normalization import NormalizationStats, Normalizer
+from mhd_surrogate.data.grid import grid_spacing
+from mhd_surrogate.data.normalization import NormalizationStats
 from mhd_surrogate.data.versioning import data_provenance
+from mhd_surrogate.evaluation.evaluate import evaluate
+from mhd_surrogate.models.registry import build_model
+from mhd_surrogate.training.mlflow_utils import finite_metrics, log_metric_series
 from mhd_surrogate.training.tracking import tracked_run
 
 log = logging.getLogger(__name__)
@@ -43,7 +53,8 @@ def main(cfg: DictConfig) -> None:
     # project.yaml); this is the DEBUG file it writes in the run's output
     # directory, which tracked_run uploads to MLflow.
     hydra_cfg = HydraConfig.get()
-    log_file = Path(hydra_cfg.runtime.output_dir) / f"{hydra_cfg.job.name}.log"
+    output_dir = Path(hydra_cfg.runtime.output_dir)
+    log_file = output_dir / f"{hydra_cfg.job.name}.log"
     log.info("resolved config:\n%s", OmegaConf.to_yaml(cfg))
 
     # Silences mlflow's "load this tracing skill" hint on every call, which
@@ -62,6 +73,8 @@ def main(cfg: DictConfig) -> None:
         mlflow.log_params(provenance)
         mlflow.log_artifact("dvc.lock")
         mlflow.log_artifact(cfg.normalization.stats_path)
+        mlflow.log_param("jax_backend", jax.default_backend())
+        log.info("jax devices: %s", jax.devices())
 
         root = zarr.open_group(store=cfg.data.zarr_store, mode="r")
         stats_path = Path(cfg.normalization.stats_path)
@@ -73,44 +86,45 @@ def main(cfg: DictConfig) -> None:
         stats.check_compatible(
             root.attrs["channel_names"], cfg.data.train_datasets, cfg.data.test_dataset
         )
-        normalizer = Normalizer.from_stats(stats, cfg.normalization.std_mode)
-        log.info(
-            "normalizing with %s (std_mode=%s): mean=%s std=%s",
-            stats_path,
-            cfg.normalization.std_mode,
-            stats.mean,
-            stats.effective_std(cfg.normalization.std_mode),
-        )
         log.info("test_dataset %s: configured, deliberately not opened", cfg.data.test_dataset)
 
-        for name in [*cfg.data.train_datasets, cfg.data.val_dataset]:
-            arr = root[name]
-            ds = load_full_dataset(
-                cfg.data.zarr_store,
-                name,
-                cfg.dataset.window,
-                cfg.dataset.horizon,
-                cfg.dataset.stride,
-                normalizer,
-            )
-            x, y = ds[0]
-            role = "val" if name == cfg.data.val_dataset else "train"
-            log.info(
-                "%s (%s): shape=%s dtype=%s, %d windowed samples, sample shapes x=%s y=%s",
-                name,
-                role,
-                arr.shape,
-                arr.dtype,
-                len(ds),
-                x.shape,
-                y.shape,
-            )
-            mlflow.log_params(
-                {
-                    f"{role}.{name}.shape": str(arr.shape),
-                    f"{role}.{name}.n_samples": len(ds),
-                }
-            )
+        model = build_model(OmegaConf.to_container(cfg.model, resolve=True))
+        train = {name: root[name] for name in cfg.data.train_datasets}
+        start = time.perf_counter()
+        model.fit(train)
+        fit_seconds = time.perf_counter() - start
+        mlflow.log_metric("fit_seconds", fit_seconds)
+        log.info("fitted %s in %.1f s", model.name, fit_seconds)
+
+        checkpoint = output_dir / "model"
+        model.save(checkpoint)
+        mlflow.log_artifacts(str(checkpoint), artifact_path="model")
+        log.info("checkpoint saved to %s", checkpoint)
+
+        val = root[cfg.data.val_dataset]
+        dx, dy = grid_spacing(val.shape[2], val.shape[3])
+        start = time.perf_counter()
+        result = evaluate(
+            model,
+            val,
+            cfg.data.context_steps,
+            dx,
+            dy,
+            scale=np.asarray(stats.effective_std(cfg.normalization.std_mode)),
+            skill_threshold=cfg.evaluation.skill_threshold,
+            report_leads=list(cfg.evaluation.report_leads),
+        )
+        log.info("evaluated on %s in %.1f s", cfg.data.val_dataset, time.perf_counter() - start)
+
+        finite, undefined = finite_metrics(result.scores)
+        mlflow.log_metrics({f"val.{k}": v for k, v in finite.items()})
+        if undefined:
+            log.info("undefined for this model, not logged: %s", ", ".join(undefined))
+        log_metric_series("val.rmse", result.rmse, start_step=1)
+        log.info(
+            "val scores:\n%s",
+            "\n".join(f"  {k}: {v:.4g}" for k, v in sorted(result.scores.items())),
+        )
 
 
 if __name__ == "__main__":
