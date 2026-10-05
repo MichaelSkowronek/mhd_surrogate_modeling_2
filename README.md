@@ -1390,6 +1390,30 @@ neither achievable nor the only thing worth measuring.
   regresses toward the mean keeps a modest pointwise error but loses the small
   scales, which these catch. They are computed in chunks, so a long series is
   never held in float64 at once.
+- *Long horizon, in time* (`diagnostics.temporal_scores`): the spatial scores
+  look at each snapshot, so they can't see a forecast that has the right
+  structure at every instant but the wrong dynamics. The EDA's most robust
+  feature is the coherent ~24-40 step oscillation, a single sharp peak in the
+  Welch spectrum of the *domain-averaged* `u_y`, so the temporal scores use the
+  domain-averaged velocity: log-spectral distance per channel, the relative
+  error of `u_y`'s dominant period (peak refined between the coarse bins by a
+  parabola) and the ratio of predicted to true power at that peak (below 1 when
+  the oscillation is damped). Welch uses the EDA's 200-step segments, so a
+  held-out series gives ~7 of them: noisy, coarse estimates. A forecast with no
+  oscillation at all (e.g. persistence, or the mean field) has an undefined
+  period (`nan`) and a peak ratio of 0. SPOD would give mode shapes rather than
+  a score (it needs mode matching between prediction and truth and an
+  eigendecomposition per frequency), so it stays a plotting diagnostic.
+
+**How big a score is "perfect"?** Scoring a different realization of the same
+flow (train datasets 0 and 10 against the validation targets) -- right
+dynamics, wrong phase -- bounds what the metrics can resolve: spatial spectrum
+distances of 0.01-0.03, energy and enstrophy errors under 3%, divergence ratio
+~1, but temporal spectrum distances of ~0.2, a `u_y` period error of 0.15-0.19
+and a peak power ratio of 0.95-1.14 (the true validation peak is at period
+25.6, with 38% of the `u_y` power). A model's temporal scores are meaningfully
+off only when they clearly exceed those values; a period error under ~0.2 is
+indistinguishable from simply being a different realization.
 
 ## Docker
 

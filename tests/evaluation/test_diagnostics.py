@@ -8,6 +8,7 @@ from mhd_surrogate.evaluation.diagnostics import (
     log_spectral_distance,
     rms_divergence,
     series_summary,
+    temporal_scores,
 )
 
 DX, DY = 0.5, 0.25
@@ -64,6 +65,8 @@ def test_series_summary_is_independent_of_the_chunk_size():
     for key in a:
         assert b[key] == pytest.approx(a[key])
     assert a["energy"].shape == (7,)
+    assert a["mean_velocity"].shape == (7, 2)
+    assert a["mean_velocity"] == pytest.approx(series.mean(axis=(2, 3)))
     assert a["spectrum_x"].shape == (2, 16 // 2 + 1)
     assert a["spectrum_y"].shape == (2, 12 // 2 + 1)
 
@@ -72,13 +75,17 @@ def test_compare_diagnostics_of_a_perfect_forecast_shows_no_error():
     rng = np.random.default_rng(1)
     target = rng.normal(size=(5, 2, 16, 12))
 
-    scores = compare_diagnostics(target, target, DX, DY)
+    scores = compare_diagnostics(target, target, DX, DY, nperseg=4)
 
     assert scores["energy_rel_error"] == pytest.approx(0.0, abs=1e-12)
     assert scores["enstrophy_rel_error"] == pytest.approx(0.0, abs=1e-12)
     assert scores["divergence_ratio"] == pytest.approx(1.0)
     assert scores["spectrum_x_lsd"] == pytest.approx(0.0, abs=1e-9)
     assert scores["spectrum_y_lsd"] == pytest.approx(0.0, abs=1e-9)
+    assert scores["temporal_u_x_lsd"] == pytest.approx(0.0, abs=1e-9)
+    assert scores["temporal_u_y_lsd"] == pytest.approx(0.0, abs=1e-9)
+    assert scores["u_y_period_error"] == pytest.approx(0.0, abs=1e-9)
+    assert scores["u_y_peak_power_ratio"] == pytest.approx(1.0)
 
 
 def test_compare_diagnostics_scales_as_expected_for_a_doubled_field():
@@ -87,13 +94,40 @@ def test_compare_diagnostics_scales_as_expected_for_a_doubled_field():
     rng = np.random.default_rng(2)
     target = rng.normal(size=(5, 2, 16, 12))
 
-    scores = compare_diagnostics(2.0 * target, target, DX, DY, chunk_t=2)
+    scores = compare_diagnostics(2.0 * target, target, DX, DY, chunk_t=2, nperseg=4)
 
     assert scores["energy_rel_error"] == pytest.approx(3.0)
     assert scores["enstrophy_rel_error"] == pytest.approx(3.0)
     assert scores["divergence_ratio"] == pytest.approx(2.0)
     assert scores["spectrum_x_lsd"] == pytest.approx(np.log10(4.0))
     assert scores["spectrum_y_lsd"] == pytest.approx(np.log10(4.0))
+    assert scores["temporal_u_y_lsd"] == pytest.approx(np.log10(4.0))
+    assert scores["u_y_period_error"] == pytest.approx(0.0, abs=1e-9)
+    assert scores["u_y_peak_power_ratio"] == pytest.approx(4.0)
+
+
+def test_log_spectral_distance_of_a_flat_prediction_is_bounded_not_floor_dominated():
+    true = np.array([[0.0, 1.0, 10.0, 100.0]])
+    flat = np.zeros_like(true)
+
+    distance = log_spectral_distance(flat, true)
+
+    # The floor is relative to the true spectrum's peak (1e-10 of it), so the
+    # distance is a few decades, not set by an arbitrary absolute epsilon.
+    assert 5.0 < distance < 12.0
+
+
+def test_temporal_scores_of_a_constant_forecast_have_no_period():
+    """A flat forecast has no oscillation: zero peak power, and its 'period'
+    is undefined (nan) rather than numerical noise."""
+    true = oscillating_means(36.0)
+    flat = np.zeros_like(true)
+
+    scores = temporal_scores(flat, true)
+
+    assert np.isnan(scores["u_y_period_error"])
+    assert scores["u_y_peak_power_ratio"] == pytest.approx(0.0, abs=1e-12)
+    assert np.isfinite(scores["temporal_u_y_lsd"]) and scores["temporal_u_y_lsd"] > 5.0
 
 
 def test_a_smoothed_forecast_loses_small_scale_power():
@@ -104,7 +138,57 @@ def test_a_smoothed_forecast_loses_small_scale_power():
     target = rng.normal(size=(4, 2, 16, 12))
     smoothed = np.broadcast_to(target.mean(axis=2, keepdims=True), target.shape)
 
-    scores = compare_diagnostics(smoothed, target, DX, DY)
+    scores = compare_diagnostics(smoothed, target, DX, DY, nperseg=4)
 
     assert scores["spectrum_x_lsd"] > 1.0
     assert scores["energy_rel_error"] > 0.5
+
+
+def oscillating_means(period, amplitude=1.0, n=800, seed=0):
+    """(T, 2) domain-averaged velocity: u_y a sine of the given period plus noise
+    (same noise for any period/amplitude), u_x noise only."""
+    rng = np.random.default_rng(seed)
+    t = np.arange(n)
+    noise = rng.normal(scale=0.3, size=(n, 2))
+    series = noise.copy()
+    series[:, 1] += amplitude * np.sin(2 * np.pi * t / period)
+    return series
+
+
+def test_temporal_scores_of_a_perfect_forecast_show_no_error():
+    true = oscillating_means(36.0)
+
+    scores = temporal_scores(true, true)
+
+    assert scores["temporal_u_x_lsd"] == pytest.approx(0.0, abs=1e-9)
+    assert scores["temporal_u_y_lsd"] == pytest.approx(0.0, abs=1e-9)
+    assert scores["u_y_period_error"] == pytest.approx(0.0, abs=1e-9)
+    assert scores["u_y_peak_power_ratio"] == pytest.approx(1.0)
+
+
+def test_temporal_scores_detect_a_damped_oscillation():
+    """A forecast with half the amplitude has a quarter of the power at every
+    frequency, at the right period."""
+    true = oscillating_means(36.0)
+
+    scores = temporal_scores(0.5 * true, true)
+
+    assert scores["u_y_peak_power_ratio"] == pytest.approx(0.25)
+    assert scores["u_y_period_error"] == pytest.approx(0.0, abs=1e-9)
+    assert scores["temporal_u_y_lsd"] == pytest.approx(np.log10(4.0))
+
+
+def test_temporal_scores_detect_a_mistimed_oscillation():
+    """A period of 50 instead of 36 is a ~39% period error, resolved even
+    though the Welch bins are coarse (period 200/k)."""
+    true = oscillating_means(36.0)
+    mistimed = oscillating_means(50.0)
+
+    scores = temporal_scores(mistimed, true)
+
+    assert scores["u_y_period_error"] == pytest.approx(abs(50.0 / 36.0 - 1.0), abs=0.06)
+    # Broadband noise dominates the distance, so a shifted peak moves it only
+    # a little: the period error is the score that catches this.
+    assert scores["temporal_u_y_lsd"] > 0.05
+    # u_x is the same noise in both, so its temporal spectrum is untouched.
+    assert scores["temporal_u_x_lsd"] == pytest.approx(0.0, abs=1e-9)
