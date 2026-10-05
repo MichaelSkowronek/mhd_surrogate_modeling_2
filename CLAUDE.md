@@ -17,10 +17,10 @@ conventions below; it shifts which tools are worth reaching for at all.
 ## Layout
 
 - Organize code by pipeline stage. Under `src/mhd_surrogate/` the
-  subpackages are `data/`, `analysis/`, `training/` and `utils/`; under
-  `scripts/` the subdirectories are `data/`, `analysis/`, `viz/` and
-  `training/`. Put new code in the one matching its stage rather than at the
-  top level of `src/mhd_surrogate/` or `scripts/`, and add a new
+  subpackages are `data/`, `analysis/`, `training/`, `evaluation/` and
+  `utils/`; under `scripts/` the subdirectories are `data/`, `analysis/`,
+  `viz/` and `training/`. Put new code in the one matching its stage rather
+  than at the top level of `src/mhd_surrogate/` or `scripts/`, and add a new
   subpackage/subdirectory only when a genuinely new stage appears.
 - Mirror that structure in `tests/` (`tests/data/`, `tests/analysis/`, ...).
 - Hydra configs live in the `configs/` tree (`config.yaml` plus its groups).
@@ -35,7 +35,7 @@ conventions below; it shifts which tools are worth reaching for at all.
 
 ## Data analysis
 
-- The split is at the *dataset* level now, not a per-dataset time split:
+- The train/val/test split is at the dataset level:
   `configs/data/re16k.yaml` designates 7 datasets for training (used in
   full), 1 for validation (used in full) and 1 (`re16k_t400_5`) as the
   final held-out test set. `re16k_t400_5` must never be read by any script,
@@ -43,12 +43,11 @@ conventions below; it shifts which tools are worth reaching for at all.
   excluded from `configs/analysis/split.yaml`'s `datasets` list for exactly
   this reason; don't add it back.
 - `scripts/analysis/*.py` scripts read `configs/analysis/split.yaml` (via
-  `--config`, not a manifest) and analyze each configured dataset's full
-  recorded length (`arr.shape[0]`) -- there's no more internal train/val/
-  test region to bound reads by within a dataset, since only whole-dataset
-  exclusion (`re16k_t400_5`) matters. When adding a new check script,
-  follow the same pattern: `zarr_store`/`datasets` from the config,
-  `filter_datasets` for `--dataset`, no manifest.
+  `--config`) and analyze each configured dataset's full recorded length
+  (`arr.shape[0]`): datasets are held out whole, so no region within a
+  dataset needs bounding. When adding a new check script, follow the same
+  pattern: `zarr_store`/`datasets` from the config, `filter_datasets` for
+  `--dataset`.
 - See the README's "Train / val / test split" section for the full history
   (the earlier per-dataset trailing split it replaced, and why) and
   rationale.
