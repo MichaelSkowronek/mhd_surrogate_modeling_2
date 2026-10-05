@@ -43,6 +43,15 @@ conventions below; it shifts which tools are worth reaching for at all.
   for any purpose, including this project's own analysis suite -- it's
   excluded from `configs/analysis/split.yaml`'s `datasets` list for exactly
   this reason; don't add it back.
+- Every decision is made on the validation dataset: hyperparameters, early
+  stopping, and comparisons between models (architecture, window length,
+  ...), since choosing between models is tuning too. The test dataset is
+  read once, at the end: the frozen finalists (baselines included) are
+  refit on train + val with the epoch count fixed from their tuned run and
+  normalization stats recomputed over train + val (normalization is the first
+  step of fitting, not a separate split), and all of them are scored on test
+  by one evaluation. Nothing is changed or
+  chosen after seeing test scores.
 - `scripts/analysis/*.py` scripts read `configs/analysis/split.yaml` (via
   `--config`) and analyze each configured dataset's full recorded length
   (`arr.shape[0]`): datasets are held out whole, so no region within a
