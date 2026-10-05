@@ -1635,6 +1635,49 @@ check shows a real gap at short leads and in the oscillation (period error
 0.04 on train vs 0.20 on validation): the fitted modes describe the training
 realizations' oscillation better than an unseen one's.
 
+### Rank sweep
+
+```bash
+uv run --extra gpu scripts/training/train.py -m model=dmd model.rank=25,50,100,150,200,300,500
+```
+
+A Hydra multirun (`-m`): one training run per rank, in one process, each
+logged to MLflow as its own run named after its overrides (`dmd
+model.rank=50`) and tagged with the sweep (`tags.sweep`, the timestamp of its
+`outputs/multirun/<date>/<time>/` directory, plus `tags.sweep_job`), so the
+UI's filter `tags.sweep = '...'` shows one sweep side by side. The jobs share
+the process, so the Gram matmul is compiled once: the first fit takes ~95 s,
+the rest ~55 s, and the 7 ranks ran in ~15 minutes. Validation results:
+
+| rank | explained variance | RMSE lead 1 / 10 / 40 | RMSE mean | skill horizon | spectrum distance (x) | `u_y` period error / peak ratio |
+|---|---|---|---|---|---|---|
+| 25 | 0.77 | 0.53 / 0.68 / 0.73 | 0.80 | 0 | 3.09 | 0.16 / 0.30 |
+| 50 | 0.85 | 0.45 / 0.65 / 0.82 | 0.84 | 3 | 2.95 | 0.19 / 0.35 |
+| 100 | 0.90 | 0.37 / 0.65 / 0.80 | 0.83 | 4 | 2.92 | 0.20 / 0.22 |
+| 150 | 0.93 | 0.32 / 0.68 / 0.80 | 0.84 | 4 | 2.85 | 0.18 / 0.27 |
+| 200 | 0.94 | 0.30 / 0.68 / 0.83 | 0.85 | 4 | 2.84 | 0.19 / 0.24 |
+| 300 | 0.96 | 0.28 / 0.64 / 0.78 | 0.83 | 4 | 2.76 | 0.18 / 0.21 |
+| 500 | 0.97 | 0.26 / 0.64 / 0.71 | 0.82 | 5 | 2.71 | 0.17 / 0.17 |
+
+What the sweep shows:
+
+- **Short leads keep improving with rank** (lead 1: 0.53 -> 0.26), and so
+  does the small-scale content (spectrum distance 3.09 -> 2.71) -- more modes
+  start the forecast closer to the true state. No overfitting is visible up
+  to rank 500: the train/validation gap at lead 1 stays ~0.05.
+- **The mean RMSE over all leads barely moves (0.80-0.85), and the lowest
+  rank scores best.** After a few dozen steps every forecast has decorrelated,
+  and a smoother, lower-rank forecast sits closer to the mean, which is what
+  pointwise error rewards there. Selecting by mean RMSE would pick the model
+  with the least structure -- the reason the evaluation has a short-horizon
+  and a long-horizon half.
+- **The oscillation scores don't separate the ranks.** The period error
+  (0.16-0.20) is within what a different realization scores (0.15-0.19), and
+  the peak power ratio (0.17-0.35) moves without a trend: on a single
+  validation realization those differences are noise.
+- Energy error (~26%) doesn't depend on rank: the missing energy is in the
+  turbulence no linear model carries forward, not in the truncated modes.
+
 ## Docker
 
 The project ships as a container image so the exact environment (Python
