@@ -52,6 +52,12 @@ conventions below; it shifts which tools are worth reaching for at all.
   step of fitting, not a separate split), and all of them are scored on test
   by one evaluation. Nothing is changed or
   chosen after seeing test scores.
+- Candidates are ranked by validation skill horizon, ties broken by RMSE at
+  lead 10. Mean RMSE over all leads is not a selection metric: it rewards
+  forecasts that smooth toward the mean. The physics scores are guardrails,
+  not objectives: a candidate replaces the incumbent only if its energy and
+  enstrophy errors are no more than 0.03 worse and its spectrum distances no
+  more than 0.05 worse (about the spread a different realization scores).
 - `scripts/analysis/*.py` scripts read `configs/analysis/split.yaml` (via
   `--config`) and analyze each configured dataset's full recorded length
   (`arr.shape[0]`): datasets are held out whole, so no region within a
