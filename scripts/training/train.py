@@ -8,6 +8,9 @@ validation dataset.
 3. Scores it on `cfg.data.val_dataset` under the forecast protocol
    (`evaluation/protocol.py`): scalar scores as `val.*` metrics and the
    per-lead-time RMSE as the `val.rmse` history (step = lead time).
+4. Scores it the same way on `cfg.evaluation.train_datasets` (a subset of the
+   train datasets), as `train.<dataset>.*`: a sanity check of the fit and the
+   train/val gap, not something to make decisions on.
 
 Deliberately never opens `cfg.data.test_dataset`, not even to check its
 shape -- see configs/data/re16k.yaml's docstring: it's the dataset-level
@@ -39,7 +42,7 @@ import mlflow
 from mhd_surrogate.data.grid import grid_spacing
 from mhd_surrogate.data.normalization import NormalizationStats
 from mhd_surrogate.data.versioning import data_provenance
-from mhd_surrogate.evaluation.evaluate import evaluate
+from mhd_surrogate.evaluation.evaluate import evaluate, train_eval_datasets
 from mhd_surrogate.models.registry import build_model
 from mhd_surrogate.training.mlflow_utils import finite_metrics, log_metric_series
 from mhd_surrogate.training.tracking import tracked_run
@@ -101,30 +104,47 @@ def main(cfg: DictConfig) -> None:
         mlflow.log_artifacts(str(checkpoint), artifact_path="model")
         log.info("checkpoint saved to %s", checkpoint)
 
-        val = root[cfg.data.val_dataset]
-        dx, dy = grid_spacing(val.shape[2], val.shape[3])
-        start = time.perf_counter()
-        result = evaluate(
-            model,
-            val,
-            cfg.data.context_steps,
-            dx,
-            dy,
-            scale=np.asarray(stats.effective_std(cfg.normalization.std_mode)),
-            skill_threshold=cfg.evaluation.skill_threshold,
-            report_leads=list(cfg.evaluation.report_leads),
-        )
-        log.info("evaluated on %s in %.1f s", cfg.data.val_dataset, time.perf_counter() - start)
+        # Validation is what decisions are made on; the training dataset(s)
+        # are scored the same way as a sanity check (can the model fit at all,
+        # and how big is the train/val gap).
+        targets = [(cfg.data.val_dataset, "val")] + [
+            (name, f"train.{name}")
+            for name in train_eval_datasets(
+                list(cfg.evaluation.train_datasets), list(cfg.data.train_datasets)
+            )
+        ]
+        scale = np.asarray(stats.effective_std(cfg.normalization.std_mode))
+        for name, prefix in targets:
+            _score_and_log(model, root[name], name, prefix, scale, cfg)
 
-        finite, undefined = finite_metrics(result.scores)
-        mlflow.log_metrics({f"val.{k}": v for k, v in finite.items()})
-        if undefined:
-            log.info("undefined for this model, not logged: %s", ", ".join(undefined))
-        log_metric_series("val.rmse", result.rmse, start_step=1)
-        log.info(
-            "val scores:\n%s",
-            "\n".join(f"  {k}: {v:.4g}" for k, v in sorted(result.scores.items())),
-        )
+
+def _score_and_log(model, series, name: str, prefix: str, scale: np.ndarray, cfg) -> None:
+    """Score `model` on one dataset under the forecast protocol and log the
+    scalar scores as `<prefix>.*` metrics and the RMSE curve as `<prefix>.rmse`."""
+    dx, dy = grid_spacing(series.shape[2], series.shape[3])
+    start = time.perf_counter()
+    result = evaluate(
+        model,
+        series,
+        cfg.data.context_steps,
+        dx,
+        dy,
+        scale=scale,
+        skill_threshold=cfg.evaluation.skill_threshold,
+        report_leads=list(cfg.evaluation.report_leads),
+    )
+    log.info("evaluated on %s in %.1f s", name, time.perf_counter() - start)
+
+    finite, undefined = finite_metrics(result.scores)
+    mlflow.log_metrics({f"{prefix}.{k}": v for k, v in finite.items()})
+    if undefined:
+        log.info("%s: undefined for this model, not logged: %s", prefix, ", ".join(undefined))
+    log_metric_series(f"{prefix}.rmse", result.rmse, start_step=1)
+    log.info(
+        "%s scores:\n%s",
+        prefix,
+        "\n".join(f"  {k}: {v:.4g}" for k, v in sorted(result.scores.items())),
+    )
 
 
 if __name__ == "__main__":

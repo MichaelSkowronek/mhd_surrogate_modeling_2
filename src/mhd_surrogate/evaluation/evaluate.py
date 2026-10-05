@@ -11,6 +11,16 @@ from mhd_surrogate.evaluation.metrics import rmse_per_step, skill_horizon
 from mhd_surrogate.evaluation.protocol import ForecastModel, forecast
 
 
+def train_eval_datasets(requested: list[str], train_datasets: list[str]) -> list[str]:
+    """The training datasets to also score a model on, checked to really be
+    training datasets: scoring "train" on anything else would mislabel a
+    held-out dataset's scores (and could read the test dataset)."""
+    unknown = [name for name in requested if name not in train_datasets]
+    if unknown:
+        raise ValueError(f"evaluation.train_datasets {unknown} are not in data.train_datasets")
+    return list(requested)
+
+
 @dataclass(frozen=True)
 class Evaluation:
     """`scores` are scalars (ready for `mlflow.log_metrics`); `rmse` is the

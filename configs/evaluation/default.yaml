@@ -1,4 +1,5 @@
-# Validation scoring after training (src/mhd_surrogate/evaluation/evaluate.py).
+# Scoring after training (src/mhd_surrogate/evaluation/evaluate.py): the
+# validation dataset, plus `train_datasets` as a sanity check.
 # The context length is part of the data protocol: data.context_steps.
 #
 # skill_threshold: RMSE in units of the training std; the skill horizon is how
@@ -6,5 +7,11 @@
 #   step ahead and the mean field at ~0.85, so a model with skill beats both.
 # report_leads: lead times (1-based) also logged as scalars, besides the full
 #   per-step curve; 40 is the longest characteristic period found in the EDA.
+#
+# train_datasets: train datasets also scored the same way, logged as
+#   `train.<name>.*` -- a sanity check of the fit and the train/val gap, not
+#   a basis for decisions. One by default (~35 s each); must be a subset of
+#   data.train_datasets.
 skill_threshold: 0.5
 report_leads: [1, 10, 40, 100]
+train_datasets: [re16k_t400_0]
