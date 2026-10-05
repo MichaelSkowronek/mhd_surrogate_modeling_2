@@ -32,22 +32,28 @@ import os
 import time
 from pathlib import Path
 
-import hydra
-import jax
-import numpy as np
-import zarr
-from hydra.core.hydra_config import HydraConfig
-from omegaconf import DictConfig, OmegaConf
+# JAX preallocates 75% of GPU memory at start-up. Under WSL, with the
+# desktop on the same GPU, far less is free, so that fails and retries
+# noisily; allocate on demand instead (the usual setting for a shared GPU).
+# Must be set before jax is imported.
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
-import mlflow
-from mhd_surrogate.data.grid import grid_spacing
-from mhd_surrogate.data.normalization import NormalizationStats
-from mhd_surrogate.data.versioning import data_provenance
-from mhd_surrogate.evaluation.evaluate import evaluate, train_eval_datasets
-from mhd_surrogate.models.registry import build_model
-from mhd_surrogate.training.mlflow_model import log_surrogate
-from mhd_surrogate.training.mlflow_utils import finite_metrics, log_metric_series
-from mhd_surrogate.training.tracking import tracked_run
+import hydra  # noqa: E402
+import jax  # noqa: E402
+import numpy as np  # noqa: E402
+import zarr  # noqa: E402
+from hydra.core.hydra_config import HydraConfig  # noqa: E402
+from omegaconf import DictConfig, OmegaConf  # noqa: E402
+
+import mlflow  # noqa: E402
+from mhd_surrogate.data.grid import grid_spacing  # noqa: E402
+from mhd_surrogate.data.normalization import NormalizationStats  # noqa: E402
+from mhd_surrogate.data.versioning import data_provenance  # noqa: E402
+from mhd_surrogate.evaluation.evaluate import evaluate, train_eval_datasets  # noqa: E402
+from mhd_surrogate.models.registry import build_model  # noqa: E402
+from mhd_surrogate.training.mlflow_model import log_surrogate  # noqa: E402
+from mhd_surrogate.training.mlflow_utils import finite_metrics, log_metric_series  # noqa: E402
+from mhd_surrogate.training.tracking import tracked_run  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -103,6 +109,10 @@ def main(cfg: DictConfig) -> None:
         model.fit(train)
         fit_seconds = time.perf_counter() - start
         mlflow.log_metric("fit_seconds", fit_seconds)
+        # Model-specific fit diagnostics (e.g. DMD's explained variance), if any.
+        fit_info = getattr(model, "fit_info", {})
+        if fit_info:
+            mlflow.log_metrics({f"fit.{k}": v for k, v in fit_info.items()})
         log.info("fitted %s in %.1f s", model.name, fit_seconds)
 
         checkpoint = output_dir / "model"

@@ -140,6 +140,10 @@ services:
       args:
         UV_EXTRAS: --extra server --extra ray --extra gpu
     image: mhd-surrogate:gpu
+    environment:
+      # Allocate GPU memory on demand rather than preallocating 75% of it,
+      # which fails when the GPU is shared with a desktop (see train.py).
+      XLA_PYTHON_CLIENT_PREALLOCATE: "false"
     deploy:
       resources:
         reservations:

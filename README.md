@@ -27,8 +27,9 @@ and the dataset-level train/val/test split is implemented and verified
 against real data. The forecast-evaluation protocol and metrics are in place
 (see "Forecast evaluation"), and the two baselines every model has to beat --
 persistence and the mean field -- are fitted, checkpointed and scored on the
-validation dataset through the training entry point (see "Baselines"). No
-learned model exists yet.
+validation dataset through the training entry point (see "Baselines"). The
+first model with dynamics, DMD, beats both (see "DMD"); no neural network
+exists yet.
 
 ## Setup
 
@@ -50,6 +51,10 @@ uv run python -c "import jax; print(jax.devices())"   # [CudaDevice(id=0)]
 ```
 
 The default Docker image is CPU-only; see "GPU image" under Docker below.
+`train.py` sets `XLA_PYTHON_CLIENT_PREALLOCATE=false` (and `app-gpu` sets it in
+the container): JAX's default of preallocating 75% of GPU memory fails under
+WSL with the desktop on the same GPU, and retries with a burst of
+out-of-memory errors.
 
 Pre-commit hooks ([pre-commit-hooks](https://github.com/pre-commit/pre-commit-hooks):
 whitespace/EOF/YAML-TOML-JSON/large-file/merge-conflict/case-conflict checks,
@@ -68,7 +73,7 @@ src/mhd_surrogate/   importable package, split by pipeline stage
   analysis/          fields, summary, spectral
   training/          mlflow_utils, tracking
   evaluation/        protocol, metrics, diagnostics, evaluate
-  models/            base (interface), baselines, registry
+  models/            base (interface), baselines, dmd, registry
   utils/             logging_config, parallel
 scripts/             CLI entry points, same split (plus viz/)
   data/              explore_data, convert_to_zarr, compute_stats
@@ -1570,6 +1575,65 @@ lower pointwise error from lead ~2 on but no small scales, almost no
 divergence and no oscillation. A useful surrogate has to beat persistence
 early and the mean field late while scoring near the "different realization"
 column on the diagnostics.
+
+## DMD
+
+```bash
+uv run --extra gpu scripts/training/train.py model=dmd             # rank 100
+uv run --extra gpu scripts/training/train.py model=dmd model.rank=50
+```
+
+Dynamic Mode Decomposition (`src/mhd_surrogate/models/dmd.py`) fits the best
+linear operator `A` (least squares, `z_{t+1} ~= A z_t`) to the training
+snapshots and forecasts by applying it repeatedly -- the simplest model with
+dynamics, between the baselines (none) and a nonlinear network. The EDA
+already showed DMD capturing the flow's coherent ~24-40 step oscillation; as a
+forecaster it can carry that forward, but not the turbulence.
+
+- **State:** each frame as a fluctuation about the pooled training mean,
+  scaled per channel by the fluctuation's RMS so `u_x` and `u_y` weigh the
+  same in the SVD, channels and space flattened (~292k entries). The mean and
+  the scale are fitted by the model itself.
+- **Fit:** projected exact DMD over the 7 training datasets, with snapshot
+  pairs formed within each dataset only (7,108 pairs, never across a dataset
+  boundary). The snapshot matrix is too large to factorize directly, so it
+  uses the method of snapshots: the 7,115 x 7,115 Gram matrix of all frames
+  gives the POD basis (truncated to `rank`) and the reduced operator. The
+  Gram matrix is computed with JAX on the GPU in column blocks of equal width
+  (the last zero-padded), so the matmul is compiled and autotuned once
+  (~45 s), not once per block shape. The Gram matrix squares the singular
+  values, so with float32 frames they're resolved only down to ~3e-4 of the
+  largest; values below 1e-3 are treated as zero.
+- **Forecast:** the last context frame (window 1) is projected onto the basis,
+  evolved with the reduced operator's eigendecomposition, and mapped back.
+  Eigenvalues outside the unit circle would blow the forecast up over 837
+  steps, so `stabilize` moves them onto it (none needed it at rank 100).
+- **Cost:** the fit holds all training frames in RAM (8.3 GB, ~14 GB peak)
+  and takes ~105 s, mostly the one-off compile and the eigendecomposition of
+  the Gram matrix; it logs `fit.rank`, `fit.explained_variance` (0.90 at rank
+  100), `fit.unstable_modes` and `fit.n_pairs`.
+
+Validation results at rank 100 (RMSE in units of the training std):
+
+| | persistence | mean field | **DMD** | DMD on train |
+|---|---|---|---|---|
+| RMSE at lead 1 / 10 / 40 | 0.51 / 1.40 / 1.23 | 0.91 / 0.90 / 0.89 | **0.37 / 0.65 / 0.80** | 0.29 / 0.52 / 0.69 |
+| RMSE, mean over all leads | 1.24 | 0.96 | **0.83** | 0.82 |
+| skill horizon (<= 0.5) | 0 | 0 | **4** | 9 |
+| energy / enstrophy error | 2% / 11% | 29% / 76% | 26% / 73% | 26% / 72% |
+| spatial spectrum distance (x) | 0.08 | 3.9 | 2.9 | 3.0 |
+| `u_y` period error / peak power ratio | undefined / 0 | undefined / 0 | **0.20 / 0.22** | 0.04 / 0.45 |
+
+DMD is the first model with skill and beats both baselines in pointwise error
+at every lead, and the first whose forecast oscillates: its `u_y` period is
+off by 0.20, at the edge of what a different realization of the flow scores
+(0.15-0.19), but at 22% of the true power the oscillation is strongly damped.
+Being linear and rank-truncated, it predicts a smoothed version of the
+large-scale vortex street and none of the small scales (spectrum distance 2.9,
+energy 26% low) -- the forecast video shows exactly that. The training-set
+check shows a real gap at short leads and in the oscillation (period error
+0.04 on train vs 0.20 on validation): the fitted modes describe the training
+realizations' oscillation better than an unseen one's.
 
 ## Docker
 
