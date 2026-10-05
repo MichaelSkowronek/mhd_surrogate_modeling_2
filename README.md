@@ -408,6 +408,40 @@ from `configs/analysis/split.yaml`'s `datasets` list for exactly this
 reason -- don't add it back. `re16k_t400_6` (val) stays in that list; val
 data is fair game to look at during development, unlike test.
 
+**How validation and test are used.** Validation is where every decision is
+made: hyperparameters, early stopping, and also comparisons *between* models
+(architecture, window length, ...). Choosing between models is tuning at a
+higher level, so choosing by test score would bias the winner's test score
+upward, by more the more candidates are compared that way. The test set is
+read once, at the end:
+
+1. Freeze the finalists: the baselines plus the learned models chosen on
+   validation.
+2. Refit each on train + val. A refit can't early-stop (there is no held-out
+   data left), so it uses the epoch count from its tuned run, scaled for the
+   extra data if warranted. The normalization stats are recomputed over
+   train + val as well: normalization is just the first step of fitting a
+   model, and fitting it on less data than the rest of the model would need a
+   reason of its own. (During development they stay train-only, as the
+   `compute_stats` stage computes them now; the train + val stats will be a
+   separate output when the final evaluation is built.) The baselines are
+   refit too (the mean field over all 8 datasets), so the comparison stays
+   fair.
+3. Score all of them on test in one evaluation, and report that table.
+   Nothing is changed or chosen after seeing it.
+
+Reporting every finalist's test score side by side is the point of step 3;
+what would spoil the test set is going back to iterate after looking at it.
+
+One caveat: validation is a single realization of the flow, so decisions made
+on it are noisy. Scoring a different realization with perfect dynamics
+against it already gives a `u_y` period error of 0.15-0.19 (see "Forecast
+evaluation"), so two models closer than that spread are not reliably
+different. For decisions that matter, such as the final architecture,
+leave-one-dataset-out cross-validation over the 8 non-test datasets gives a
+spread instead of a single number; at one training per fold it is reserved
+for the shortlist, not every experiment.
+
 Every `scripts/analysis/*.py` script below reads `configs/analysis/split.yaml`
 directly and analyzes each configured dataset's *entire* recorded length --
 there's no more per-dataset region to precompute or bound reads by, since
