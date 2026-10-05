@@ -21,6 +21,7 @@ one, until final evaluation.
 Usage:
     uv run scripts/training/train.py                       # model=mean_field
     uv run scripts/training/train.py model=persistence
+    uv run scripts/training/train.py -m model=dmd model.rank=50,100,200  # a sweep
     uv run scripts/training/train.py mlflow=server  # Docker stack, see README
     uv run mlflow ui --backend-store-uri sqlite:///mlruns.db  # view runs
 """
@@ -43,6 +44,7 @@ import jax  # noqa: E402
 import numpy as np  # noqa: E402
 import zarr  # noqa: E402
 from hydra.core.hydra_config import HydraConfig  # noqa: E402
+from hydra.types import RunMode  # noqa: E402
 from omegaconf import DictConfig, OmegaConf  # noqa: E402
 
 import mlflow  # noqa: E402
@@ -78,8 +80,13 @@ def main(cfg: DictConfig) -> None:
         cfg.mlflow.experiment_name,
         resolved,
         log_file=log_file,
-        run_name=cfg.model.name,
+        run_name=run_name(cfg.model.name, list(hydra_cfg.overrides.task)),
     ):
+        if hydra_cfg.mode == RunMode.MULTIRUN:
+            # Groups a sweep's runs in the MLflow UI (filter: tags.sweep = '...').
+            mlflow.set_tags(
+                {"sweep": Path(hydra_cfg.sweep.dir).name, "sweep_job": hydra_cfg.job.num}
+            )
         # Which data/stats version this run was started against: the hashes
         # dvc.lock pins, as params (searchable in the UI), plus the lock and
         # stats as artifacts. Keeping disk in sync with the lock is `dvc
@@ -133,6 +140,16 @@ def main(cfg: DictConfig) -> None:
         scale = np.asarray(stats.effective_std(cfg.normalization.std_mode))
         for name, prefix in targets:
             _score_and_log(model, root[name], name, prefix, scale, cfg, model_info.model_id)
+
+
+def run_name(model_name: str, overrides: list[str]) -> str:
+    """The model's name plus the command-line overrides that set its
+    hyperparameters (e.g. `dmd model.rank=50`), so a sweep's runs are told
+    apart in the runs table; overrides that pick the model or the tracking
+    backend, or touch Hydra itself, are left out."""
+    skipped = ("model=", "mlflow", "hydra.", "~", "+mlflow")
+    shown = [o for o in overrides if not o.startswith(skipped)]
+    return " ".join([model_name, *shown])
 
 
 def _score_and_log(
