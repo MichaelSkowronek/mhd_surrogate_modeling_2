@@ -438,6 +438,24 @@ read once, at the end:
 Reporting every finalist's test score side by side is the point of step 3;
 what would spoil the test set is going back to iterate after looking at it.
 
+**How candidates are ranked.** A surrogate is useful for as long as its
+forecast stays close to the truth, so the primary criterion is the
+validation **skill horizon** (lead steps with RMSE <= 0.5), ties broken by
+**RMSE at lead 10**. The mean RMSE over all leads is deliberately not used:
+after a few dozen steps every forecast of this chaotic flow has decorrelated,
+and from there pointwise error favors whatever sits closest to the mean -- in
+the DMD rank sweep it ranks the smoothest, lowest-rank model first. The
+physics scores are **guardrails**, not objectives (optimizing one directly
+invites gaming it): a candidate replaces the incumbent only if its energy and
+enstrophy errors are no more than 0.03 worse and its x/y spectrum distances
+no more than 0.05 worse. Those tolerances are about the spread a different
+realization of the flow scores (energy <1%, enstrophy <3%, spectrum
+0.01-0.03, see "Forecast evaluation"), so a candidate isn't rejected for a
+difference that is noise. The oscillation scores are reported but not used to
+decide: on a single validation realization their noise (period error
+0.15-0.19 for perfect dynamics) is as large as the differences between
+models so far.
+
 One caveat: validation is a single realization of the flow, so decisions made
 on it are noisy. Scoring a different realization with perfect dynamics
 against it already gives a `u_y` period error of 0.15-0.19 (see "Forecast
