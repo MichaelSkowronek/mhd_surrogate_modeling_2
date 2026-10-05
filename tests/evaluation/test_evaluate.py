@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from mhd_surrogate.evaluation.evaluate import evaluate
+from mhd_surrogate.evaluation.evaluate import evaluate, train_eval_datasets
 from mhd_surrogate.models.baselines import Persistence
 
 DX, DY = 0.5, 0.25
@@ -70,3 +70,13 @@ def test_scale_divides_the_error_per_channel():
     scaled = run(Persistence(), series, scale=np.array([2.0, 2.0]))
 
     assert scaled.rmse == pytest.approx(unscaled.rmse / 2.0)
+
+
+def test_train_eval_datasets_accepts_a_subset_of_the_train_datasets():
+    assert train_eval_datasets(["b"], ["a", "b", "c"]) == ["b"]
+    assert train_eval_datasets([], ["a"]) == []
+
+
+def test_train_eval_datasets_rejects_anything_that_is_not_a_train_dataset():
+    with pytest.raises(ValueError, match="test_set"):
+        train_eval_datasets(["a", "test_set"], ["a", "b"])

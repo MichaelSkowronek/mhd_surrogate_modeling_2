@@ -1473,8 +1473,8 @@ The two baselines bracket what a real model has to do:
   device (the GPU with the `gpu` extra): 13 s, almost all of it zarr reads.
 
 `train.py` logs, per run: the checkpoint as the `model` artifact,
-`fit_seconds`, every scalar score as a `val.*` metric, and the RMSE curve as
-the `val.rmse` history with step = lead time (one batched request rather than
+`fit_seconds`, every scalar score as a `val.*` metric (and `train.<dataset>.*`,
+below), and the RMSE curve as the `val.rmse` history with step = lead time (one batched request rather than
 837). Scores that are undefined for a model (the oscillation period of a
 forecast with no oscillation) are left out and named in the log.
 
@@ -1492,6 +1492,29 @@ training std):
 
 \* train datasets 0 and 10 scored against the validation targets, from
 "Forecast evaluation" above: the right dynamics, the wrong phase.
+
+**Sanity check on training data.** The same evaluation also runs on the
+training datasets listed in `evaluation.train_datasets` (`re16k_t400_0` by
+default; ~35-50 s each), logged as `train.<dataset>.*`. It answers what
+validation alone can't: whether a model can fit its own training data at all
+(if not, it's a bug or too little capacity, and tuning is pointless) and how
+large the train/validation gap is (memorizing trajectories instead of learning
+dynamics). It is a diagnostic, not a basis for decisions (see "How
+validation and test are used"). The flow is chaotic, so even on its own
+training trajectories a rollout decorrelates after a few dozen steps: the gap
+shows at short lead times and in the physics scores, not in late-lead RMSE.
+For the baselines it is a plumbing check, and comes out as expected:
+
+| | persistence, train / val | mean field, train / val |
+|---|---|---|
+| RMSE at lead 1 | 0.47 / 0.51 | 0.96 / 0.91 |
+| RMSE, mean over all leads | 1.20 / 1.24 | 0.95 / 0.96 |
+| energy error | 1% / 2% | 29% / 29% |
+| spatial spectrum distance (x) | 0.09 / 0.08 | 3.9 / 3.9 |
+
+The mean field, which averages over this dataset among the 7, is only
+marginally better on it, and persistence, which has nothing to fit, scores
+the same on both: neither has anything to memorize, so neither has a gap.
 
 Neither baseline has any skill at the 0.5 threshold (persistence is already
 at 0.51 one step ahead). Persistence beats the mean field only at lead 1 and
