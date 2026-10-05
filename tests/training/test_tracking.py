@@ -79,3 +79,11 @@ def test_missing_log_file_warns_instead_of_raising(uri, tmp_path, caplog):
         with tracked_run(uri, "exp", {}, log_file=tmp_path / "nope.log"):
             pass
     assert "not found" in caplog.text
+
+
+def test_run_name_is_set_when_given(uri):
+    with tracked_run(uri, "exp", {}, run_name="mean_field") as run:
+        pass
+
+    finished, _ = _run(uri, run.info.run_id)
+    assert finished.info.run_name == "mean_field"

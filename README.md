@@ -1357,9 +1357,31 @@ SQLite database (`mlruns.db`, gitignored) rather than the classic
 database backend, so SQLite is the current recommended approach.
 `src/mhd_surrogate/training/mlflow_utils.py`'s `flatten_for_mlflow` turns the
 resolved (nested) Hydra config into the flat key-value pairs
-`mlflow.log_params` expects (e.g. `data.dataset`, `dataset.window`); the
-dataset shape/dtype and both splits' sample counts are also logged. There
-are no metrics yet, since there is no training loop to produce them.
+`mlflow.log_params` expects (e.g. `data.dataset`, `dataset.window`). Runs
+are named after their model (`mean_field`, `persistence`, ...) instead of
+MLflow's random names; the scores are described under "Baselines" below.
+
+**Logged models.** The fitted model is logged as an MLflow *model*, not just
+as files: `src/mhd_surrogate/training/mlflow_model.py` wraps the checkpoint in
+a `pyfunc` model named after the model, so it shows in the runs table's
+Models column and gets its own page in the UI, with the model config as its
+params and every `val.*`/`train.*` score linked to it (the Models tab compares
+models directly). The logged model is self-contained -- the checkpoint as an
+artifact, this package's source as `code_paths`, pinned `numpy`/`jax`/`mlflow`
+requirements, and a signature (a stack of `(C, Nx, Ny)` float32 frames in and
+out, `n_steps` as a parameter) -- so it loads anywhere with
+
+```python
+model = mlflow.pyfunc.load_model(f"models:/{model_id}")
+forecast = model.predict(context, params={"n_steps": 837})  # last `window` frames are used
+```
+
+and `mlflow models serve` can serve it, which is what the serving step will
+build on. Models are not registered in the Model Registry automatically:
+registering every experiment would bury the meaningful versions, so only the
+shortlist and the test-set finalists (see "How validation and test are used")
+get registered, deliberately. No input example is logged: one real frame is
+~1 MB as JSON, and the signature already pins the shapes.
 
 `src/mhd_surrogate/training/tracking.py`'s `tracked_run` owns the run
 lifecycle so entry points don't repeat it: it selects the experiment, starts
@@ -1472,9 +1494,10 @@ The two baselines bracket what a real model has to do:
   fit streams the train datasets in chunks and sums them on JAX's default
   device (the GPU with the `gpu` extra): 13 s, almost all of it zarr reads.
 
-`train.py` logs, per run: the checkpoint as the `model` artifact,
-`fit_seconds`, every scalar score as a `val.*` metric (and `train.<dataset>.*`,
-below), and the RMSE curve as the `val.rmse` history with step = lead time (one batched request rather than
+`train.py` logs, per run: the checkpoint as a logged MLflow model (see
+"Experiment tracking (MLflow)"), `fit_seconds`, every scalar score as a
+`val.*` metric (and `train.<dataset>.*`, below), and the RMSE curve as the
+`val.rmse` history with step = lead time (one batched request rather than
 837). Scores that are undefined for a model (the oscillation period of a
 forecast with no oscillation) are left out and named in the log.
 

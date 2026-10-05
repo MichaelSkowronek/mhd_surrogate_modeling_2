@@ -36,6 +36,7 @@ def tracked_run(
     experiment_name: str,
     config: dict[str, Any],
     log_file: str | Path | None = None,
+    run_name: str | None = None,
 ) -> Iterator[mlflow.ActiveRun]:
     """Start an MLflow run for `config`, and always upload `log_file` on exit.
 
@@ -43,12 +44,13 @@ def tracked_run(
     params and whole as `config.json`. On an exception the traceback is
     logged (so it lands in the log file), a `DivergenceError` additionally
     sets the `diverged` tag, and the exception propagates; MLflow marks the
-    run FAILED.
+    run FAILED. `run_name` is shown in the runs table instead of MLflow's
+    random name (the training entry point passes the model's name).
     """
     mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(experiment_name)
 
-    with mlflow.start_run() as run:
+    with mlflow.start_run(run_name=run_name) as run:
         log.info("mlflow run: %s (experiment: %s)", run.info.run_id, experiment_name)
         mlflow.log_params(flatten_for_mlflow(config))
         mlflow.log_dict(config, "config.json")
