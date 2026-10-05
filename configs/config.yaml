@@ -9,6 +9,8 @@ defaults:
   - data: re16k
   - dataset: windowed
   - normalization: per_channel
+  - model: mean_field
+  - evaluation: default
   - mlflow: local
   - override hydra/job_logging: project
   - override hydra/hydra_logging: none

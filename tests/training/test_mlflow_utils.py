@@ -1,4 +1,10 @@
-from mhd_surrogate.training.mlflow_utils import flatten_for_mlflow
+import mlflow
+from mhd_surrogate.training import mlflow_utils
+from mhd_surrogate.training.mlflow_utils import (
+    finite_metrics,
+    flatten_for_mlflow,
+    log_metric_series,
+)
 
 
 def test_flatten_for_mlflow_flattens_nested_dict():
@@ -22,3 +28,23 @@ def test_flatten_for_mlflow_flat_dict_is_unchanged():
 
 def test_flatten_for_mlflow_empty_dict():
     assert flatten_for_mlflow({}) == {}
+
+
+def test_finite_metrics_drops_nan_and_inf_and_names_them():
+    finite, undefined = finite_metrics({"a": 1.0, "b": float("nan"), "c": float("inf"), "d": 0})
+
+    assert finite == {"a": 1.0, "d": 0.0}
+    assert undefined == ["b", "c"]
+
+
+def test_log_metric_series_logs_each_value_at_its_step_across_batches(tmp_path, monkeypatch):
+    monkeypatch.setattr(mlflow_utils, "MAX_BATCH", 3)  # force several batches
+    mlflow.set_tracking_uri(f"sqlite:///{tmp_path / 'mlruns.db'}")
+    mlflow.set_experiment("exp")
+    values = [0.5, 0.25, 1.0, 2.0, 4.0, 8.0, 3.0]
+
+    with mlflow.start_run() as run:
+        log_metric_series("val.rmse", values, start_step=1)
+
+    history = mlflow.MlflowClient().get_metric_history(run.info.run_id, "val.rmse")
+    assert sorted((m.step, m.value) for m in history) == list(enumerate(values, start=1))
