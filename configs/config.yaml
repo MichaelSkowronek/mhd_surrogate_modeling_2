@@ -18,6 +18,12 @@ defaults:
 
 seed: 42
 
+# Fixed output location, set by the DVC `train` stage (dvc.yaml): the
+# checkpoint goes to <dir>/model and the scores to <dir>/metrics.json.
+# Unset (the default), both stay in the run's Hydra output directory.
+export:
+  dir: null
+
 hydra:
   # Keep the working directory as the repo root: every script in this project
   # (analysis scripts included) uses paths relative to it (e.g. data/raw/...),

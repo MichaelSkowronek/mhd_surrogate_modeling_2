@@ -70,15 +70,17 @@ conventions below; it shifts which tools are worth reaching for at all.
 
 ## Data versioning
 
-- The raw `.npy` files are versioned with DVC (`data/raw.dvc`); the data
-  pipeline is `dvc.yaml` (raw -> zarr -> normalization stats), run with
-  `uv run dvc repro`. Don't rebuild the zarr or the stats by running the
-  scripts by hand and leave `dvc.lock` out of date: a new pipeline step or
+- The raw `.npy` files are versioned with DVC (`data/raw.dvc`); the
+  pipeline is `dvc.yaml` (raw -> zarr -> normalization stats -> the
+  canonical model's `train` stage), run with `uv run dvc repro`. Don't
+  rebuild the zarr, the stats or the canonical model by running the scripts
+  by hand and leave `dvc.lock` out of date: a new pipeline step or
   dependency goes in `dvc.yaml`, and `dvc.lock` is committed with the change
-  that produced it.
+  that produced it. Exploration (sweeps, other models) stays in Hydra/MLflow,
+  not `dvc exp`.
 - The zarr store stays `cache: false` (a regenerable ~9 GB derivative, not
-  stored in DVC's cache or the remote). Only the raw data and small outputs
-  like the stats file are cached and pushed.
+  stored in DVC's cache or the remote). The raw data, small outputs like the
+  stats file, and the canonical model's checkpoint are cached and pushed.
 - The test dataset rule applies to the pipeline too: no stage may read
   `re16k_t400_5`, and `compute_stats` reads `train_datasets` only. DVC moving
   the raw directory's bytes (it includes that file) is versioning, not

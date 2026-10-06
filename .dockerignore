@@ -11,6 +11,7 @@ reports/figures
 reports/videos
 reports/summaries
 outputs/*
+models
 mlruns.db
 mlruns
 mlartifacts

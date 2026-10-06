@@ -32,3 +32,55 @@ stages:
           - zarr_store
     outs:
       - data/processed/normalization_stats.json
+
+  # The canonical model (see README "Data versioning (DVC)" -> "Training
+  # stage"): DMD at the rank the validation sweep selected. Exploration
+  # (sweeps, other models) stays in Hydra/MLflow; this stage pins what
+  # produced the selected model. It still logs to MLflow like any run.
+  train:
+    cmd: uv run scripts/training/train.py model=dmd export.dir=models/dmd
+    # Code deps are exactly what train.py imports, transitively (checked by
+    # tests/training/test_dvc_train_stage.py), not the whole package: editing
+    # an unrelated module (e.g. analysis/pod.py) shouldn't force a ~2-minute
+    # retrain and a new ~880 MB cache entry. models/ is listed whole because
+    # the registry imports every model.
+    deps:
+      - data/processed/re16k_t400.zarr
+      - data/processed/normalization_stats.json
+      - configs/analysis/grid.yaml
+      - scripts/training/train.py
+      - src/mhd_surrogate/__init__.py
+      - src/mhd_surrogate/models
+      - src/mhd_surrogate/evaluation
+      - src/mhd_surrogate/training
+      - src/mhd_surrogate/data/__init__.py
+      - src/mhd_surrogate/data/grid.py
+      - src/mhd_surrogate/data/normalization.py
+      - src/mhd_surrogate/data/versioning.py
+      - src/mhd_surrogate/analysis/__init__.py
+      - src/mhd_surrogate/analysis/fields.py
+      - src/mhd_surrogate/analysis/spectral.py
+      - src/mhd_surrogate/utils/__init__.py
+      - src/mhd_surrogate/utils/parallel.py
+    # The keys that change the fitted model or its scores; performance knobs
+    # (chunk sizes) are left out so tuning them doesn't retrain.
+    params:
+      - configs/model/dmd.yaml:
+          - rank
+          - stabilize
+      - configs/data/re16k.yaml:
+          - zarr_store
+          - train_datasets
+          - val_dataset
+          - context_steps
+      - configs/normalization/per_channel.yaml:
+          - std_mode
+      - configs/evaluation/default.yaml:
+          - skill_threshold
+          - report_leads
+          - train_datasets
+    outs:
+      - models/dmd/model
+    metrics:
+      - models/dmd/metrics.json:
+          cache: false
