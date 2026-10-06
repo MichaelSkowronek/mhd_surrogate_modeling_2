@@ -372,10 +372,8 @@ Design choices:
 the zarr store and stats on disk match `dvc.lock`; the way to be sure is to
 produce them with `dvc repro`, which re-runs exactly the stages whose inputs
 changed (and `dvc status` shows what's out of date). That's the usual DVC
-division of labor. A training stage in `dvc.yaml` (depending on the zarr
-store, the stats and the config params) is the natural next step once a real
-training loop exists: `dvc repro`/`dvc exp run` would then guarantee fresh
-inputs by construction, with MLflow still doing the tracking. An enforcing
+division of labor, and for the canonical model the `train` stage below makes
+it hold by construction. An enforcing
 check inside the training script was tried and dropped: it needed a
 DVC-only image and a compose dependency to cover the container, and could
 still be bypassed by starting the image directly, so it was a guarantee that
@@ -391,6 +389,93 @@ run through `dvc repro`, and wrong if the data was changed behind its back.
 
 CI doesn't pull data (the remote is local), but `tests.yml` runs `dvc dag`
 so a malformed `dvc.yaml` fails the PR.
+
+### Training stage
+
+```bash
+uv run dvc repro train      # refit only if data, code or the relevant config changed
+uv run dvc metrics show     # the canonical model's validation (and train) scores
+uv run dvc metrics diff     # ... compared with the last commit
+```
+
+DVC is more than data versioning: `dvc.yaml` is a pipeline of stages with
+declared dependencies, parameters and outputs, and the `train` stage extends
+it from the data to the **canonical model** -- DMD at the rank the validation
+sweep selected. It depends on the zarr store, the normalization stats,
+`train.py`, the whole `src/mhd_surrogate` package and the grid config, plus
+the config keys that change the fitted model or its scores (`model.rank`,
+`stabilize`, the split, `context_steps`, `std_mode`, the evaluation settings;
+performance knobs like chunk sizes are left out so tuning them doesn't
+retrain). Its outputs are the checkpoint (`models/dmd/model`, ~880 MB,
+cached and pushed like the stats) and `models/dmd/metrics.json`, declared as
+DVC metrics and kept in git, so `dvc metrics diff` shows how a code change
+moved the scores between commits. `dvc.lock` then pins exactly which data,
+code and config produced the committed model, and `dvc repro` rebuilds it only
+when one of them changes. The stage runs `train.py` with `export.dir` set,
+which puts the checkpoint and metrics at that fixed path instead of the
+run's timestamped Hydra directory; it still logs to MLflow like any run.
+`.dvcignore` excludes `__pycache__`, which importing the package would
+otherwise change, making the stage look out of date after every run.
+
+**Not bitwise reproducible, and why that's fine.** Unlike the data stages
+(re-running `convert_to_zarr` and `compute_stats` reproduces their hashes
+exactly), retraining gives a checkpoint with different bytes every time: the
+GPU's float32 reductions aren't bitwise deterministic, so two runs on the same
+inputs differ around the 8th significant digit of every score. `dvc.lock`
+therefore records what *was* produced, and `dvc repro` guarantees the model
+matches the current data, code and config -- not that a retrain reproduces it
+bit for bit. To keep that noise out of git, `metrics.json` is rounded to 6
+significant digits, so retraining an unchanged model leaves it unchanged.
+(Use `dvc repro -f -s train` to force a retrain: `-f` alone re-runs the whole
+chain leading to the stage, data stages included.)
+
+**Retrains and cache growth.** The stage's code deps are exactly the modules
+`train.py` imports, transitively -- not the whole package -- so editing an
+unrelated module (`analysis/pod.py`, say) doesn't make it stale. A test
+(`tests/training/test_dvc_train_stage.py`) computes that import set and fails
+if a module isn't covered, so the list can't drift into calling a stale model
+up to date. `models/` is listed whole, since the registry imports every model:
+editing another model's code does mark the DMD stage stale. Retraining is
+always explicit (`dvc repro`), and every retrain adds a new ~880 MB cache
+entry -- even for an irrelevant change, since the checkpoint's bytes differ
+each time -- and old entries are never removed automatically. Clean up the
+local cache now and then with
+
+```bash
+uv run dvc gc --workspace --all-commits
+```
+
+which keeps every version any git commit references and deletes the retrains
+that were never committed. Don't add `--cloud` without thinking: that deletes
+from the remote too. When only the dep *list* changes, not the code, `uv run
+dvc commit -f train` records the new deps against the existing model instead of
+retraining.
+
+**When to retrain, and what it doesn't touch.** Retraining on a new commit
+never changes an earlier result. Every commit's `dvc.lock` pins the exact
+data, code, config and checkpoint, and its `metrics.json` holds the scores, so
+a tagged result stays reproducible: `git checkout <tag> && dvc pull` restores
+that exact model and its scores, and `dvc repro -f` on that commit retrains it
+from that commit's code to check them (equal up to GPU float noise, hence the
+rounding). Retraining on `main` serves a different purpose: keeping the
+committed model consistent with the committed code. Retrain deliberately, not
+on every commit -- in the PR whose change is *meant* to alter the model (a
+fix, new data, a newly selected parameter), so its `metrics.json` diff shows
+by how much next to the code that caused it; or as a regression check after a
+risky change that *shouldn't* alter it, where an unchanged `metrics.json`
+confirms it didn't. A stage left stale by an unrelated change can wait for
+the next deliberate retrain.
+
+**Division of labor with MLflow.** MLflow is the experiment record: every
+run, sweep and model, with its metric histories and (later) the registry --
+exploration happens there, through Hydra multiruns. DVC answers a different
+question for the few canonical artifacts: exactly what produced this, and is
+it still up to date? `dvc exp run` is deliberately not used for sweeps, so
+there aren't two experiment systems to look in. The final evaluation (refit
+the finalists on train + val, score them on test, see "How validation and
+test are used") will become stages too, added only once the finalists are
+frozen and marked `frozen: true`, so `dvc repro` can never re-read the test
+set by accident.
 
 ## Train / val / test split
 

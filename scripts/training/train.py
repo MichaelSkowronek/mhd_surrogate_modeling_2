@@ -22,6 +22,7 @@ Usage:
     uv run scripts/training/train.py                       # model=mean_field
     uv run scripts/training/train.py model=persistence
     uv run scripts/training/train.py -m model=dmd model.rank=50,100,200  # a sweep
+    uv run dvc repro train   # the canonical model, as a DVC pipeline stage
     uv run scripts/training/train.py mlflow=server  # Docker stack, see README
     uv run mlflow ui --backend-store-uri sqlite:///mlruns.db  # view runs
 """
@@ -53,6 +54,7 @@ from mhd_surrogate.data.normalization import NormalizationStats  # noqa: E402
 from mhd_surrogate.data.versioning import data_provenance  # noqa: E402
 from mhd_surrogate.evaluation.evaluate import evaluate, train_eval_datasets  # noqa: E402
 from mhd_surrogate.models.registry import build_model  # noqa: E402
+from mhd_surrogate.training.export import write_metrics  # noqa: E402
 from mhd_surrogate.training.mlflow_model import log_surrogate  # noqa: E402
 from mhd_surrogate.training.mlflow_utils import finite_metrics, log_metric_series  # noqa: E402
 from mhd_surrogate.training.tracking import tracked_run  # noqa: E402
@@ -122,7 +124,10 @@ def main(cfg: DictConfig) -> None:
             mlflow.log_metrics({f"fit.{k}": v for k, v in fit_info.items()})
         log.info("fitted %s in %.1f s", model.name, fit_seconds)
 
-        checkpoint = output_dir / "model"
+        # The DVC `train` stage sets export.dir so the checkpoint and metrics
+        # land at a fixed path (dvc.yaml outs); otherwise the run's directory.
+        export_dir = Path(cfg.export.dir) if cfg.export.dir else None
+        checkpoint = (export_dir or output_dir) / "model"
         model.save(checkpoint)
         frame_shape = tuple(next(iter(train.values())).shape[1:])
         model_info = log_surrogate(model, checkpoint, frame_shape, params=resolved["model"])
@@ -138,8 +143,13 @@ def main(cfg: DictConfig) -> None:
             )
         ]
         scale = np.asarray(stats.effective_std(cfg.normalization.std_mode))
-        for name, prefix in targets:
-            _score_and_log(model, root[name], name, prefix, scale, cfg, model_info.model_id)
+        scores = {
+            prefix: _score_and_log(model, root[name], name, prefix, scale, cfg, model_info.model_id)
+            for name, prefix in targets
+        }
+        if export_dir is not None:
+            write_metrics(export_dir / "metrics.json", scores)
+            log.info("exported checkpoint and metrics to %s", export_dir)
 
 
 def run_name(model_name: str, overrides: list[str]) -> str:
@@ -154,10 +164,10 @@ def run_name(model_name: str, overrides: list[str]) -> str:
 
 def _score_and_log(
     model, series, name: str, prefix: str, scale: np.ndarray, cfg, model_id: str
-) -> None:
+) -> dict[str, float]:
     """Score `model` on one dataset under the forecast protocol and log the
     scalar scores as `<prefix>.*` metrics and the RMSE curve as `<prefix>.rmse`,
-    on the run and linked to the logged model `model_id`."""
+    on the run and linked to the logged model `model_id`. Returns the scores."""
     dx, dy = grid_spacing(series.shape[2], series.shape[3])
     start = time.perf_counter()
     result = evaluate(
@@ -182,6 +192,7 @@ def _score_and_log(
         prefix,
         "\n".join(f"  {k}: {v:.4g}" for k, v in sorted(result.scores.items())),
     )
+    return result.scores
 
 
 if __name__ == "__main__":

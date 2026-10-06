@@ -29,6 +29,7 @@ x-app: &app
     - ./data:/app/data
     - ./reports:/app/reports
     - ./outputs:/app/outputs
+    - ./models:/app/models
     # Read at run time to record which data version a run used (data/raw.dvc
     # arrives through the data/ mount).
     - ./dvc.lock:/app/dvc.lock:ro

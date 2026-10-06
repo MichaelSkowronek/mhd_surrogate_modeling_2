@@ -56,6 +56,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY scripts ./scripts
 COPY configs ./configs
 COPY tests ./tests
+# tests/training/test_dvc_train_stage.py checks the train stage's deps.
+COPY dvc.yaml ./
 ENV PATH="/app/.venv/bin:$PATH"
 CMD ["pytest"]
 
@@ -85,8 +87,8 @@ COPY --chown=app:app configs ./configs
 
 # Mount points the app writes to, pre-created so a fresh named volume
 # inherits the right ownership.
-RUN mkdir -p data reports/figures reports/videos reports/summaries outputs \
-    && chown -R app:app data reports outputs
+RUN mkdir -p data reports/figures reports/videos reports/summaries outputs models \
+    && chown -R app:app data reports outputs models
 
 USER ${UID}:${GID}
 CMD ["python", "scripts/training/train.py"]
