@@ -73,8 +73,8 @@ stages:
       nfiles: 293
     - path: scripts/training/train.py
       hash: md5
-      md5: d284efb25f94bcddda265dbfe0418d41
-      size: 10028
+      md5: 974ff03419780f70f85e72035bcb78f4
+      size: 12527
     - path: src/mhd_surrogate/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -109,8 +109,8 @@ stages:
       size: 1480
     - path: src/mhd_surrogate/evaluation
       hash: md5
-      md5: 765cf986c74625a07404c69e95730fc8.dir
-      size: 14840
+      md5: c62d6c508de1d3e8d8ab8384abdaacca.dir
+      size: 16933
       nfiles: 5
     - path: src/mhd_surrogate/models/__init__.py
       hash: md5
@@ -118,8 +118,8 @@ stages:
       size: 0
     - path: src/mhd_surrogate/models/base.py
       hash: md5
-      md5: 08f48ed2a576a23b34e4a564c001db3d
-      size: 1506
+      md5: 6e876e4c553dc7869d07d0525f36d53b
+      size: 3097
     - path: src/mhd_surrogate/models/dmd.py
       hash: md5
       md5: 74c770078a008df7d31a5f40bf30e112
@@ -130,17 +130,36 @@ stages:
       size: 10166
     - path: src/mhd_surrogate/models/registry.py
       hash: md5
-      md5: f6d7513df01917b59416b553728b611c
-      size: 1686
-    - path: src/mhd_surrogate/training
+      md5: 18e4e51ebb8490c1569ad1610063cdb1
+      size: 1741
+    - path: src/mhd_surrogate/training/__init__.py
       hash: md5
-      md5: 79483adbdd74c64d9faeca33bd8a7e99.dir
-      size: 9495
-      nfiles: 5
+      md5: d41d8cd98f00b204e9800998ecf8427e
+      size: 0
+    - path: src/mhd_surrogate/training/export.py
+      hash: md5
+      md5: 610f25a51d6365bde2aa6b0e18851f05
+      size: 1313
+    - path: src/mhd_surrogate/training/mlflow_model.py
+      hash: md5
+      md5: 395bd16aa75f9712ac221dd2ae52cef3
+      size: 3476
+    - path: src/mhd_surrogate/training/mlflow_utils.py
+      hash: md5
+      md5: 42e538766a9f73593cd6ed9c2c030328
+      size: 2199
+    - path: src/mhd_surrogate/training/tracking.py
+      hash: md5
+      md5: 44217f22d8d0a2c01d2cdc1944bf7ac7
+      size: 4424
     - path: src/mhd_surrogate/utils/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
       size: 0
+    - path: src/mhd_surrogate/utils/hydra_resolvers.py
+      hash: md5
+      md5: ed74e5be1ec98086305dcdbd3ec15aa2
+      size: 746
     - path: src/mhd_surrogate/utils/jax_cache.py
       hash: md5
       md5: 24c3f1cb19b02ea556ba1b10a8484313

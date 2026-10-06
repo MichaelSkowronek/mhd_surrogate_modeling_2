@@ -44,7 +44,8 @@ stages:
     # tests/training/test_dvc_train_stage.py), not the whole package: editing
     # an unrelated module (e.g. analysis/pod.py) shouldn't force a ~2-minute
     # retrain and a new ~880 MB cache entry. The registry imports models
-    # lazily, so only the trained model's modules are deps, not every model's.
+    # lazily, so only the trained model's modules are deps, not every model's
+    # (nor the neural models' training loop, training/trainer.py).
     deps:
       - data/processed/re16k_t400.zarr
       - data/processed/normalization_stats.json
@@ -57,7 +58,11 @@ stages:
       - src/mhd_surrogate/models/dmd.py
       - src/mhd_surrogate/models/hankel_dmd.py
       - src/mhd_surrogate/evaluation
-      - src/mhd_surrogate/training
+      - src/mhd_surrogate/training/__init__.py
+      - src/mhd_surrogate/training/export.py
+      - src/mhd_surrogate/training/mlflow_model.py
+      - src/mhd_surrogate/training/mlflow_utils.py
+      - src/mhd_surrogate/training/tracking.py
       - src/mhd_surrogate/data/__init__.py
       - src/mhd_surrogate/data/grid.py
       - src/mhd_surrogate/data/normalization.py
@@ -68,6 +73,7 @@ stages:
       - src/mhd_surrogate/utils/__init__.py
       - src/mhd_surrogate/utils/parallel.py
       - src/mhd_surrogate/utils/jax_cache.py
+      - src/mhd_surrogate/utils/hydra_resolvers.py
     # The keys that change the fitted model or its scores; performance knobs
     # (chunk sizes) are left out so tuning them doesn't retrain.
     params:

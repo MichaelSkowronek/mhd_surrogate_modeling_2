@@ -30,8 +30,9 @@ persistence and the mean field -- are fitted, checkpointed and scored on the
 validation dataset through the training entry point (see "Baselines"). The
 first model with dynamics, DMD, beats both (see "DMD"), and time-delay
 (Hankel) DMD with 4 frames of context beats DMD (see "Hankel DMD") -- it is
-the canonical model. The first neural network, a U-Net, is in progress (its
-network is in `models/unet.py`; the surrogate and its training loop follow).
+the canonical model. The first neural network, a U-Net, is built and
+smoke-tested, with early stopping on validation and resumable training (see
+"U-Net"); training it to convergence and tuning it come next.
 
 ## Setup
 
@@ -73,10 +74,10 @@ uv run pre-commit run --all-files
 src/mhd_surrogate/   importable package, split by pipeline stage
   data/              dataset, grid, normalization, versioning, conversion
   analysis/          fields, summary, spectral
-  training/          mlflow_utils, tracking
+  training/          mlflow_utils, tracking, export, mlflow_model, trainer
   evaluation/        protocol, metrics, diagnostics, evaluate
-  models/            base (interface), baselines, dmd, hankel_dmd, unet, registry
-  utils/             logging_config, parallel, jax_cache
+  models/            base (interface), baselines, dmd, hankel_dmd, neural, unet, registry
+  utils/             logging_config, parallel, jax_cache, hydra_resolvers
 scripts/             CLI entry points, same split (plus viz/)
   data/              explore_data, convert_to_zarr, compute_stats
   analysis/          check_*.py, run_all_checks, benchmark_backends
@@ -1600,7 +1601,8 @@ neither achievable nor the only thing worth measuring.
 
 - *Short horizon* (`metrics.py`): RMSE per lead time, optionally scaled per
   channel by the training std, and the skill horizon (how many steps stay under
-  an error threshold).
+  an error threshold; a NaN error counts as over it, so a forecast that blows
+  up loses its skill there instead of scoring the whole length).
 - *Long horizon* (`diagnostics.py`): does the forecast stay on the attractor?
   Relative error of the time-averaged kinetic energy and enstrophy, the ratio
   of RMS divergence to the true field's (the DNS field is only approximately
@@ -1972,6 +1974,124 @@ guardrails of the incumbent, plain DMD rank 750 (energy -0.002, enstrophy
 delays is realization noise; the rule, not the margin, decides. It replaces
 plain DMD as the canonical model (the DVC `train` stage); the checkpoint is
 ~890 MB, the rank-750 spatial basis plus a 12 MB delay basis.
+
+## U-Net
+
+```bash
+uv run --extra gpu scripts/training/train.py model=unet
+uv run --extra gpu scripts/training/train.py model=unet model.rollout_steps=4 model.training.batch_size=4
+uv run --extra gpu scripts/training/train.py model=unet resume=outputs/<date>/<time>  # after a crash
+```
+
+The first neural surrogate: a U-Net that maps the last `window` frames to
+the next one and forecasts autoregressively, feeding its predictions back
+in. The code is split so a second network (an FNO, say) only adds the
+network:
+
+- `models/unet.py`: the network (`UNet`) and `UNetSurrogate`, which plugs it
+  into the shared machinery.
+- `models/neural.py`: `AutoregressiveSurrogate`, everything that isn't the
+  network (normalization, constant pixels, residual update, rollout loss,
+  forecasting, checkpoint).
+- `training/trainer.py`: the training loop (optimizer, batches, early
+  stopping, resumable state, divergence checks), generic over the network.
+
+**The network.** An encoder-decoder of (3x3 conv, GroupNorm, GELU) blocks,
+`depth` levels with `base_channels * 2**level` channels, max-pooling down,
+transposed convolutions up, skip connections between levels of the same
+resolution. GroupNorm rather than BatchNorm: no running statistics, and it
+works at the batch sizes these frames force (8). At the defaults (base 32,
+depth 4) it has 7.8M parameters, and its bottleneck (72 x 8 cells) sees most
+of the domain.
+
+**The surrogate.**
+- *Input:* the last `window` normalized frames stacked as channels, plus two
+  coordinate channels. Convolutions are translation-equivariant, but this
+  domain isn't homogeneous: it has an inlet, an outlet and two walls.
+  Frames are padded from 1151 x 127 to a multiple of `2**depth` (1152 x 128)
+  by repeating the edge (zero velocity at a wall), and cropped back after.
+- *Output:* the change from the newest frame (`next = last + network(...)`).
+  The output layer is zero-initialized, so the untrained model *is*
+  persistence, the sane baseline, rather than noise.
+- *Normalization* is fitted in `fit`, like DMD's: each channel's mean and std
+  over every training frame and pixel. The loss is then in the same
+  per-channel units the forecast RMSE is scored in.
+- *Constant pixels:* pixels that never change in the training data (both
+  walls; the inlet's u_y) are reset to their value after every step. The
+  boundary conditions then hold exactly over an 840-step rollout instead of
+  drifting, and the loss isn't spent on them.
+
+**Training** (`model.training.*`, `training/trainer.py`):
+- *Loss:* the MSE of a `rollout_steps`-step autoregressive rollout from
+  `window` true frames. `rollout_steps=1` is one-step teacher forcing.
+  Longer rollouts show the model its own compounding errors, which is what
+  matters over a long forecast. Each step is rematerialized
+  (`jax.checkpoint`), so memory grows by one step's activations at most,
+  but time grows linearly (1.3 s/step for 4 steps at batch 8, vs 0.32 s for one).
+- *Optimizer:* AdamW with gradients clipped by global norm; the learning
+  rate warms up linearly, then decays by cosine over `max_epochs`.
+- *Epochs* are `samples_per_epoch` windows (2048 of ~7k by default) drawn
+  without replacement. An epoch is the unit of validation and
+  checkpointing, so it's kept short enough that early stopping (and the
+  hyperparameter search's pruning) can follow the curve.
+- *Early stopping on validation:* every `eval_every` epochs the model
+  forecasts the whole validation dataset under the protocol, and is scored
+  with `evaluation.selection_scores`. That is the selection rule's two
+  numbers, skill horizon and RMSE at lead 10, folded into one
+  `selection_score` (skill minus `r / (1 + r)`, which orders like the rule
+  exactly). Training stops after `patience` evaluations without a strictly
+  better score, and the best epoch's network is the result. These are the
+  same scores models are compared by, so early stopping is another decision
+  made on validation. The physics diagnostics are left out because they're
+  too slow to run every epoch; the final model is scored in full like every
+  model.
+- *Divergence:* a non-finite loss, or one above `max_loss`, raises
+  `DivergenceError`, so the run is tagged `diverged`.
+- *Speed:* `compute_dtype: bfloat16` runs the network in bf16 (parameters,
+  optimizer and the residual sum stay float32): 177 vs 321 ms/step at
+  batch 8 on the RTX 3060, peak GPU memory 2.2 vs 3.7 GB. Training frames
+  stay in host RAM as float16 (`host_dtype`, ~4 GB for the 7 datasets) and a
+  background thread moves the next batch to the GPU during the current step.
+- *Reproducible:* the same config gives the same losses and scores, run to
+  run, on the GPU (checked).
+
+**What's logged.** Training curves go to MLflow with the optimizer step as
+the step: `loss`, `grad_norm`, `lr` and `samples_per_second` every
+`log_every` steps, and `epoch_loss`, `epoch_seconds` and
+`val_monitor.{skill_horizon,rmse_lead_10,selection_score}` every epoch. After
+training, the model is checkpointed, logged and scored like every model
+(`val.*`, `train.<dataset>.*`, `fit.*`, where `fit.best_epoch`,
+`fit.stopped_early` and `fit.parameters` come from training).
+
+**Resuming.** Training state is saved after every epoch into the run's
+output directory, `training_state/`. It holds the network, the optimizer
+state, the batch sampler's RNG and the early-stopping bookkeeping, with
+`state.json` written last and atomically. `resume=<output dir>` (with the
+original overrides) puts Hydra back into that directory and continues from
+the last completed epoch: the same MLflow run (tagged `resumed`), the log file
+appended to, and the same batches an uninterrupted run would have drawn.
+A resume with a different config is refused, both by the run record
+(`training_state/mlflow_run.json`) and by the trainer's own fingerprint,
+since the saved weights would belong to another run. Checked on the real data
+by `kill -9`-ing a run after epoch 1 and resuming it.
+
+**Costs.** Loading the training frames takes ~15 s and the first compile
+~20 s; the persistent compilation cache removes the compile on later runs.
+A cold compile can log CUDA out-of-memory warnings: XLA's convolution
+autotuner tries algorithms with large workspaces, and they're harmless.
+Validation (an 837-step forecast) takes ~8 s. Host RAM: ~6 GB while
+training (the float16 frames), ~8 GB during a validation (the validation
+dataset and the forecast, ~1 GB each; the forecast is post-processed on the
+GPU and copied once, and its error is computed a chunk of lead times at a
+time), ~10 GB peak overall.
+
+**Status.** Wired up and smoke-tested on the real data (2-3 epochs of 160
+windows: val skill horizon 2-3), not yet trained to convergence or tuned. The defaults in `configs/model/unet.yaml` are a hand-picked starting
+point; the hyperparameter search (Ray Tune, Optuna + ASHA) comes next. The
+U-Net isn't a DVC stage: only the canonical model is, and the U-Net becomes
+canonical only if it beats Hankel DMD on validation. `training/trainer.py`
+isn't a dependency of the current `train` stage, so working on it doesn't
+mark Hankel DMD stale.
 
 ## Docker
 

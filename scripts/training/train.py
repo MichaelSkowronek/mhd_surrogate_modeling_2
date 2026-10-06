@@ -5,7 +5,11 @@ validation dataset.
    params, `dvc.lock` and the normalization stats as artifacts).
 2. Fits `cfg.model` on the train datasets, saves the checkpoint into the
    run's output directory and logs it as an MLflow model named after the
-   model (`training/mlflow_model.py`); the run is named after it too.
+   model (`training/mlflow_model.py`); the run is named after it too. An
+   iteratively trained model (a neural network) also gets `FitHooks`
+   (`models/base.py`): validation scores to early-stop on, MLflow for its
+   training curves, and `training_state/` in the output directory, from
+   which `resume=<output dir>` continues an interrupted run.
 3. Scores it on `cfg.data.val_dataset` under the forecast protocol
    (`evaluation/protocol.py`): scalar scores as `val.*` metrics and the
    per-lead-time RMSE as the `val.rmse` history (step = lead time).
@@ -22,6 +26,8 @@ Usage:
     uv run scripts/training/train.py                       # model=mean_field
     uv run scripts/training/train.py model=persistence
     uv run scripts/training/train.py -m model=dmd model.rank=50,100,200  # a sweep
+    uv run scripts/training/train.py model=unet
+    uv run scripts/training/train.py model=unet resume=outputs/<date>/<time>  # continue it
     uv run dvc repro train   # the canonical model, as a DVC pipeline stage
     uv run scripts/training/train.py mlflow=server  # Docker stack, see README
     uv run mlflow ui --backend-store-uri sqlite:///mlruns.db  # view runs
@@ -48,16 +54,26 @@ from hydra.core.hydra_config import HydraConfig  # noqa: E402
 from hydra.types import RunMode  # noqa: E402
 from omegaconf import DictConfig, OmegaConf  # noqa: E402
 
+import mhd_surrogate.utils.hydra_resolvers  # noqa: E402, F401  (before @hydra.main resolves)
 import mlflow  # noqa: E402
 from mhd_surrogate.data.grid import grid_spacing  # noqa: E402
 from mhd_surrogate.data.normalization import NormalizationStats  # noqa: E402
 from mhd_surrogate.data.versioning import data_provenance  # noqa: E402
-from mhd_surrogate.evaluation.evaluate import evaluate, train_eval_datasets  # noqa: E402
+from mhd_surrogate.evaluation.evaluate import (  # noqa: E402
+    evaluate,
+    selection_scores,
+    train_eval_datasets,
+)
+from mhd_surrogate.models.base import FitHooks, fit_model  # noqa: E402
 from mhd_surrogate.models.registry import build_model  # noqa: E402
 from mhd_surrogate.training.export import write_metrics  # noqa: E402
 from mhd_surrogate.training.mlflow_model import log_surrogate  # noqa: E402
 from mhd_surrogate.training.mlflow_utils import finite_metrics, log_metric_series  # noqa: E402
-from mhd_surrogate.training.tracking import tracked_run  # noqa: E402
+from mhd_surrogate.training.tracking import (  # noqa: E402
+    resumed_run_id,
+    save_run_record,
+    tracked_run,
+)
 from mhd_surrogate.utils.jax_cache import enable_compilation_cache  # noqa: E402
 
 log = logging.getLogger(__name__)
@@ -80,14 +96,20 @@ def main(cfg: DictConfig) -> None:
     # is unrelated to this project's plain params/metrics logging.
     os.environ.setdefault("MLFLOW_DISABLE_AGENT_HINT", "1")
 
+    # `resume` only says where to continue; it isn't part of what's trained
+    # (and MLflow wouldn't let a resumed run's params change).
     resolved = OmegaConf.to_container(cfg, resolve=True)
+    resolved.pop("resume")
+    state_dir = output_dir / "training_state"
+    run_id = resumed_run_id(state_dir, resolved) if cfg.resume else None
     with tracked_run(
         cfg.mlflow.tracking_uri,
         cfg.mlflow.experiment_name,
         resolved,
         log_file=log_file,
         run_name=run_name(cfg.model.name, list(hydra_cfg.overrides.task)),
-    ):
+        run_id=run_id,
+    ) as run:
         if hydra_cfg.mode == RunMode.MULTIRUN:
             # Groups a sweep's runs in the MLflow UI (filter: tags.sweep = '...').
             mlflow.set_tags(
@@ -118,8 +140,20 @@ def main(cfg: DictConfig) -> None:
 
         model = build_model(OmegaConf.to_container(cfg.model, resolve=True))
         train = {name: root[name] for name in cfg.data.train_datasets}
+        scale = np.asarray(stats.effective_std(cfg.normalization.std_mode))
+        hooks = FitHooks()
+        if getattr(model, "iterative", False):
+            if run_id is None:
+                save_run_record(state_dir, run.info.run_id, resolved)
+            hooks = FitHooks(
+                validate=ValidationMonitor(root[cfg.data.val_dataset], scale, cfg),
+                log_metrics=lambda metrics, step: mlflow.log_metrics(metrics, step=step),
+                state_dir=state_dir,
+            )
+        elif run_id is not None:
+            raise ValueError(f"resume: {model.name} isn't trained iteratively")
         start = time.perf_counter()
-        model.fit(train)
+        fit_model(model, train, hooks)
         fit_seconds = time.perf_counter() - start
         mlflow.log_metric("fit_seconds", fit_seconds)
         # Model-specific fit diagnostics (e.g. DMD's explained variance), if any.
@@ -146,7 +180,6 @@ def main(cfg: DictConfig) -> None:
                 list(cfg.evaluation.train_datasets), list(cfg.data.train_datasets)
             )
         ]
-        scale = np.asarray(stats.effective_std(cfg.normalization.std_mode))
         scores = {
             prefix: _score_and_log(model, root[name], name, prefix, scale, cfg, model_info.model_id)
             for name, prefix in targets
@@ -161,9 +194,35 @@ def run_name(model_name: str, overrides: list[str]) -> str:
     hyperparameters (e.g. `dmd model.rank=50`), so a sweep's runs are told
     apart in the runs table; overrides that pick the model or the tracking
     backend, or touch Hydra itself, are left out."""
-    skipped = ("model=", "mlflow", "hydra.", "~", "+mlflow")
+    skipped = ("model=", "mlflow", "hydra.", "~", "+mlflow", "resume=")
     shown = [o for o in overrides if not o.startswith(skipped)]
     return " ".join([model_name, *shown])
+
+
+class ValidationMonitor:
+    """`FitHooks.validate` for an iterative model: its selection scores on
+    the validation dataset (`evaluation.selection_scores`), read into memory
+    on first use (~1 GB) instead of from zarr at every evaluation."""
+
+    def __init__(self, series, scale: np.ndarray, cfg: DictConfig) -> None:
+        self.series = series
+        self.frames: np.ndarray | None = None
+        self.scale = scale
+        self.context_steps = cfg.data.context_steps
+        self.skill_threshold = cfg.evaluation.skill_threshold
+        self.tie_break_lead = cfg.evaluation.tie_break_lead
+
+    def __call__(self, model) -> dict[str, float]:
+        if self.frames is None:
+            self.frames = np.asarray(self.series)
+        return selection_scores(
+            model,
+            self.frames,
+            self.context_steps,
+            self.scale,
+            self.skill_threshold,
+            self.tie_break_lead,
+        )
 
 
 def _score_and_log(

@@ -3,7 +3,8 @@ import time
 import numpy as np
 import pytest
 
-from mhd_surrogate.evaluation.evaluate import evaluate, train_eval_datasets
+from mhd_surrogate.evaluation.evaluate import evaluate, selection_scores, train_eval_datasets
+from mhd_surrogate.evaluation.metrics import selection_score
 from mhd_surrogate.models.baselines import Persistence
 
 DX, DY = 0.5, 0.25
@@ -129,3 +130,51 @@ def test_train_eval_datasets_accepts_a_subset_of_the_train_datasets():
 def test_train_eval_datasets_rejects_anything_that_is_not_a_train_dataset():
     with pytest.raises(ValueError, match="test_set"):
         train_eval_datasets(["a", "test_set"], ["a", "b"])
+
+
+class Offset:
+    """Predicts the true continuation plus `offset(lead)` everywhere."""
+
+    window = 0
+
+    def __init__(self, series, context_steps, offset):
+        self.future = series[context_steps:]
+        self.offset = offset
+
+    def predict(self, context, n_steps):
+        leads = np.arange(1, n_steps + 1, dtype=float)
+        return self.future[:n_steps] + self.offset(leads)[:, None, None, None]
+
+
+def test_selection_scores_match_the_skill_horizon_and_the_tie_break_lead():
+    series = make_series()
+    # Error 0.1 * lead: within the 0.5 threshold up to lead 5.
+    model = Offset(series, 10, lambda lead: 0.1 * lead)
+
+    scores = selection_scores(model, series, 10, np.array([1.0, 1.0]), 0.5, tie_break_lead=10)
+
+    assert scores["skill_horizon"] == 5
+    assert scores["rmse_lead_10"] == pytest.approx(1.0)
+    assert scores["selection_score"] == pytest.approx(selection_score(5, 1.0))
+
+
+def test_selection_scores_use_the_last_lead_when_the_forecast_is_shorter():
+    series = make_series(n=15)  # 5 scored steps
+
+    scores = selection_scores(
+        Offset(series, 10, lambda lead: lead), series, 10, np.array([1.0, 1.0]), 0.5, 10
+    )
+
+    assert scores["rmse_lead_10"] == pytest.approx(5.0)
+
+
+@pytest.mark.parametrize("chunk_t", [1, 3, 64])
+def test_selection_scores_rmse_does_not_depend_on_the_chunk_size(chunk_t):
+    series = make_series()
+    model = Offset(series, 10, lambda lead: 0.07 * lead)
+    expected = run(model, series).rmse
+
+    scores = selection_scores(model, series, 10, np.array([1.0, 1.0]), 0.5, 10, chunk_t=chunk_t)
+
+    assert scores["skill_horizon"] == 7
+    assert scores["rmse_lead_10"] == expected[9]

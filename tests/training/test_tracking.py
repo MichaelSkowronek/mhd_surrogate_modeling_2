@@ -3,7 +3,12 @@ import logging
 import pytest
 
 import mlflow
-from mhd_surrogate.training.tracking import DivergenceError, tracked_run
+from mhd_surrogate.training.tracking import (
+    DivergenceError,
+    resumed_run_id,
+    save_run_record,
+    tracked_run,
+)
 from mlflow import MlflowClient
 
 
@@ -87,3 +92,40 @@ def test_run_name_is_set_when_given(uri):
 
     finished, _ = _run(uri, run.info.run_id)
     assert finished.info.run_name == "mean_field"
+
+
+def test_run_id_continues_that_run_and_tags_it_resumed(uri):
+    config = {"seed": 7}
+    with pytest.raises(RuntimeError):
+        with tracked_run(uri, "exp", config, run_name="unet") as first:
+            mlflow.log_metric("loss", 1.0, step=1)
+            raise RuntimeError("killed")
+
+    with tracked_run(uri, "exp", config, run_name="ignored", run_id=first.info.run_id) as run:
+        mlflow.log_metric("loss", 0.5, step=2)
+
+    finished, client = _run(uri, first.info.run_id)
+    assert run.info.run_id == first.info.run_id
+    assert finished.info.status == "FINISHED"
+    assert finished.info.run_name == "unet"
+    assert finished.data.tags["resumed"] == "true"
+    assert [m.value for m in client.get_metric_history(run.info.run_id, "loss")] == [1.0, 0.5]
+
+
+def test_run_record_gives_back_the_run_for_the_same_config(tmp_path):
+    config = {"model": {"name": "unet", "window": 4}, "seed": 1}
+    save_run_record(tmp_path / "state", "abc123", config)
+
+    assert resumed_run_id(tmp_path / "state", config) == "abc123"
+
+
+def test_run_record_refuses_a_different_config_and_names_what_changed(tmp_path):
+    save_run_record(tmp_path, "abc123", {"model": {"window": 4}, "seed": 1})
+
+    with pytest.raises(ValueError, match="model differ"):
+        resumed_run_id(tmp_path, {"model": {"window": 8}, "seed": 1})
+
+
+def test_resuming_without_a_run_record_fails(tmp_path):
+    with pytest.raises(FileNotFoundError, match="no resumable training run"):
+        resumed_run_id(tmp_path, {})
