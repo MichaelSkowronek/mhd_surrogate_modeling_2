@@ -55,7 +55,8 @@ stages:
       md5: 603bc434b437b41486a9ecc5639b0df7
       size: 377
   train:
-    cmd: uv run scripts/training/train.py model=dmd export.dir=models/dmd
+    cmd: uv run scripts/training/train.py model=hankel_dmd
+      export.dir=models/hankel_dmd
     deps:
     - path: configs/analysis/grid.yaml
       hash: md5
@@ -151,18 +152,20 @@ stages:
         skill_threshold: 0.5
         train_datasets:
         - re16k_t400_0
-      configs/model/dmd.yaml:
-        rank: 750
+      configs/model/hankel_dmd.yaml:
+        delays: 4
+        rank: 1000
+        spatial_rank: 750
         stabilize: true
       configs/normalization/per_channel.yaml:
         std_mode: per_channel
     outs:
-    - path: models/dmd/metrics.json
+    - path: models/hankel_dmd/metrics.json
       hash: md5
-      md5: 1b7148b25807ef6de26a25744dba6428
-      size: 1001
-    - path: models/dmd/model
+      md5: 5a274365c14044808c77ff3a7848cfa3
+      size: 1003
+    - path: models/hankel_dmd/model
       hash: md5
-      md5: be02127f9ba34b832a61fd634096b977.dir
-      size: 887245072
+      md5: e175d98a7035bdf06e9c7f7c38b7fc0c.dir
+      size: 906249481
       nfiles: 2

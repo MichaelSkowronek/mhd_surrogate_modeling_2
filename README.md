@@ -28,8 +28,9 @@ against real data. The forecast-evaluation protocol and metrics are in place
 (see "Forecast evaluation"), and the two baselines every model has to beat --
 persistence and the mean field -- are fitted, checkpointed and scored on the
 validation dataset through the training entry point (see "Baselines"). The
-first model with dynamics, DMD, beats both (see "DMD"); no neural network
-exists yet.
+first model with dynamics, DMD, beats both (see "DMD"), and time-delay
+(Hankel) DMD with 4 frames of context beats DMD (see "Hankel DMD") -- it is
+the canonical model; no neural network exists yet.
 
 ## Setup
 
@@ -400,15 +401,16 @@ uv run dvc metrics diff     # ... compared with the last commit
 
 DVC is more than data versioning: `dvc.yaml` is a pipeline of stages with
 declared dependencies, parameters and outputs, and the `train` stage extends
-it from the data to the **canonical model** -- DMD at the rank the validation
-sweep selected. It depends on the zarr store, the normalization stats,
+it from the data to the **canonical model** -- Hankel DMD at the delays and
+rank its validation sweep selected (see "Delay sweep"; before it, plain DMD
+at rank 750). It depends on the zarr store, the normalization stats,
 `train.py`, the whole `src/mhd_surrogate` package and the grid config, plus
 the config keys that change the fitted model or its scores (`model.rank`,
-`stabilize`, the split, `context_steps`, `std_mode`, the evaluation settings;
-performance knobs like chunk sizes are left out so tuning them doesn't
-retrain). Its outputs are the checkpoint (`models/dmd/model`, ~880 MB,
-cached and pushed like the stats) and `models/dmd/metrics.json`, declared as
-DVC metrics and kept in git, so `dvc metrics diff` shows how a code change
+`delays`, `spatial_rank`, `stabilize`, the split, `context_steps`,
+`std_mode`, the evaluation settings; performance knobs like chunk sizes are
+left out so tuning them doesn't retrain). Its outputs are the checkpoint
+(`models/hankel_dmd/model`, ~890 MB, cached and pushed like the stats) and
+`models/hankel_dmd/metrics.json`, declared as DVC metrics and kept in git, so `dvc metrics diff` shows how a code change
 moved the scores between commits. `dvc.lock` then pins exactly which data,
 code and config produced the committed model, and `dvc repro` rebuilds it only
 when one of them changes. The stage runs `train.py` with `export.dir` set,
@@ -435,7 +437,7 @@ unrelated module (`analysis/pod.py`, say) doesn't make it stale. A test
 (`tests/training/test_dvc_train_stage.py`) computes that import set and fails
 if a module isn't covered, so the list can't drift into calling a stale model
 up to date. `models/` is listed whole, since the registry imports every model:
-editing another model's code does mark the DMD stage stale. Retraining is
+editing another model's code does mark the canonical stage stale. Retraining is
 always explicit (`dvc repro`), and every retrain adds a new ~880 MB cache
 entry -- even for an irrelevant change, since the checkpoint's bytes differ
 each time -- and old entries are never removed automatically. Clean up the
@@ -1801,8 +1803,8 @@ model are ~880 MB (rank 500: ~590 MB, rank 100: ~117 MB).
 ## Hankel DMD
 
 ```bash
-uv run --extra gpu scripts/training/train.py model=hankel_dmd    # 8 delays, rank 750
-uv run --extra gpu scripts/training/train.py model=hankel_dmd model.delays=32 model.rank=1000
+uv run --extra gpu scripts/training/train.py model=hankel_dmd    # 4 delays, rank 1000
+uv run --extra gpu scripts/training/train.py model=hankel_dmd model.delays=32 model.rank=1500
 ```
 
 Time-delay (Hankel) DMD (`src/mhd_surrogate/models/hankel_dmd.py`) is DMD on
@@ -1820,7 +1822,7 @@ go up to 80.
   750 by default, plain DMD's selected rank), and the delays are taken of
   those: a state of at most 80 x 750 = 60k entries. Only the one spatial
   basis is stored at full size; the delay basis is `delays` x `spatial_rank`
-  x `rank` (19 MB at the defaults, ~360 MB at 80 delays and rank 1500). The
+  x `rank` (12 MB at the defaults, ~360 MB at 80 delays and rank 1500). The
   price is that the delays see each frame's 750-mode projection, not the
   frame -- 98% of the variance; the rest is small-scale content no linear
   model carries forward anyway. This is the usual way to apply Hankel DMD to
@@ -1849,6 +1851,91 @@ go up to 80.
   is the dynamics' dimension, now over `delays` x `spatial_rank` features fit
   from ~7k pairs, so it has to be truncated (plain DMD already overfit past
   rank ~500).
+
+### Delay sweep
+
+```bash
+uv run --extra gpu scripts/training/train.py -m model=hankel_dmd \
+    model.delays=2,4,8,16,32,80 model.rank=250,500,750,1000,1500
+```
+
+The two axes interact -- more delays need more modes to hold the same
+information -- so the sweep is a grid, not one axis at a time: 30 runs in
+one Hydra multirun (~3.4 min each, ~1 h 40 min; the fit is ~2 min, the rest
+scoring), `spatial_rank` fixed at 750. `delays=1` isn't in the grid: it is
+plain DMD, checked separately (above). Validation results, with the
+incumbent, plain DMD rank 750, for reference:
+
+| delays | rank | RMSE lead 1 / 10 / 40 | RMSE mean | skill horizon | skill on train | energy / enstrophy error | spectrum distance (x) | `u_y` period error / peak ratio |
+|---|---|---|---|---|---|---|---|---|
+| *1 (plain DMD)* | *750* | *0.26 / 0.619 / 0.68* | *0.81* | *5* | *11* | *0.27 / 0.73* | *2.66* | *0.14 / 0.16* |
+| 2 | 250 | 0.31 / 0.679 / 0.80 | 0.85 | 4 | 12 | 0.26 / 0.73 | 2.79 | 0.20 / 0.21 |
+| 2 | 500 | 0.29 / 0.604 / 0.66 | 0.81 | 4 | 11 | 0.26 / 0.73 | 2.70 | 0.14 / 0.22 |
+| 2 | 750 | 0.27 / 0.579 / 0.62 | 0.79 | 6 | 12 | 0.26 / 0.73 | 2.66 | 0.11 / 0.21 |
+| 2 | 1000 | 0.25 / 0.574 / 0.61 | 0.78 | 7 | 13 | 0.26 / 0.72 | 2.63 | 0.12 / 0.22 |
+| 2 | 1500 | 0.23 / 0.612 / 0.58 | 0.78 | 7 | 14 | 0.26 / 0.72 | 2.66 | 0.07 / 0.12 |
+| 4 | 250 | 0.36 / 0.681 / 0.80 | 0.85 | 3 | 13 | 0.27 / 0.74 | 2.80 | 0.19 / 0.14 |
+| 4 | 500 | 0.32 / 0.575 / 0.65 | 0.79 | 5 | 10 | 0.26 / 0.73 | 2.66 | 0.10 / 0.13 |
+| 4 | 750 | 0.30 / 0.600 / 0.62 | 0.79 | 6 | 13 | 0.26 / 0.73 | 2.63 | 0.09 / 0.15 |
+| **4** | **1000** | 0.28 / 0.571 / 0.58 | 0.78 | **7** | 13 | 0.26 / 0.73 | 2.62 | 0.04 / 0.17 |
+| 4 | 1500 | 0.25 / 0.618 / 0.66 | 0.80 | 6 | 15 | 0.26 / 0.73 | 2.63 | 0.01 / 0.09 |
+| 8 | 250 | 0.39 / 0.674 / 0.66 | 0.80 | 4 | 10 | 0.26 / 0.73 | 2.73 | 0.14 / 0.12 |
+| 8 | 500 | 0.35 / 0.624 / 0.61 | 0.78 | 4 | 10 | 0.26 / 0.72 | 2.67 | 0.10 / 0.17 |
+| 8 | 750 | 0.34 / 0.627 / 0.60 | 0.76 | 4 | 12 | 0.23 / 0.69 | 2.59 | 0.09 / 0.21 |
+| 8 | 1000 | 0.32 / 0.629 / 0.58 | 0.75 | 5 | 14 | 0.24 / 0.70 | 2.55 | 0.10 / 0.28 |
+| 8 | 1500 | 0.29 / 0.627 / 0.59 | 0.75 | 6 | 24 | 0.25 / 0.71 | 2.54 | 0.10 / 0.25 |
+| 16 | 250 | 0.43 / 0.672 / 0.71 | 0.77 | 2 | 8 | 0.25 / 0.71 | 2.61 | 0.19 / 0.12 |
+| 16 | 500 | 0.39 / 0.656 / 0.67 | 0.76 | 4 | 12 | 0.24 / 0.69 | 2.60 | 0.13 / 0.39 |
+| 16 | 750 | 0.36 / 0.628 / 0.55 | 0.73 | 3 | 14 | 0.23 / 0.68 | 2.51 | 0.06 / 0.44 |
+| 16 | 1000 | 0.35 / 0.628 / 0.59 | 0.74 | 4 | 14 | 0.24 / 0.69 | 2.47 | 0.08 / 0.25 |
+| 16 | 1500 | 0.34 / 0.626 / 0.62 | 0.75 | 4 | 15 | 0.23 / 0.68 | 2.38 | 0.07 / 0.26 |
+| 32 | 250 | 0.47 / 0.666 / 0.76 | 0.77 | 2 | 12 | 0.21 / 0.65 | 2.45 | 0.04 / 0.21 |
+| 32 | 500 | 0.44 / 0.618 / 0.62 | 0.75 | 3 | 18 | 0.21 / 0.65 | 2.40 | 0.11 / 0.36 |
+| 32 | 750 | 0.42 / 0.648 / 0.58 | 0.77 | 3 | 15 | 0.23 / 0.67 | 2.35 | 0.16 / 0.39 |
+| 32 | 1000 | 0.40 / 0.637 / 0.72 | 0.79 | 3 | 14 | 0.25 / 0.70 | 2.33 | 0.19 / 0.22 |
+| 32 | 1500 | 0.38 / 0.634 / 0.54 | 0.74 | 3 | 32 | 0.22 / 0.65 | 2.21 | 0.13 / 0.57 |
+| 80 | 250 | 0.53 / 0.625 / 0.73 | 0.92 | 0 | 14 | 0.23 / 0.66 | 2.31 | 0.21 / 0.34 |
+| 80 | 500 | 0.49 / 0.632 / 0.77 | 0.92 | 1 | 15 | 0.21 / 0.64 | 2.14 | 0.22 / 0.28 |
+| 80 | 750 | 0.47 / 0.653 / 0.70 | 0.85 | 2 | 25 | 0.21 / 0.62 | 2.03 | 0.20 / 0.44 |
+| 80 | 1000 | 0.47 / 0.609 / 0.61 | 0.80 | 2 | 46 | 0.17 / 0.59 | 1.97 | 0.04 / 0.68 |
+| 80 | 1500 | 0.45 / 0.627 / 0.70 | 0.82 | 2 | 55 | 0.21 / 0.62 | 1.87 | 0.19 / 0.28 |
+
+What the sweep shows:
+
+- **A little context helps.** Two or four delays lift the skill horizon from 5
+  to 7 and RMSE at lead 10 from 0.62 to 0.57 -- the first real step beyond
+  plain DMD -- provided the rank grows with them (at rank 250 and 500 they
+  don't beat it). The history tells the linear operator which way the
+  coherent oscillation is moving, which a single frame doesn't.
+- **More context hurts the short horizon.** At a fixed rank, lead-1 RMSE
+  rises steadily with the delays (rank 1000: 0.25 at 2 delays, 0.47 at 80)
+  and the skill horizon falls to 0-2 at 80: the modes are spent on history
+  instead of resolving the current state. Raising the rank doesn't buy it
+  back, it **overfits**: at 80 delays the training dataset's skill horizon
+  climbs to 46-55 while validation stays at 2, the same pattern as plain DMD
+  past rank 500, much stronger.
+- **More context helps the long horizon and the physics.** Long-delay models
+  stay closer to the attractor: spectrum distance 2.66 -> 1.87, energy error
+  0.27 -> 0.17, enstrophy 0.73 -> 0.59, mean RMSE down to 0.73 at 16 delays.
+  The pointwise track is lost early, but the forecast keeps more of the
+  flow's small scales instead of relaxing to a smooth mean. Under the
+  selection rule the physics scores are guardrails, not objectives, so this
+  doesn't pick the model -- but it's the trade-off a nonlinear model would
+  have to break, and worth remembering when choosing its window.
+- **Rank 250 is too few** at 2-8 delays: the spectrum distance is more than
+  0.05 worse than the incumbent's, failing the guardrail. Stabilization was
+  needed only at 80 delays and the two lowest ranks (1-2 modes); every other
+  fit was stable as fitted.
+
+**Selected: 4 delays, rank 1000**, by the ranking rule in "How candidates
+are ranked": three runs tie on skill horizon (7) -- 2 delays at rank 1000
+and 1500, 4 delays at rank 1000 -- and 4 delays wins the tie-break on RMSE at
+lead 10 (0.571 vs 0.574 and 0.612). Its physics scores are all within the
+guardrails of the incumbent, plain DMD rank 750 (energy -0.002, enstrophy
+-0.004, spectra slightly better). As with the rank sweep, the margin over 2
+delays is realization noise; the rule, not the margin, decides. It replaces
+plain DMD as the canonical model (the DVC `train` stage); the checkpoint is
+~890 MB, the rank-750 spatial basis plus a 12 MB delay basis.
 
 ## Docker
 
