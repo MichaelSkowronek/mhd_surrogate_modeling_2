@@ -34,9 +34,12 @@ server = [
     "boto3>=1.35",
 ]
 # Ray backend for the parallel preprocessing/analysis scripts (`--backend
-# ray`); the other backends need nothing extra.
+# ray`), and Ray Tune for the hyperparameter search
+# (scripts/training/tune.py); the other backends need nothing extra.
 ray = [
-    "ray>=2.58",
+    "ray[tune]>=2.58",
+    # Search algorithm for the Ray Tune hyperparameter search (TPE sampler).
+    "optuna>=4.0",
 ]
 # CUDA build of JAX for training on an NVIDIA GPU (needs a recent driver;
 # the CUDA toolkit itself comes from the wheels). Without it JAX runs on CPU.

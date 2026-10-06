@@ -1,0 +1,23 @@
+# Ray Tune search over the U-Net (configs/model/unet.yaml): Optuna's TPE
+# sampler proposes configurations, ASHA stops unpromising trials early. The
+# metric is the validation selection_score (skill horizon, RMSE at lead 10 as
+# tie-break), reported after every validation (model.training.eval_every).
+num_samples: 24          # trials
+max_concurrent_trials: 1 # one GPU: concurrent trials would split it rather than add throughput
+resources_per_trial:     # Ray's scheduling budget per trial
+  cpu: 4
+  gpu: 1                 # 0.5 runs two trials per GPU (~2-4 GB GPU each in bf16)
+  memory_gb: 10          # host RAM: ~8 GB while training and validating, ~10 GB peak
+grace_period: 4          # validations every trial gets before ASHA may stop it
+reduction_factor: 3      # ASHA keeps the top 1/3 at each rung (4, 12, 36 validations)
+seed: 0                  # Optuna's sampler
+
+# Dotted config keys -> sampling domain (loguniform/uniform: low, high;
+# randint: low, high exclusive; choice: values).
+space:
+  model.training.learning_rate: {type: loguniform, low: 1.0e-4, high: 3.0e-3}
+  model.training.weight_decay: {type: loguniform, low: 1.0e-6, high: 1.0e-3}
+  model.base_channels: {type: choice, values: [16, 32, 48]}
+  model.depth: {type: choice, values: [3, 4]}
+  model.window: {type: choice, values: [1, 2, 4, 8]}
+  model.rollout_steps: {type: choice, values: [1, 2, 4]}

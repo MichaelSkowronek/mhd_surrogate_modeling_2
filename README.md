@@ -31,8 +31,9 @@ validation dataset through the training entry point (see "Baselines"). The
 first model with dynamics, DMD, beats both (see "DMD"), and time-delay
 (Hankel) DMD with 4 frames of context beats DMD (see "Hankel DMD") -- it is
 the canonical model. The first neural network, a U-Net, is built and
-smoke-tested, with early stopping on validation and resumable training (see
-"U-Net"); training it to convergence and tuning it come next.
+smoke-tested, with early stopping on validation, resumable training and a
+Ray Tune hyperparameter search (Optuna + ASHA; see "U-Net"); training it to
+convergence and running the search come next.
 
 ## Setup
 
@@ -74,7 +75,7 @@ uv run pre-commit run --all-files
 src/mhd_surrogate/   importable package, split by pipeline stage
   data/              dataset, grid, normalization, versioning, conversion
   analysis/          fields, summary, spectral
-  training/          mlflow_utils, tracking, export, mlflow_model, trainer
+  training/          mlflow_utils, tracking, export, mlflow_model, run, trainer, tuning
   evaluation/        protocol, metrics, diagnostics, evaluate
   models/            base (interface), baselines, dmd, hankel_dmd, neural, unet, registry
   utils/             logging_config, parallel, jax_cache, hydra_resolvers
@@ -82,11 +83,11 @@ scripts/             CLI entry points, same split (plus viz/)
   data/              explore_data, convert_to_zarr, compute_stats
   analysis/          check_*.py, run_all_checks, benchmark_backends
   viz/               make_video, make_all_videos, make_forecast_video
-  training/          train
+  training/          train, tune
 tests/               mirrors src/ and scripts/ (data/, analysis/, training/, evaluation/, models/, utils/, viz/)
 dvc.yaml, dvc.lock  data pipeline (raw -> zarr -> stats) and its pinned hashes
 data/raw.dvc         DVC pointer to the raw .npy files (.dvc/ holds the remote config)
-configs/             Hydra tree: config.yaml + data/, dataset/, normalization/, model/, evaluation/, mlflow/ groups
+configs/             Hydra tree: config.yaml (tune.yaml for the search) + data/, dataset/, normalization/, model/, evaluation/, mlflow/, search/ groups
   analysis/          plain-YAML configs (split.yaml, grid.yaml)
 ```
 
@@ -2086,12 +2087,76 @@ GPU and copied once, and its error is computed a chunk of lead times at a
 time), ~10 GB peak overall.
 
 **Status.** Wired up and smoke-tested on the real data (2-3 epochs of 160
-windows: val skill horizon 2-3), not yet trained to convergence or tuned. The defaults in `configs/model/unet.yaml` are a hand-picked starting
-point; the hyperparameter search (Ray Tune, Optuna + ASHA) comes next. The
-U-Net isn't a DVC stage: only the canonical model is, and the U-Net becomes
-canonical only if it beats Hankel DMD on validation. `training/trainer.py`
-isn't a dependency of the current `train` stage, so working on it doesn't
-mark Hankel DMD stale.
+windows: val skill horizon 2-3), not yet trained to convergence or tuned.
+The defaults in `configs/model/unet.yaml` are a hand-picked starting point,
+for the hyperparameter search below to improve on. The U-Net isn't a DVC
+stage: only the canonical model is, and the U-Net becomes canonical only if
+it beats Hankel DMD on validation. `training/trainer.py` and
+`training/tuning.py` aren't dependencies of the current `train` stage, so
+working on them doesn't mark Hankel DMD stale.
+
+### Hyperparameter search (Ray Tune: Optuna + ASHA)
+
+```bash
+uv run --extra gpu --extra ray scripts/training/tune.py                      # 24 trials
+uv run --extra gpu --extra ray scripts/training/tune.py search.num_samples=8 model.training.max_epochs=30
+```
+
+`scripts/training/tune.py` searches the space in `configs/search/unet.yaml`
+(learning rate, weight decay, width, depth, window, rollout steps) with Ray
+Tune. Its root config, `configs/tune.yaml`, is `config.yaml` plus a
+`search` group. Any training override works as it does for train.py.
+
+- **A trial is a training run.** `train.py`'s body moved to
+  `training/run.py`'s `run_training`, and each trial calls it with the
+  sampled values applied as dotted overrides
+  (`training/tuning.py:run_trial`). A trial is therefore exactly what
+  `train.py model=unet <overrides>` would do: the same data provenance,
+  early stopping, checkpoint, logged model and full validation scores.
+  (Code that runs on Ray workers has to be importable from `src/`, which is
+  why the run body moved there.)
+- **One metric, the selection rule.** A trial reports its validation scores
+  to Tune after every validation, and the search maximizes
+  `selection_score`: skill horizon with RMSE at lead 10 as tie-break, the
+  number early stopping already uses. The search optimizes what models are
+  chosen by, on validation only.
+- **Optuna proposes, ASHA prunes.** Optuna's TPE sampler (seeded) models
+  which regions of the space score well, from the trials so far, and samples
+  the next configuration there instead of uniformly at random. ASHA
+  (asynchronous successive halving) compares trials at rungs of 4, 12 and 36
+  validations (`grace_period` x `reduction_factor`^k) and stops those below
+  the top third of what reached the rung. Most of the budget goes to
+  promising configurations; a bad learning rate is dropped after 4 epochs,
+  not 60. Both are needed: ASHA alone samples blindly, Optuna alone trains
+  every trial to the end. (Not HyperOpt: Optuna is its maintained TPE
+  successor and integrates with Tune the same way.)
+- **MLflow.** The search is a parent run (`unet search`), holding the
+  search config and, at the end, the best trial's values (`best.*`) and its
+  run id (`best_run_id` tag). Each trial is a nested child run, tagged with
+  the search's `sweep` name like a Hydra multirun. A pruned trial's process
+  is ended by Ray mid-training, so its run can't close itself: the driver
+  marks it KILLED, tags it `pruned=true` and uploads its log. ASHA would also
+  stop a trial that reaches its `max_t` iterations, which at the last
+  validation would kill it before its final checkpoint and scoring, so
+  `max_t` is set one past the last validation.
+- **Resources.** One trial at a time by default (`max_concurrent_trials:
+  1`, 1 GPU, 10 GB memory budget per trial). On one GPU, concurrent trials
+  split it rather than add throughput, and each trial peaks at ~10 GB of
+  host RAM on a 23 GB machine. Ray still earns its place here through ASHA's
+  asynchronous scheduling, a per-trial resource budget, and the fact that
+  the same script scales to more GPUs or a cluster (KubeRay) by changing
+  `resources_per_trial` and `max_concurrent_trials`. Ray is started through
+  `utils/parallel.py`'s `init_ray`, as everywhere else.
+- **Output.** `outputs/tune/<date>/<time>/` holds the driver's log,
+  `trials/<trial id>/` (each trial's log, checkpoint and training state) and
+  `ray/` (Tune's own results). The result table is printed best first.
+
+Smoke-tested on the real data (4 trials, 4 epochs of 64 windows,
+`grace_period=1, reduction_factor=2`): two trials ran to the end with full
+scores and two were pruned (KILLED, tagged, log uploaded). The same seed
+proposed the same configurations on a rerun. Choosing the checkpoint to
+keep from a real search, and pruning the losers', follows CLAUDE.md's
+sweep rules.
 
 ## Docker
 
