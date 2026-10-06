@@ -250,7 +250,11 @@ conventions below; it shifts which tools are worth reaching for at all.
   no files and earlier testing stays valid -- unless the pending PR needed
   a fix to pass CI, in which case rebase onto the fix and re-test. Start
   MLflow runs meant to be kept only after the rebase, so their logged
-  commit is on `main`.
+  commit is on `main`. Don't enable `--auto` on the stacked PR until then:
+  up to date with `main` and green, it would merge first and carry the
+  pending PR's changes into its own squash commit (#40 swallowed #39 this
+  way). Push it and open the PR, but enable auto-merge only after the
+  rebase.
 - Tag milestones with an annotated git tag (e.g. `v0.1.0-eda-complete`)
   paired with a GitHub Release summarizing what the milestone covers -- not
   strict semver, since this project has no release artifact in the
