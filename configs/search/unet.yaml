@@ -11,6 +11,9 @@ resources_per_trial:     # Ray's scheduling budget per trial
 grace_period: 4          # validations every trial gets before ASHA may stop it
 reduction_factor: 3      # ASHA keeps the top 1/3 at each rung (4, 12, 36 validations)
 seed: 0                  # Optuna's sampler
+time_budget_s: null      # wall-clock cap on the whole search, in seconds (null: none). When it runs
+                         # out, the running trial is stopped unscored (tagged time_budget) and no new
+                         # ones start: size the search to finish within it; the cap is a backstop
 
 # Dotted config keys -> sampling domain (loguniform/uniform: low, high;
 # randint: low, high exclusive; choice: values).

@@ -2099,7 +2099,8 @@ working on them doesn't mark Hankel DMD stale.
 
 ```bash
 uv run --extra gpu --extra ray scripts/training/tune.py                      # 24 trials
-uv run --extra gpu --extra ray scripts/training/tune.py search.num_samples=8 model.training.max_epochs=30
+uv run --extra gpu --extra ray scripts/training/tune.py search.num_samples=8 model.training.max_epochs=30 \
+    search.time_budget_s=9000                                                 # capped at 2.5 h
 ```
 
 `scripts/training/tune.py` searches the space in `configs/search/unet.yaml`
@@ -2139,6 +2140,21 @@ Tune. Its root config, `configs/tune.yaml`, is `config.yaml` plus a
   stop a trial that reaches its `max_t` iterations, which at the last
   validation would kill it before its final checkpoint and scoring, so
   `max_t` is set one past the last validation.
+- **Time cap.** `search.time_budget_s` (seconds; `null`, the default, is
+  no cap) is Ray Tune's own `TuneConfig(time_budget_s=...)`: when the
+  search has run that long, Tune stops the running trials and starts none
+  of the remaining samples. It is a backstop, not the way to size a search:
+  a trial stopped by it ends mid-training like a pruned one, with no final
+  checkpoint or full scores, so `num_samples` and `max_epochs` should be
+  chosen to finish within it. Tune reports a trial stopped by ASHA and one
+  stopped by the budget the same way, so the scheduler records the trials
+  ASHA stopped (`training/tuning.py:recording_asha`), and the driver tags
+  the others' runs `time_budget=true` instead of `pruned=true` (and the
+  parent run `time_budget_reached=true`): a budget-stopped trial was cut
+  short, not judged worse than the others. Checked with a toy trainable:
+  ASHA's stops are recorded under the same trial ids the results carry, the
+  trial running at the deadline isn't among them, and the samples not yet
+  started are dropped from the results.
 - **Resources.** One trial at a time by default (`max_concurrent_trials:
   1`, 1 GPU, 10 GB memory budget per trial). On one GPU, concurrent trials
   split it rather than add throughput, and each trial peaks at ~10 GB of
