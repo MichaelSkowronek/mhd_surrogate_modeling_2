@@ -58,3 +58,9 @@ def test_requirements_are_pinned_to_the_installed_versions():
     pins = pinned_requirements()
     assert [p.split("==")[0] for p in pins] == ["numpy", "jax", "mlflow"]
     assert all("==" in p and p.split("==")[1] for p in pins)
+
+
+def test_a_model_adds_its_own_requirements_once():
+    pins = pinned_requirements(("equinox", "jax"))
+
+    assert [p.split("==")[0] for p in pins] == ["numpy", "jax", "mlflow", "equinox"]

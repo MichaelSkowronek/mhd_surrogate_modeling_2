@@ -8,12 +8,13 @@ coarse levels see large structures (the bottleneck's receptive field spans a
 good part of the domain), the skips keep the fine ones, which is why it's the
 standard first network for field-to-field prediction.
 
-This module is the network alone: a map from (in_channels, H, W) to
+`UNet` is the network alone: a map from (in_channels, H, W) to
 (out_channels, H, W) on unbatched arrays (Equinox convention; `jax.vmap` for
-a batch). H and W must be multiples of 2**depth; `pad_to_multiple` and
-`crop` get the 1151 x 127 frames there and back. What goes in and comes out
+a batch). H and W must be multiples of 2**depth; `neural.pad_to_multiple`
+and `neural.crop` get the 1151 x 127 frames there and back. What goes in and comes out
 (normalized frames, coordinates, a residual update) is the surrogate's
-business, not the network's.
+business: `UNetSurrogate` (registered as `unet`) is `models/neural.py`'s
+autoregressive surrogate with this network.
 
 Choices:
 - GroupNorm, not BatchNorm: no running statistics to carry between training
@@ -27,9 +28,13 @@ Choices:
 
 from __future__ import annotations
 
+from typing import Any
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+
+from mhd_surrogate.models.neural import AutoregressiveSurrogate
 
 MAX_GROUPS = 8
 
@@ -108,7 +113,7 @@ class UNet(eqx.Module):
         if x.shape[-2] % multiple or x.shape[-1] % multiple:
             raise ValueError(
                 f"spatial shape {x.shape[-2:]} must be a multiple of 2**depth = {multiple}; "
-                "pad it with pad_to_multiple"
+                "pad it with neural.pad_to_multiple"
             )
         skips = []
         for encoder in self.encoders[:-1]:
@@ -121,34 +126,21 @@ class UNet(eqx.Module):
         return self.head(x)
 
 
-def padded_size(n: int, multiple: int) -> int:
-    return -(-n // multiple) * multiple
+class UNetSurrogate(AutoregressiveSurrogate):
+    """The autoregressive surrogate (`models/neural.py`) with a U-Net."""
 
+    name = "unet"
 
-def pad_to_multiple(x: jax.Array, multiple: int) -> jax.Array:
-    """Pad the last two axes at their far end up to a multiple of `multiple`,
-    repeating the edge values (at a no-slip wall that's its zero velocity;
-    at the outlet, the last column)."""
-    h, w = x.shape[-2:]
-    pad = [(0, 0)] * (x.ndim - 2) + [
-        (0, padded_size(h, multiple) - h),
-        (0, padded_size(w, multiple) - w),
-    ]
-    return jnp.pad(x, pad, mode="edge")
+    def __init__(self, base_channels: int = 32, depth: int = 4, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.base_channels = base_channels
+        self.depth = depth
 
+    def network_config(self) -> dict[str, Any]:
+        return {"base_channels": self.base_channels, "depth": self.depth}
 
-def crop(x: jax.Array, shape: tuple[int, int]) -> jax.Array:
-    """Undo `pad_to_multiple`: keep the first `shape` entries of the last two axes."""
-    return x[..., : shape[0], : shape[1]]
+    def pad_multiple(self) -> int:
+        return 2**self.depth
 
-
-def coordinate_channels(shape: tuple[int, int]) -> jax.Array:
-    """(2, H, W) grid coordinates, each scaled to [-1, 1].
-
-    Convolutions are translation-equivariant, but this flow isn't
-    homogeneous (an inlet, an outlet, two walls): concatenated to the input,
-    the coordinates let the network tell where it is ("CoordConv").
-    """
-    h, w = shape
-    x, y = jnp.meshgrid(jnp.linspace(-1.0, 1.0, h), jnp.linspace(-1.0, 1.0, w), indexing="ij")
-    return jnp.stack([x, y])
+    def build_network(self, in_channels: int, out_channels: int, key: jax.Array) -> UNet:
+        return UNet(in_channels, out_channels, self.base_channels, self.depth, key=key)

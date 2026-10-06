@@ -1,0 +1,30 @@
+# U-Net autoregressive surrogate (src/mhd_surrogate/models/unet.py, with the
+# shared machinery in models/neural.py and the training loop in
+# training/trainer.py): the last `window` frames plus grid coordinates in,
+# the change to the next frame out, rolled out autoregressively.
+#
+# Defaults are a hand-picked starting point, not tuned: the Ray Tune search
+# (Optuna + ASHA) tunes them on the validation dataset.
+name: unet
+window: 4             # input frames (<= data.context_steps); Hankel DMD's selected delays
+base_channels: 32     # channels at full resolution, doubled per level (~7.8M parameters at 32, depth 4)
+depth: 4              # down/up levels; frames are padded to a multiple of 2**depth (1152 x 128)
+rollout_steps: 1      # autoregressive steps in the training loss (1 = one-step teacher forcing)
+compute_dtype: bfloat16  # network compute; parameters and optimizer stay float32 (~1.8x faster than float32)
+host_dtype: float16   # training frames in host RAM (~4 GB for the 7 train datasets)
+seed: ${seed}         # network init and batch order
+chunk_t: 64           # frames per zarr read while loading
+training:             # training/trainer.py's TrainerConfig
+  max_epochs: 60
+  samples_per_epoch: 2048  # windows per epoch (of ~7k), i.e. per validation/checkpoint
+  batch_size: 8
+  learning_rate: 1.0e-3
+  warmup_steps: 200
+  final_lr_fraction: 0.01
+  weight_decay: 1.0e-4
+  grad_clip: 1.0
+  patience: 8         # validations without a better selection score before stopping
+  eval_every: 1
+  log_every: 20
+  max_loss: 100.0     # normalized MSE above this is divergence (one-step persistence is ~0.25)
+  prefetch: 2

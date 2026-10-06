@@ -9,6 +9,8 @@ attractor).
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 
@@ -29,6 +31,21 @@ def rmse_per_step(
 
 def skill_horizon(curve: np.ndarray, threshold: float) -> int:
     """Number of leading steps whose error stays at or below `threshold`
-    (the whole length if it never exceeds it)."""
-    above = np.flatnonzero(np.asarray(curve) > threshold)
+    (the whole length if it never exceeds it). A NaN error counts as above
+    it: a forecast that blew up has no skill from there on."""
+    above = np.flatnonzero(~(np.asarray(curve) <= threshold))
     return int(above[0]) if above.size else len(curve)
+
+
+def selection_score(skill: float, rmse_at_tie_break_lead: float) -> float:
+    """One number that ranks candidates like the selection rule: by skill
+    horizon, ties broken by the RMSE at the tie-break lead (CLAUDE.md, "Data
+    analysis"). The RMSE term r / (1 + r) lies in [0, 1) and grows with r, so
+    it orders equal skill horizons without ever outweighing one step of
+    skill (an infinite RMSE scores 1, at worst tying the next skill down): a
+    higher score is a better candidate under the rule. Early stopping and the
+    hyperparameter search maximize it."""
+    r = rmse_at_tie_break_lead
+    if not r >= 0:  # also catches NaN
+        return float("-inf")
+    return float(skill) - (1.0 if math.isinf(r) else r / (1.0 + r))

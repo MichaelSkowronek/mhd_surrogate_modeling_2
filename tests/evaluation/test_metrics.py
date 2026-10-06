@@ -1,7 +1,9 @@
+import math
+
 import numpy as np
 import pytest
 
-from mhd_surrogate.evaluation.metrics import rmse_per_step, skill_horizon
+from mhd_surrogate.evaluation.metrics import rmse_per_step, selection_score, skill_horizon
 
 
 def test_rmse_per_step_of_a_constant_offset_is_that_offset_at_every_step():
@@ -38,3 +40,22 @@ def test_skill_horizon_counts_steps_before_the_threshold_is_first_exceeded():
     assert skill_horizon(curve, 0.5) == 4  # equal to the threshold still counts as skill
     assert skill_horizon(curve, 1.0) == 5  # never exceeded: the whole length
     assert skill_horizon(curve, 0.0) == 0
+
+
+def test_skill_horizon_treats_a_nan_error_as_no_skill():
+    """A forecast that blew up must not score the whole length."""
+    assert skill_horizon(np.array([0.1, 0.2, np.nan, 0.1]), 0.5) == 2
+    assert skill_horizon(np.array([np.nan, np.nan]), 0.5) == 0
+
+
+def test_selection_score_ranks_by_skill_then_by_lower_tie_break_rmse():
+    ranked = [(7, 0.5), (7, 0.9), (6, 0.0), (6, 5.0), (6, math.inf), (5, 0.0)]
+    scores = [selection_score(skill, rmse) for skill, rmse in ranked]
+
+    assert scores == sorted(scores, reverse=True)
+    assert scores[2] > scores[3] > scores[4]
+    assert scores[4] >= scores[5]  # infinite RMSE ties at worst with one step less skill
+
+
+def test_selection_score_of_a_nan_rmse_is_the_worst_possible():
+    assert selection_score(10, math.nan) == -math.inf

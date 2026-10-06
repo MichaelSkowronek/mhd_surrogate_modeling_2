@@ -8,10 +8,15 @@
 # report_leads: lead times (1-based) also logged as scalars, besides the full
 #   per-step curve; 40 is the longest characteristic period found in the EDA.
 #
+# tie_break_lead: candidates are ranked by skill horizon, ties broken by the
+#   RMSE at this lead (CLAUDE.md, "Data analysis"); early stopping and the
+#   hyperparameter search maximize the two combined (`selection_score`).
+#
 # train_datasets: train datasets also scored the same way, logged as
 #   `train.<name>.*` -- a sanity check of the fit and the train/val gap, not
 #   a basis for decisions. One by default (~35 s each); must be a subset of
 #   data.train_datasets.
 skill_threshold: 0.5
 report_leads: [1, 10, 40, 100]
+tie_break_lead: 10
 train_datasets: [re16k_t400_0]

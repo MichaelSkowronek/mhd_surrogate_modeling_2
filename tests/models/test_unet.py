@@ -4,14 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from mhd_surrogate.models.unet import (
-    UNet,
-    _norm,
-    coordinate_channels,
-    crop,
-    pad_to_multiple,
-    padded_size,
-)
+from mhd_surrogate.models.unet import UNet, _norm
 
 
 def small_unet(in_channels=3, out_channels=2, depth=2, seed=0):
@@ -80,32 +73,3 @@ def test_batches_with_vmap():
 @pytest.mark.parametrize("channels, groups", [(4, 4), (8, 8), (32, 8), (12, 6), (7, 7), (9, 3)])
 def test_group_count_is_the_largest_divisor_up_to_eight(channels, groups):
     assert _norm(channels).groups == groups
-
-
-@pytest.mark.parametrize("n, multiple, expected", [(1151, 16, 1152), (127, 16, 128), (16, 16, 16)])
-def test_padded_size(n, multiple, expected):
-    assert padded_size(n, multiple) == expected
-
-
-def test_pad_repeats_the_edge_and_crop_undoes_it():
-    x = jnp.arange(2 * 5 * 3, dtype=jnp.float32).reshape(1, 2, 5, 3)
-
-    padded = pad_to_multiple(x, 4)
-
-    assert padded.shape == (1, 2, 8, 4)
-    np.testing.assert_array_equal(
-        padded[..., 5:, :3], jnp.broadcast_to(x[..., 4:5, :], (1, 2, 3, 3))
-    )
-    np.testing.assert_array_equal(padded[..., :5, 3], x[..., :, 2])
-    np.testing.assert_array_equal(crop(padded, (5, 3)), x)
-
-
-def test_coordinate_channels_span_minus_one_to_one_along_their_axis():
-    coords = coordinate_channels((5, 3))
-
-    assert coords.shape == (2, 5, 3)
-    np.testing.assert_allclose(coords[0, :, 1], [-1.0, -0.5, 0.0, 0.5, 1.0])
-    np.testing.assert_allclose(coords[1, 2, :], [-1.0, 0.0, 1.0])
-    # Each channel varies along its own axis only.
-    np.testing.assert_array_equal(coords[0], jnp.broadcast_to(coords[0, :, :1], (5, 3)))
-    np.testing.assert_array_equal(coords[1], jnp.broadcast_to(coords[1, :1, :], (5, 3)))

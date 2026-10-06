@@ -23,6 +23,7 @@ MODELS: dict[str, str] = {
     "persistence": "mhd_surrogate.models.baselines:Persistence",
     "dmd": "mhd_surrogate.models.dmd:DMD",
     "hankel_dmd": "mhd_surrogate.models.hankel_dmd:HankelDMD",
+    "unet": "mhd_surrogate.models.unet:UNetSurrogate",
 }
 
 

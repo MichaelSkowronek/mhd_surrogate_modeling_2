@@ -26,8 +26,9 @@ import mlflow
 from mhd_surrogate.models.base import SurrogateModel
 
 PACKAGE_DIR = Path(__file__).resolve().parents[1]
-# Third-party packages the model needs at load/predict time (the baselines
-# import jax; the pyfunc wrapper itself needs mlflow).
+# Third-party packages every model needs at load/predict time (the baselines
+# import jax; the pyfunc wrapper itself needs mlflow). A model adds its own
+# as a `requirements` class attribute (e.g. the neural ones: equinox).
 REQUIREMENTS = ("numpy", "jax", "mlflow")
 
 
@@ -61,8 +62,10 @@ def signature(frame_shape: tuple[int, ...]) -> ModelSignature:
     )
 
 
-def pinned_requirements() -> list[str]:
-    return [f"{name}=={importlib.metadata.version(name)}" for name in REQUIREMENTS]
+def pinned_requirements(extra: tuple[str, ...] = ()) -> list[str]:
+    """REQUIREMENTS plus a model's own `extra` ones, pinned to the installed versions."""
+    names = list(dict.fromkeys([*REQUIREMENTS, *extra]))
+    return [f"{name}=={importlib.metadata.version(name)}" for name in names]
 
 
 def log_surrogate(
@@ -80,6 +83,6 @@ def log_surrogate(
         artifacts={"checkpoint": str(checkpoint)},
         code_paths=[str(PACKAGE_DIR)],
         signature=signature(frame_shape),
-        pip_requirements=pinned_requirements(),
+        pip_requirements=pinned_requirements(getattr(model, "requirements", ())),
         params={k: str(v) for k, v in (params or {}).items()},
     )

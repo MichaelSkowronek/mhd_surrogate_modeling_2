@@ -26,6 +26,13 @@ jax:
   compilation_cache_dir: .jax_cache
   compilation_cache_max_gb: 2
 
+# Resume an interrupted run of an iteratively trained model (e.g. model=unet):
+# the run's output directory, e.g. resume=outputs/2026-10-06/14-03-12, with the
+# same overrides as the original run. Training continues from the last
+# completed epoch in that directory (its training_state/), in the same MLflow
+# run; the console log is appended to the run's log file.
+resume: null
+
 # Fixed output location, set by the DVC `train` stage (dvc.yaml): the
 # checkpoint goes to <dir>/model and the scores to <dir>/metrics.json.
 # Unset (the default), both stay in the run's Hydra output directory.
@@ -39,7 +46,8 @@ hydra:
   job:
     chdir: false
   run:
-    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    # A resumed run goes back into its own directory (see `resume` above).
+    dir: ${if_null:${resume},outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}}
   # Multirun sweeps (`-m`, e.g. the DMD rank sweep) go under outputs/ too, one
   # numbered subdirectory per job, instead of Hydra's default ./multirun.
   sweep:
