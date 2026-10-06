@@ -73,7 +73,7 @@ src/mhd_surrogate/   importable package, split by pipeline stage
   analysis/          fields, summary, spectral
   training/          mlflow_utils, tracking
   evaluation/        protocol, metrics, diagnostics, evaluate
-  models/            base (interface), baselines, dmd, registry
+  models/            base (interface), baselines, dmd, hankel_dmd, registry
   utils/             logging_config, parallel
 scripts/             CLI entry points, same split (plus viz/)
   data/              explore_data, convert_to_zarr, compute_stats
@@ -104,7 +104,7 @@ uv run pytest
 
 Unit tests live in `tests/`, covering the pure computational logic: the
 `src/mhd_surrogate/` modules (`grid`, `fields`, `dataset`, `summary`,
-`spectral`, `dmd`, `pod`, `spod`, `parallel`, `mlflow_utils`,
+`spectral`, `dmd`, `hankel_dmd`, `pod`, `spod`, `parallel`, `mlflow_utils`,
 `logging_config`) plus the computational core functions inside the
 `check_*.py`/`make_video.py` scripts (e.g. `per_timestep_stats`,
 `field_acf`, `spectrum_sum`, `divergence_stats`, `vorticity_stats`,
@@ -1797,6 +1797,58 @@ previous default, rank 100 (energy +0.002, enstrophy -0.001, spectra better).
 The margin over 500 is small enough to be realization noise; the rule, not
 the margin, decides. The cost is size: the rank-750 checkpoint and logged
 model are ~880 MB (rank 500: ~590 MB, rank 100: ~117 MB).
+
+## Hankel DMD
+
+```bash
+uv run --extra gpu scripts/training/train.py model=hankel_dmd    # 8 delays, rank 750
+uv run --extra gpu scripts/training/train.py model=hankel_dmd model.delays=32 model.rank=1000
+```
+
+Time-delay (Hankel) DMD (`src/mhd_surrogate/models/hankel_dmd.py`) is DMD on
+the last `delays` frames instead of one: the model's `window` is `delays`.
+Plain DMD has to read where the flow is going from a single frame, and a
+snapshot of a standing pattern doesn't say whether its amplitude is rising or
+falling; a few frames of history do. It answers the question the protocol's
+80-step context was sized for -- does more context help? -- so `delays` can
+go up to 80.
+
+- **POD first, then delays.** Delay-embedding the raw frames would make the
+  state `delays` x ~292k entries and its POD basis ~880 MB *per delay* at rank
+  750 (~70 GB at 80 delays, in RAM and as a checkpoint). Instead each frame is
+  reduced to its coefficients in plain DMD's POD basis (`spatial_rank` modes,
+  750 by default, plain DMD's selected rank), and the delays are taken of
+  those: a state of at most 80 x 750 = 60k entries. Only the one spatial
+  basis is stored at full size; the delay basis is `delays` x `spatial_rank`
+  x `rank` (19 MB at the defaults, ~360 MB at 80 delays and rank 1500). The
+  price is that the delays see each frame's 750-mode projection, not the
+  frame -- 98% of the variance; the rest is small-scale content no linear
+  model carries forward anyway. This is the usual way to apply Hankel DMD to
+  high-dimensional fields.
+- **Fit, from the same Gram matrix.** Everything comes from the one Gram
+  matrix plain DMD computes, in one pass over the frames: the spatial basis,
+  every frame's coefficients (`G[:, before] V S^-1`, no second pass), and the
+  delay states' Gram matrix as a sum of shifted blocks of the coefficients'
+  inner products -- the (pairs x 60k) delay matrix is never formed. Delay
+  states never reach across a dataset boundary, so each dataset loses its
+  first `delays - 1` frames as starting points (at 80 delays, 553 of the
+  7,108 pairs). Then projected exact DMD on the delay states, truncated to
+  `rank`, and `stabilize` as in DMD. It logs `fit.spatial_explained_variance`
+  (of the frames, kept by the spatial basis) and
+  `fit.delay_explained_variance` (of the delay states, kept by the delay
+  basis), besides `fit.rank`, `fit.delays`, `fit.unstable_modes` and
+  `fit.n_pairs`.
+- **Two exact checks.** With `delays=1` it is plain DMD at
+  `min(rank, spatial_rank)` exactly (the coefficients of the "before" frames
+  are already orthogonal, so the delay POD changes nothing); a test checks
+  that, and on the real data `delays=1, rank=750` reproduces plain DMD rank
+  750's validation scores. A second test is a standing wave -- one pattern
+  whose amplitude oscillates -- which no one-frame linear model can forecast
+  and two delays forecast exactly.
+- **Two ranks.** `spatial_rank` bounds what any frame can represent; `rank`
+  is the dynamics' dimension, now over `delays` x `spatial_rank` features fit
+  from ~7k pairs, so it has to be truncated (plain DMD already overfit past
+  rank ~500).
 
 ## Docker
 

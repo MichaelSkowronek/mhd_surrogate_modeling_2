@@ -10,8 +10,9 @@ from typing import Any
 from mhd_surrogate.models.base import CHECKPOINT_META, SurrogateModel
 from mhd_surrogate.models.baselines import MeanField, Persistence
 from mhd_surrogate.models.dmd import DMD
+from mhd_surrogate.models.hankel_dmd import HankelDMD
 
-MODELS: dict[str, type] = {cls.name: cls for cls in (MeanField, Persistence, DMD)}
+MODELS: dict[str, type] = {cls.name: cls for cls in (MeanField, Persistence, DMD, HankelDMD)}
 
 
 def _model_class(name: str) -> type:
