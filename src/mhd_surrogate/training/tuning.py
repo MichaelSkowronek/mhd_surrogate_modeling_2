@@ -20,9 +20,14 @@ around it.
   validations is below the top 1/`reduction_factor` of the trials that got
   that far. Most of a search's budget goes to the promising configurations
   rather than to training every one of them to the end.
-- A pruned trial's process is ended by Ray mid-training, so its MLflow run
-  can't close itself: `close_pruned_runs` marks it KILLED, tags it
-  `pruned=true` and uploads its log, from the driver.
+- The search can be capped in wall-clock time (`time_budget_s`, Ray Tune's
+  own): when it runs out, Tune stops the running trials and starts no new
+  ones.
+- A trial stopped by ASHA or by the time budget has its process ended by
+  Ray mid-training, so its MLflow run can't close itself:
+  `close_stopped_runs` marks it KILLED, tags it `pruned=true` (ASHA, which
+  `recording_asha` records) or `time_budget=true`, and uploads its log,
+  from the driver.
 """
 
 from __future__ import annotations
@@ -30,7 +35,7 @@ from __future__ import annotations
 import copy
 import logging
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -141,15 +146,40 @@ def run_trial(
     )
 
 
-def close_pruned_runs(results: Sequence[Any], tracking_uri: str) -> list[str]:
-    """Mark the MLflow runs of trials ASHA stopped as KILLED, tagged
-    `pruned=true`, with their log uploaded. A trial that finished (early
-    stopping included) closed its own run; one that errored is left FAILED.
-    `results` are Ray Tune `Result`s; returns the pruned run ids."""
+def recording_asha(**kwargs: Any):
+    """Ray Tune's `ASHAScheduler(**kwargs)`, recording the ids of the trials
+    it stops in `.stopped`: Tune reports a trial ASHA stopped and one the
+    time budget stopped the same way, and only the first is pruned."""
+    from ray.tune.schedulers import ASHAScheduler, TrialScheduler
+
+    class RecordingASHA(ASHAScheduler):
+        def __init__(self, **kwargs: Any) -> None:
+            super().__init__(**kwargs)
+            self.stopped: set[str] = set()
+
+        def on_trial_result(self, tune_controller, trial, result):
+            decision = super().on_trial_result(tune_controller, trial, result)
+            if decision == TrialScheduler.STOP:
+                self.stopped.add(trial.trial_id)
+            return decision
+
+    return RecordingASHA(**kwargs)
+
+
+def close_stopped_runs(
+    results: Sequence[Any], tracking_uri: str, pruned_trials: Collection[str]
+) -> dict[str, list[str]]:
+    """Mark the MLflow runs of trials Ray stopped mid-training as KILLED,
+    with their log uploaded: tagged `pruned=true` if ASHA stopped the trial
+    (its id is in `pruned_trials`), `time_budget=true` otherwise (the search
+    ran out of time). A trial that finished (early stopping included) closed
+    its own run; one that errored is left FAILED. `results` are Ray Tune
+    `Result`s; returns the closed run ids, as {"pruned": [...],
+    "time_budget": [...]}."""
     from mlflow import MlflowClient
 
     client = MlflowClient(tracking_uri)
-    pruned = []
+    closed: dict[str, list[str]] = {"pruned": [], "time_budget": []}
     for result in results:
         run_id = (result.metrics or {}).get("mlflow_run_id")
         if run_id is None or result.error is not None:
@@ -160,10 +190,11 @@ def close_pruned_runs(results: Sequence[Any], tracking_uri: str) -> list[str]:
         log_file = Path(result.metrics["trial_dir"]) / TRIAL_LOG
         if log_file.is_file():
             client.log_artifact(run_id, str(log_file))
-        client.set_tag(run_id, "pruned", "true")
+        reason = "pruned" if result.metrics.get("trial_id") in pruned_trials else "time_budget"
+        client.set_tag(run_id, reason, "true")
         client.set_terminated(run_id, status="KILLED")
-        pruned.append(run_id)
-    return pruned
+        closed[reason].append(run_id)
+    return closed
 
 
 def summary_rows(results: Sequence[Any], params: Sequence[str]) -> list[dict[str, Any]]:

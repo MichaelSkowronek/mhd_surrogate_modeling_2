@@ -10,12 +10,14 @@ test dataset is never read.
 MLflow: the search is a parent run (`<model> search`, holding the search
 config and, at the end, the best trial's values and score), each trial a
 nested child run tagged with the search's `sweep` name, like a Hydra
-multirun's. Pruned trials' runs are marked KILLED and tagged `pruned`.
+multirun's. Pruned trials' runs are marked KILLED and tagged `pruned`; a
+trial still running when the search's time budget (`search.time_budget_s`)
+ran out is marked KILLED and tagged `time_budget`.
 
 Usage:
     uv run --extra gpu --extra ray scripts/training/tune.py
     uv run --extra gpu --extra ray scripts/training/tune.py search.num_samples=8 \\
-        model.training.max_epochs=30
+        model.training.max_epochs=30 search.time_budget_s=9000
 """
 
 from __future__ import annotations
@@ -40,7 +42,8 @@ from mhd_surrogate.training.tracking import tracked_run  # noqa: E402
 from mhd_surrogate.training.tuning import (  # noqa: E402
     METRIC,
     MODE,
-    close_pruned_runs,
+    close_stopped_runs,
+    recording_asha,
     run_trial,
     search_space,
     summary_rows,
@@ -70,10 +73,17 @@ def main(cfg: DictConfig) -> None:
         run_name=f"{cfg.model.name} search",
     ) as parent:
         mlflow.set_tags({"sweep": sweep, "search": "true"})
-        results = _search(cfg, base_config, output_dir, sweep, parent.info.run_id)
+        results, asha = _search(cfg, base_config, output_dir, sweep, parent.info.run_id)
 
-        pruned = close_pruned_runs(results, cfg.mlflow.tracking_uri)
-        log.info("%d of %d trials pruned by ASHA", len(pruned), len(results))
+        closed = close_stopped_runs(results, cfg.mlflow.tracking_uri, asha.stopped)
+        log.info("%d of %d trials pruned by ASHA", len(closed["pruned"]), len(results))
+        if closed["time_budget"]:
+            log.warning(
+                "time budget of %s s reached: %d running trial(s) stopped before the end",
+                search.time_budget_s,
+                len(closed["time_budget"]),
+            )
+            mlflow.set_tag("time_budget_reached", "true")
         rows = summary_rows(results, list(search.space))
         _print_table(rows)
         scored = [r for r in results if (r.metrics or {}).get(METRIC) is not None]
@@ -93,7 +103,6 @@ def _search(cfg: DictConfig, base_config: dict, output_dir: Path, sweep: str, pa
     ray = init_ray()
     try:
         from ray import tune
-        from ray.tune.schedulers import ASHAScheduler
         from ray.tune.search.optuna import OptunaSearch
 
         trainable = tune.with_resources(
@@ -116,6 +125,12 @@ def _search(cfg: DictConfig, base_config: dict, output_dir: Path, sweep: str, pa
         # its final checkpoint and scoring: one past the last one, it never
         # does (and the rungs are the same).
         max_t = math.ceil(training.max_epochs / training.eval_every) + 1
+        asha = recording_asha(
+            time_attr="training_iteration",
+            max_t=max_t,
+            grace_period=min(search.grace_period, max_t - 1),
+            reduction_factor=search.reduction_factor,
+        )
         tuner = tune.Tuner(
             trainable,
             param_space=search_space(OmegaConf.to_container(search.space)),
@@ -123,18 +138,16 @@ def _search(cfg: DictConfig, base_config: dict, output_dir: Path, sweep: str, pa
                 metric=METRIC,
                 mode=MODE,
                 search_alg=OptunaSearch(seed=search.seed),
-                scheduler=ASHAScheduler(
-                    time_attr="training_iteration",
-                    max_t=max_t,
-                    grace_period=min(search.grace_period, max_t - 1),
-                    reduction_factor=search.reduction_factor,
-                ),
+                scheduler=asha,
                 num_samples=search.num_samples,
                 max_concurrent_trials=search.max_concurrent_trials,
+                # Tune's own wall-clock cap: when it runs out, the running
+                # trials are stopped and no new ones are started.
+                time_budget_s=search.time_budget_s,
             ),
             run_config=tune.RunConfig(storage_path=str(output_dir / "ray"), name="search"),
         )
-        return tuner.fit()
+        return tuner.fit(), asha
     finally:
         ray.shutdown()
 

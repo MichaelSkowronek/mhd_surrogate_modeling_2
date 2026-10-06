@@ -9,7 +9,8 @@ from mhd_surrogate.training import run as run_module
 from mhd_surrogate.training.tuning import (
     TRIAL_LOG,
     apply_overrides,
-    close_pruned_runs,
+    close_stopped_runs,
+    recording_asha,
     run_trial,
     search_space,
     setup_trial_logging,
@@ -143,27 +144,54 @@ def result(metrics, error=None, config=None, scores=None):
     return SimpleNamespace(metrics=metrics, error=error, config=config, metrics_dataframe=history)
 
 
-def test_close_pruned_runs_kills_only_unfinished_runs_of_trials_without_error(uri, tmp_path):
+def test_recording_asha_records_the_trials_it_stops():
+    from ray.tune.schedulers import TrialScheduler
+
+    asha = recording_asha(
+        metric="score", mode="max", time_attr="it", max_t=10, grace_period=1, reduction_factor=2
+    )
+    good, bad = SimpleNamespace(trial_id="good"), SimpleNamespace(trial_id="bad")
+    for trial in (good, bad):
+        asha.on_trial_add(None, trial)
+
+    first = asha.on_trial_result(None, good, {"it": 1, "score": 1.0})
+    second = asha.on_trial_result(None, bad, {"it": 1, "score": 0.0})
+
+    assert (first, second) == (TrialScheduler.CONTINUE, TrialScheduler.STOP)
+    assert asha.stopped == {"bad"}
+
+
+def test_close_stopped_runs_kills_only_unfinished_runs_of_trials_without_error(uri, tmp_path):
     finished = open_run()
-    killed_mid_training = open_run("RUNNING")  # a trial Ray ended mid-training
+    pruned = open_run("RUNNING")  # ASHA ended it mid-training
+    out_of_time = open_run("RUNNING")  # running when the time budget ran out
     errored = open_run("FAILED")
     (tmp_path / "t2").mkdir()
     (tmp_path / "t2" / TRIAL_LOG).write_text("epoch 2\n")
+
+    def trial(trial_id, run_id, **kwargs):
+        dir_ = str(tmp_path / trial_id)
+        return result({"trial_id": trial_id, "mlflow_run_id": run_id, "trial_dir": dir_}, **kwargs)
+
     results = [
-        result({"mlflow_run_id": finished, "trial_dir": str(tmp_path / "t1")}),
-        result({"mlflow_run_id": killed_mid_training, "trial_dir": str(tmp_path / "t2")}),
-        result({"mlflow_run_id": errored, "trial_dir": str(tmp_path / "t3")}, error="boom"),
+        trial("t1", finished),
+        trial("t2", pruned),
+        trial("t3", out_of_time),
+        trial("t4", errored, error="boom"),
         result({}),  # failed before its first validation
     ]
 
-    pruned = close_pruned_runs(results, uri)
+    closed = close_stopped_runs(results, uri, pruned_trials={"t2"})
 
     client = MlflowClient(uri)
-    assert pruned == [killed_mid_training]
-    run = client.get_run(killed_mid_training)
+    assert closed == {"pruned": [pruned], "time_budget": [out_of_time]}
+    run = client.get_run(pruned)
     assert run.info.status == "KILLED"
-    assert run.data.tags["pruned"] == "true"
-    assert TRIAL_LOG in [a.path for a in client.list_artifacts(killed_mid_training)]
+    assert run.data.tags["pruned"] == "true" and "time_budget" not in run.data.tags
+    assert TRIAL_LOG in [a.path for a in client.list_artifacts(pruned)]
+    run = client.get_run(out_of_time)
+    assert run.info.status == "KILLED"
+    assert run.data.tags["time_budget"] == "true" and "pruned" not in run.data.tags
     assert client.get_run(finished).info.status == "FINISHED"
     assert client.get_run(errored).info.status == "FAILED"
 
