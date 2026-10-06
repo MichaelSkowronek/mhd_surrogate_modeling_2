@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 import numpy as np
@@ -24,10 +25,36 @@ def train_eval_datasets(requested: list[str], train_datasets: list[str]) -> list
 @dataclass(frozen=True)
 class Evaluation:
     """`scores` are scalars (ready for `mlflow.log_metrics`); `rmse` is the
-    per-step error curve, index 0 = lead time 1."""
+    per-step error curve, index 0 = lead time 1. `predict_seconds` is the
+    wall time of the model's forecast alone (no data reading or scoring);
+    it's kept out of `scores`, which must be reproducible."""
 
     scores: dict[str, float]
     rmse: np.ndarray
+    predict_seconds: float
+
+    @property
+    def seconds_per_frame(self) -> float:
+        """Forecast cost per predicted frame, comparable across datasets of
+        different lengths (and with the solver's cost per time step)."""
+        return self.predict_seconds / len(self.rmse)
+
+
+class _TimedModel:
+    """Wraps a model to time its `predict` call. The result is converted to
+    NumPy inside the timed block so JAX's asynchronous dispatch is waited
+    for, not just launched."""
+
+    def __init__(self, model: ForecastModel) -> None:
+        self.model = model
+        self.window = model.window
+        self.seconds = 0.0
+
+    def predict(self, context: np.ndarray, n_steps: int) -> np.ndarray:
+        start = time.perf_counter()
+        prediction = np.asarray(self.model.predict(context, n_steps))
+        self.seconds = time.perf_counter() - start
+        return prediction
 
 
 def evaluate(
@@ -49,7 +76,8 @@ def evaluate(
     also reported as scalars, `rmse_lead_<n>`; leads past the forecast are
     skipped.
     """
-    prediction, targets = forecast(model, series, context_steps)
+    timed = _TimedModel(model)
+    prediction, targets = forecast(timed, series, context_steps)
     rmse = rmse_per_step(prediction, targets, scale)
     scores = {
         "rmse_mean": float(rmse.mean()),
@@ -59,4 +87,4 @@ def evaluate(
         if 1 <= lead <= len(rmse):
             scores[f"rmse_lead_{lead}"] = float(rmse[lead - 1])
     scores.update(compare_diagnostics(prediction, targets, dx, dy, chunk_t, nperseg))
-    return Evaluation(scores=scores, rmse=rmse)
+    return Evaluation(scores=scores, rmse=rmse, predict_seconds=timed.seconds)

@@ -1633,7 +1633,15 @@ The two baselines bracket what a real model has to do:
 `val.*` metric (and `train.<dataset>.*`, below), and the RMSE curve as the
 `val.rmse` history with step = lead time (one batched request rather than
 837). Scores that are undefined for a model (the oscillation period of a
-forecast with no oscillation) are left out and named in the log.
+forecast with no oscillation) are left out and named in the log. Each scored
+dataset also gets two timings: `<prefix>.eval_seconds`, the whole evaluation
+(reading the targets, forecasting, scoring), and
+`<prefix>.forecast_seconds_per_frame`, the model's `predict` call alone
+divided by the number of forecast frames -- the surrogate's cost per step,
+comparable across datasets of different lengths and against the solver's.
+The timings are MLflow metrics only, not part of the scores written to the
+DVC stage's `metrics.json`: wall-clock times differ from run to run, and that
+file must reproduce exactly.
 
 Validation results (`re16k_t400_6`, 837 scored steps; RMSE in units of the
 training std):
