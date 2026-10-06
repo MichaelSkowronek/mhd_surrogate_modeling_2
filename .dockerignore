@@ -11,6 +11,7 @@ reports/figures
 reports/videos
 reports/summaries
 outputs/*
+.jax_cache
 models
 mlruns.db
 mlruns

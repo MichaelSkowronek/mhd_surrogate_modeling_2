@@ -125,6 +125,10 @@ conventions below; it shifts which tools are worth reaching for at all.
   importing it in the registry: the registry imports a model only when it's
   built or loaded, so the DVC `train` stage depends only on the canonical
   model's code and editing another model doesn't mark it stale.
+- JAX entry points call `utils/jax_cache.py`'s `enable_compilation_cache`
+  before anything is jitted (JAX ignores cache config changes after its
+  first compile). The cache is a performance knob, not a DVC param: a warm
+  and a cold cache reproduce byte-identical outputs.
 
 ## Parallelism
 

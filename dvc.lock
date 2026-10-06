@@ -73,8 +73,8 @@ stages:
       nfiles: 293
     - path: scripts/training/train.py
       hash: md5
-      md5: 3e887e25cf6d2087f85746fbd13539af
-      size: 9733
+      md5: d284efb25f94bcddda265dbfe0418d41
+      size: 10028
     - path: src/mhd_surrogate/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -141,6 +141,10 @@ stages:
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
       size: 0
+    - path: src/mhd_surrogate/utils/jax_cache.py
+      hash: md5
+      md5: 24c3f1cb19b02ea556ba1b10a8484313
+      size: 1991
     - path: src/mhd_surrogate/utils/parallel.py
       hash: md5
       md5: 1768d796dfd0a2d5615933712f40eed3

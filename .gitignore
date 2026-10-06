@@ -230,6 +230,10 @@ reports/videos/*
 reports/summaries/*
 !reports/summaries/.gitkeep
 
+# Persistent JAX compilation cache (src/mhd_surrogate/utils/jax_cache.py)
+.jax_cache/*
+!.jax_cache/.gitkeep
+
 # Hydra run outputs (scripts/training/train.py and later)
 outputs/*
 !outputs/.gitkeep

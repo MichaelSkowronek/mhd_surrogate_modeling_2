@@ -5,8 +5,9 @@
 #                      \--S3 API--> seaweedfs      (artifacts)
 #
 # All state lives in bind mounts inside the project (data/, reports/,
-# outputs/, mlflow/postgres/, mlflow/seaweedfs/), not in Docker-managed
-# volumes, so `docker compose down -v` or a volume prune can't delete it.
+# outputs/, .jax_cache/, mlflow/postgres/, mlflow/seaweedfs/), not in
+# Docker-managed volumes, so `docker compose down -v` or a volume prune can't
+# delete it.
 #
 #   docker compose up -d                           # start the stack, UI on :5000
 #   docker compose run --rm app                    # default: training entrypoint
@@ -30,6 +31,9 @@ x-app: &app
     - ./reports:/app/reports
     - ./outputs:/app/outputs
     - ./models:/app/models
+    # Persistent JAX compilation cache, shared with runs on the host (entries
+    # are keyed by device and jax version, so CPU/GPU images don't collide).
+    - ./.jax_cache:/app/.jax_cache
     # Read at run time to record which data version a run used (data/raw.dvc
     # arrives through the data/ mount).
     - ./dvc.lock:/app/dvc.lock:ro

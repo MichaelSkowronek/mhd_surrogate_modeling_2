@@ -75,7 +75,7 @@ src/mhd_surrogate/   importable package, split by pipeline stage
   training/          mlflow_utils, tracking
   evaluation/        protocol, metrics, diagnostics, evaluate
   models/            base (interface), baselines, dmd, hankel_dmd, registry
-  utils/             logging_config, parallel
+  utils/             logging_config, parallel, jax_cache
 scripts/             CLI entry points, same split (plus viz/)
   data/              explore_data, convert_to_zarr, compute_stats
   analysis/          check_*.py, run_all_checks, benchmark_backends
@@ -1381,13 +1381,34 @@ tools and don't need config composition. New training/model code uses
 [Hydra](https://hydra.cc) instead, since that will need config groups (model,
 optimizer, trainer, ...) that compose, with CLI overrides and later multirun
 sweeps. `configs/config.yaml` is the root config (`data`, `dataset`,
-`normalization`, `model`, `evaluation`, `mlflow` and `seed`); `configs/data/re16k.yaml` holds the zarr store path and the
+`normalization`, `model`, `evaluation`, `mlflow`, `seed` and `jax`); `configs/data/re16k.yaml` holds the zarr store path and the
 dataset-level split (`train_datasets`, `val_dataset`, `test_dataset` -- see
 "Train / val / test split" above), selected via the `data` default.
 
 Model code is in [JAX](https://jax.readthedocs.io), on the GPU when the
 `gpu` extra is installed (see Setup); each run logs which backend it used as
 the `jax_backend` param.
+
+JAX compiles each jitted function on its first call in every process, and
+on the GPU that includes autotuning the matmuls -- for (Hankel) DMD's Gram
+matrix alone ~45 s, paid again by every run. `configs/config.yaml`'s `jax`
+key turns on JAX's persistent compilation cache
+(`src/mhd_surrogate/utils/jax_cache.py`, also used by the forecast-video
+script): compiled executables and XLA's autotuning results go to
+`.jax_cache/` (gitignored, capped at 2 GB, least recently used evicted
+first) and later runs load them instead of recompiling. With a warm cache
+the canonical Hankel DMD fit takes 93 s instead of 141 s, the whole
+`train.py` run 182 s instead of 224 s. Entries are keyed by the program,
+its shapes, the device, the compile flags and the jax version, so an
+upgrade or a different GPU misses rather than reuses a stale entry.
+
+The cache is a performance knob, not a DVC dependency: a hit reuses exactly
+the executable a cold compile built, and the canonical `train` stage
+reproduces byte-identical outputs (checkpoint and `metrics.json`) with a
+cold and a warm cache. So `jax.*` isn't in the stage's `params`, and
+deleting `.jax_cache/` is always safe. JAX reads the cache config on its
+first compile and ignores later changes, so entry points enable it before
+anything is jitted; `jax.compilation_cache_dir=null` turns it off.
 
 `configs/dataset/` holds sample-windowing config (`window`/`horizon`/
 `stride`), selected via the `dataset` default.
@@ -1965,7 +1986,8 @@ machine, and later stages (training jobs, serving) have a unit to deploy.
   `test` adds the dev group and `tests/` and runs pytest.
 - **Data is never in the image.** The zarr store is ~9 GB and changes
   independently of the code, so `data/`, `reports/`, and `outputs/` are bind
-  mounts. `.dockerignore` keeps them out of the build context too.
+  mounts, as is the JAX compilation cache (`.jax_cache/`), so the container
+  doesn't recompile on every run. `.dockerignore` keeps them out of the build context too.
 - **`docker-compose.yml`** — the app container plus a full MLflow tracking
   stack (below).
 

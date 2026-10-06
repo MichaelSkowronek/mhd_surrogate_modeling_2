@@ -58,6 +58,7 @@ from mhd_surrogate.training.export import write_metrics  # noqa: E402
 from mhd_surrogate.training.mlflow_model import log_surrogate  # noqa: E402
 from mhd_surrogate.training.mlflow_utils import finite_metrics, log_metric_series  # noqa: E402
 from mhd_surrogate.training.tracking import tracked_run  # noqa: E402
+from mhd_surrogate.utils.jax_cache import enable_compilation_cache  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +72,9 @@ def main(cfg: DictConfig) -> None:
     output_dir = Path(hydra_cfg.runtime.output_dir)
     log_file = output_dir / f"{hydra_cfg.job.name}.log"
     log.info("resolved config:\n%s", OmegaConf.to_yaml(cfg))
+    # Before anything is jitted: JAX reads the cache config on first compile.
+    if cfg.jax.compilation_cache_dir:
+        enable_compilation_cache(cfg.jax.compilation_cache_dir, cfg.jax.compilation_cache_max_gb)
 
     # Silences mlflow's "load this tracing skill" hint on every call, which
     # is unrelated to this project's plain params/metrics logging.
