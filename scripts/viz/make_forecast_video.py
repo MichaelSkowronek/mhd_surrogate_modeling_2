@@ -51,6 +51,10 @@ from mhd_surrogate.data.normalization import NormalizationStats  # noqa: E402
 from mhd_surrogate.evaluation.metrics import rmse_per_step  # noqa: E402
 from mhd_surrogate.evaluation.protocol import forecast  # noqa: E402
 from mhd_surrogate.models.registry import load_model  # noqa: E402
+from mhd_surrogate.utils.jax_cache import (  # noqa: E402
+    DEFAULT_CACHE_DIR,
+    enable_compilation_cache,
+)
 from mhd_surrogate.utils.logging_config import add_log_level_arg, setup_logging  # noqa: E402
 
 log = logging.getLogger(__name__)
@@ -82,6 +86,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--color-sample", type=int, default=30, help="Frames sampled for limits")
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument("--log-to-mlflow", action="store_true")
+    parser.add_argument(
+        "--jax-cache-dir",
+        type=Path,
+        default=DEFAULT_CACHE_DIR,
+        help="Persistent JAX compilation cache (default: %(default)s)",
+    )
     add_log_level_arg(parser)
     return parser.parse_args()
 
@@ -127,6 +137,7 @@ def load_forecast_model(args: argparse.Namespace):
 def main() -> None:
     args = parse_args()
     setup_logging(args.log_level)
+    enable_compilation_cache(args.jax_cache_dir)
     if args.log_to_mlflow and args.model_id is None:
         raise SystemExit("--log-to-mlflow needs --model-id (the video goes to its run)")
 

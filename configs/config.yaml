@@ -18,6 +18,14 @@ defaults:
 
 seed: 42
 
+# Persistent XLA compilation cache (src/mhd_surrogate/utils/jax_cache.py):
+# compiled programs are reused across runs instead of recompiled (and
+# re-autotuned) in every process. Doesn't change results; set
+# compilation_cache_dir=null to disable.
+jax:
+  compilation_cache_dir: .jax_cache
+  compilation_cache_max_gb: 2
+
 # Fixed output location, set by the DVC `train` stage (dvc.yaml): the
 # checkpoint goes to <dir>/model and the scores to <dir>/metrics.json.
 # Unset (the default), both stay in the run's Hydra output directory.

@@ -67,6 +67,7 @@ stages:
       - src/mhd_surrogate/analysis/spectral.py
       - src/mhd_surrogate/utils/__init__.py
       - src/mhd_surrogate/utils/parallel.py
+      - src/mhd_surrogate/utils/jax_cache.py
     # The keys that change the fitted model or its scores; performance knobs
     # (chunk sizes) are left out so tuning them doesn't retrain.
     params:

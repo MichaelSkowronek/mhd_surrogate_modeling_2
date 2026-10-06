@@ -96,8 +96,12 @@ conventions below; it shifts which tools are worth reaching for at all.
   (`MlflowClient.delete_logged_model`, then its artifact directory) and the
   `model/` directory, and tag the run `checkpoint_pruned`; keep the run
   record itself (params, metrics, log, small artifacts) -- the README's sweep
-  tables and later comparisons rely on it. Never use `mlflow gc` for this:
-  it deletes whole runs.
+  tables and later comparisons rely on it.
+- Never use `mlflow gc`, not even with `--run-ids`: besides the given runs,
+  it permanently purges every deleted logged model in the store (including
+  the pruned ones' records). To delete a run outright, delete its logged
+  model as above, then `MlflowClient.delete_run` (a soft delete) and remove
+  its artifact directory.
 - Wall-clock timings (`fit_seconds`, `eval_seconds`,
   `forecast_seconds_per_frame`, ...) are MLflow metrics only, never in a DVC
   stage's metrics/outputs (e.g. `Evaluation.scores`, which becomes
@@ -125,6 +129,10 @@ conventions below; it shifts which tools are worth reaching for at all.
   importing it in the registry: the registry imports a model only when it's
   built or loaded, so the DVC `train` stage depends only on the canonical
   model's code and editing another model doesn't mark it stale.
+- JAX entry points call `utils/jax_cache.py`'s `enable_compilation_cache`
+  before anything is jitted (JAX ignores cache config changes after its
+  first compile). The cache is a performance knob, not a DVC param: a warm
+  and a cold cache reproduce byte-identical outputs.
 
 ## Parallelism
 

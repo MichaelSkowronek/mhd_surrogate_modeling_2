@@ -87,8 +87,8 @@ COPY --chown=app:app configs ./configs
 
 # Mount points the app writes to, pre-created so a fresh named volume
 # inherits the right ownership.
-RUN mkdir -p data reports/figures reports/videos reports/summaries outputs models \
-    && chown -R app:app data reports outputs models
+RUN mkdir -p data reports/figures reports/videos reports/summaries outputs models .jax_cache \
+    && chown -R app:app data reports outputs models .jax_cache
 
 USER ${UID}:${GID}
 CMD ["python", "scripts/training/train.py"]
