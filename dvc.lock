@@ -112,11 +112,26 @@ stages:
       md5: 765cf986c74625a07404c69e95730fc8.dir
       size: 14840
       nfiles: 5
-    - path: src/mhd_surrogate/models
+    - path: src/mhd_surrogate/models/__init__.py
       hash: md5
-      md5: 4888dbc52f08543cca1ae582cc351b24.dir
-      size: 29938
-      nfiles: 6
+      md5: d41d8cd98f00b204e9800998ecf8427e
+      size: 0
+    - path: src/mhd_surrogate/models/base.py
+      hash: md5
+      md5: 08f48ed2a576a23b34e4a564c001db3d
+      size: 1506
+    - path: src/mhd_surrogate/models/dmd.py
+      hash: md5
+      md5: 74c770078a008df7d31a5f40bf30e112
+      size: 12819
+    - path: src/mhd_surrogate/models/hankel_dmd.py
+      hash: md5
+      md5: a354860cf4c5e8a0f89500cd35c2f824
+      size: 10166
+    - path: src/mhd_surrogate/models/registry.py
+      hash: md5
+      md5: f6d7513df01917b59416b553728b611c
+      size: 1686
     - path: src/mhd_surrogate/training
       hash: md5
       md5: 79483adbdd74c64d9faeca33bd8a7e99.dir

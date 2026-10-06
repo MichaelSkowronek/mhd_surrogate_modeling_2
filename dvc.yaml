@@ -43,15 +43,19 @@ stages:
     # Code deps are exactly what train.py imports, transitively (checked by
     # tests/training/test_dvc_train_stage.py), not the whole package: editing
     # an unrelated module (e.g. analysis/pod.py) shouldn't force a ~2-minute
-    # retrain and a new ~880 MB cache entry. models/ is listed whole because
-    # the registry imports every model.
+    # retrain and a new ~880 MB cache entry. The registry imports models
+    # lazily, so only the trained model's modules are deps, not every model's.
     deps:
       - data/processed/re16k_t400.zarr
       - data/processed/normalization_stats.json
       - configs/analysis/grid.yaml
       - scripts/training/train.py
       - src/mhd_surrogate/__init__.py
-      - src/mhd_surrogate/models
+      - src/mhd_surrogate/models/__init__.py
+      - src/mhd_surrogate/models/base.py
+      - src/mhd_surrogate/models/registry.py
+      - src/mhd_surrogate/models/dmd.py
+      - src/mhd_surrogate/models/hankel_dmd.py
       - src/mhd_surrogate/evaluation
       - src/mhd_surrogate/training
       - src/mhd_surrogate/data/__init__.py

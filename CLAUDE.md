@@ -121,6 +121,10 @@ conventions below; it shifts which tools are worth reaching for at all.
   register in `models/registry.py` with a `configs/model/` file, and take and
   return raw fields (normalizing internally), so every model is scored in the
   same units.
+- Register a model by import path (`"module:Class"` in `MODELS`), not by
+  importing it in the registry: the registry imports a model only when it's
+  built or loaded, so the DVC `train` stage depends only on the canonical
+  model's code and editing another model doesn't mark it stale.
 
 ## Parallelism
 
