@@ -90,6 +90,14 @@ conventions below; it shifts which tools are worth reaching for at all.
   and the stats file as artifacts), as `train.py` does. They don't verify it
   against disk: staying in sync is the workflow's job (`dvc repro`), and an
   in-script check was deliberately dropped (see the README).
+- Once a sweep's winner is selected, prune the losing runs' checkpoints
+  (each run stores ~1-2 GB twice: its MLflow logged model and the Hydra
+  output's `model/` directory). Delete the logged model
+  (`MlflowClient.delete_logged_model`, then its artifact directory) and the
+  `model/` directory, and tag the run `checkpoint_pruned`; keep the run
+  record itself (params, metrics, log, small artifacts) -- the README's sweep
+  tables and later comparisons rely on it. Never use `mlflow gc` for this:
+  it deletes whole runs.
 - See the README's "Data versioning (DVC)" section for the full rationale.
 
 ## Models

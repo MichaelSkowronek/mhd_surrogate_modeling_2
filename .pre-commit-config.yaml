@@ -2,7 +2,11 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
+      # dvc.lock is written by DVC, which wraps long `cmd` lines with a
+      # trailing space; stripping it changes nothing (YAML folds the break
+      # into one space) but fails the commit after every retrain.
       - id: trailing-whitespace
+        exclude: ^dvc\.lock$
       - id: end-of-file-fixer
       - id: check-yaml
       - id: check-toml
