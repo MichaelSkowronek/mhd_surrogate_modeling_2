@@ -180,10 +180,21 @@ def _score_and_log(
         skill_threshold=cfg.evaluation.skill_threshold,
         report_leads=list(cfg.evaluation.report_leads),
     )
-    log.info("evaluated on %s in %.1f s", name, time.perf_counter() - start)
+    eval_seconds = time.perf_counter() - start
+    log.info("evaluated on %s in %.1f s", name, eval_seconds)
 
     finite, undefined = finite_metrics(result.scores)
     mlflow.log_metrics({f"{prefix}.{k}": v for k, v in finite.items()}, model_id=model_id)
+    # Timings are logged to MLflow only, not returned with the scores: the
+    # scores go to the DVC-tracked metrics.json, which must not change from
+    # one `dvc repro` to the next.
+    mlflow.log_metrics(
+        {
+            f"{prefix}.eval_seconds": eval_seconds,
+            f"{prefix}.forecast_seconds_per_frame": result.seconds_per_frame,
+        },
+        model_id=model_id,
+    )
     if undefined:
         log.info("%s: undefined for this model, not logged: %s", prefix, ", ".join(undefined))
     log_metric_series(f"{prefix}.rmse", result.rmse, start_step=1, model_id=model_id)

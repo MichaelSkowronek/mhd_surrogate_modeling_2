@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 import pytest
 
@@ -17,6 +19,30 @@ class Oracle:
 
     def predict(self, context, n_steps):
         return self.future[:n_steps]
+
+
+class Slow(Persistence):
+    """Persistence that takes `seconds` to predict."""
+
+    def __init__(self, seconds):
+        self.seconds = seconds
+
+    def predict(self, context, n_steps):
+        time.sleep(self.seconds)
+        return super().predict(context, n_steps)
+
+
+class SlowToRead:
+    """A series (like a zarr array) whose every read takes `seconds`."""
+
+    def __init__(self, array, seconds):
+        self.array = array
+        self.shape = array.shape
+        self.seconds = seconds
+
+    def __getitem__(self, index):
+        time.sleep(self.seconds)
+        return self.array[index]
 
 
 def make_series(n=30):
@@ -70,6 +96,29 @@ def test_scale_divides_the_error_per_channel():
     scaled = run(Persistence(), series, scale=np.array([2.0, 2.0]))
 
     assert scaled.rmse == pytest.approx(unscaled.rmse / 2.0)
+
+
+def test_predict_seconds_times_the_forecast_and_divides_per_frame():
+    series = make_series()
+
+    result = run(Slow(0.05), series)
+
+    assert result.predict_seconds >= 0.05
+    assert result.seconds_per_frame == pytest.approx(result.predict_seconds / 20)
+
+
+def test_predict_seconds_leaves_out_reading_the_series():
+    series = SlowToRead(make_series(), seconds=0.2)
+
+    result = run(Persistence(), series)
+
+    assert result.predict_seconds < 0.2
+
+
+def test_timings_are_not_in_the_reproducible_scores():
+    result = run(Persistence(), make_series())
+
+    assert not any("seconds" in key for key in result.scores)
 
 
 def test_train_eval_datasets_accepts_a_subset_of_the_train_datasets():

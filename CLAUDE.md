@@ -98,6 +98,21 @@ conventions below; it shifts which tools are worth reaching for at all.
   record itself (params, metrics, log, small artifacts) -- the README's sweep
   tables and later comparisons rely on it. Never use `mlflow gc` for this:
   it deletes whole runs.
+- Wall-clock timings (`fit_seconds`, `eval_seconds`,
+  `forecast_seconds_per_frame`, ...) are MLflow metrics only, never in a DVC
+  stage's metrics/outputs (e.g. `Evaluation.scores`, which becomes
+  `metrics.json`): they differ run to run, and DVC outputs must reproduce
+  byte-identically.
+- To re-run a stage from a git worktree (e.g. `.claude/worktrees/<name>`),
+  don't regenerate the data there: point it at the main checkout's cache
+  (`uv run dvc cache dir --local <main>/.dvc/cache`, which writes the
+  untracked `.dvc/config.local`), symlink the zarr store into
+  `data/processed/`, `dvc checkout` the stats, and run
+  `dvc repro --single-item <stage>` once the main checkout's `dvc status` is
+  clean. Sync the worktree's fresh `.venv` with `uv sync --extra gpu` first:
+  without it JAX silently falls back to CPU, whose float32 results differ
+  from the GPU-produced canonical outputs (a spurious `metrics.json` diff and
+  a new ~GB checkpoint in the cache).
 - See the README's "Data versioning (DVC)" section for the full rationale.
 
 ## Models

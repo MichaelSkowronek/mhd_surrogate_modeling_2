@@ -55,7 +55,7 @@ stages:
       md5: 603bc434b437b41486a9ecc5639b0df7
       size: 377
   train:
-    cmd: uv run scripts/training/train.py model=hankel_dmd
+    cmd: uv run scripts/training/train.py model=hankel_dmd 
       export.dir=models/hankel_dmd
     deps:
     - path: configs/analysis/grid.yaml
@@ -73,8 +73,8 @@ stages:
       nfiles: 293
     - path: scripts/training/train.py
       hash: md5
-      md5: 9fda9fb28850e069b905eaf085d24c0d
-      size: 9307
+      md5: 3e887e25cf6d2087f85746fbd13539af
+      size: 9733
     - path: src/mhd_surrogate/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -109,8 +109,8 @@ stages:
       size: 1480
     - path: src/mhd_surrogate/evaluation
       hash: md5
-      md5: f41a0852c9d3bbb8a843e5890a2362b1.dir
-      size: 13720
+      md5: 765cf986c74625a07404c69e95730fc8.dir
+      size: 14840
       nfiles: 5
     - path: src/mhd_surrogate/models
       hash: md5
