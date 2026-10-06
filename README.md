@@ -451,6 +451,21 @@ from the remote too. When only the dep *list* changes, not the code, `uv run
 dvc commit -f train` records the new deps against the existing model instead of
 retraining.
 
+**When to retrain, and what it doesn't touch.** Retraining on a new commit
+never changes an earlier result. Every commit's `dvc.lock` pins the exact
+data, code, config and checkpoint, and its `metrics.json` holds the scores, so
+a tagged result stays reproducible: `git checkout <tag> && dvc pull` restores
+that exact model and its scores, and `dvc repro -f` on that commit retrains it
+from that commit's code to check them (equal up to GPU float noise, hence the
+rounding). Retraining on `main` serves a different purpose: keeping the
+committed model consistent with the committed code. Retrain deliberately, not
+on every commit -- in the PR whose change is *meant* to alter the model (a
+fix, new data, a newly selected parameter), so its `metrics.json` diff shows
+by how much next to the code that caused it; or as a regression check after a
+risky change that *shouldn't* alter it, where an unchanged `metrics.json`
+confirms it didn't. A stage left stale by an unrelated change can wait for
+the next deliberate retrain.
+
 **Division of labor with MLflow.** MLflow is the experiment record: every
 run, sweep and model, with its metric histories and (later) the registry --
 exploration happens there, through Hydra multiruns. DVC answers a different
