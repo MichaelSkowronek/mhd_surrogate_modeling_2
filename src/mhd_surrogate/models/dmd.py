@@ -74,6 +74,34 @@ def stabilize_eigenvalues(eigenvalues: np.ndarray) -> np.ndarray:
     return np.where(magnitude > 1.0, eigenvalues / magnitude, eigenvalues)
 
 
+def truncated_pod(
+    gram: np.ndarray, rank: int, label: str = "dmd"
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """POD of the snapshots whose Gram matrix is `gram` (method of
+    snapshots): (all squared singular values, largest first; the `rank`
+    leading singular values S; their right singular vectors V). The rank is
+    capped at the singular values above the numerical tolerance."""
+    s2, v = np.linalg.eigh(gram)
+    order = np.argsort(s2)[::-1]
+    s2, v = s2[order], v[:, order]
+    usable = int(np.sum(s2 > RELATIVE_TOLERANCE**2 * s2[0]))
+    r = min(rank, usable)
+    if r < rank:
+        log.warning("%s: rank %d requested, only %d usable singular values", label, rank, r)
+    return s2, np.sqrt(s2[:r]), v[:, :r]
+
+
+def eigendynamics(reduced: np.ndarray, stabilize: bool) -> tuple[np.ndarray, np.ndarray, int]:
+    """Eigenvalues and eigenvectors of the reduced operator A~ (with
+    `stabilize`, growing eigenvalues moved onto the unit circle), and how
+    many eigenvalues were outside it before that."""
+    eigenvalues, eigenvectors = np.linalg.eig(reduced)
+    n_unstable = int(np.sum(np.abs(eigenvalues) > 1.0))
+    if stabilize:
+        eigenvalues = stabilize_eigenvalues(eigenvalues)
+    return eigenvalues, eigenvectors, n_unstable
+
+
 def pair_indices(lengths: list[int]) -> tuple[np.ndarray, np.ndarray]:
     """Row indices (into the stacked frames of datasets with these lengths)
     of the "before" and "after" frame of every snapshot pair, never pairing
@@ -118,21 +146,12 @@ class DMD:
         before, after = pair_indices(lengths)
 
         gram = self._gram(frames)
-        s2, v = np.linalg.eigh(gram[np.ix_(before, before)])
-        order = np.argsort(s2)[::-1]
-        s2, v = s2[order], v[:, order]
-        usable = int(np.sum(s2 > RELATIVE_TOLERANCE**2 * s2[0]))
-        r = min(self.rank, usable)
-        if r < self.rank:
-            log.warning("dmd: rank %d requested, only %d usable singular values", self.rank, r)
-        s, v = np.sqrt(s2[:r]), v[:, :r]
+        s2, s, v = truncated_pod(gram[np.ix_(before, before)], self.rank, self.name)
+        r = len(s)
 
         # A~ = S^-1 V^T (X^T Y) V S^-1, with X^T Y a block of the Gram matrix.
         reduced = (v / s).T @ gram[np.ix_(before, after)] @ (v / s)
-        eigenvalues, eigenvectors = np.linalg.eig(reduced)
-        n_unstable = int(np.sum(np.abs(eigenvalues) > 1.0))
-        if self.stabilize:
-            eigenvalues = stabilize_eigenvalues(eigenvalues)
+        eigenvalues, eigenvectors, n_unstable = eigendynamics(reduced, self.stabilize)
 
         self.basis = self._basis(frames, before, v / s)
         self.eigenvalues = eigenvalues

@@ -113,9 +113,9 @@ stages:
       nfiles: 5
     - path: src/mhd_surrogate/models
       hash: md5
-      md5: a1a8c77240bd68226878bee4dd390f13.dir
-      size: 18852
-      nfiles: 5
+      md5: 4888dbc52f08543cca1ae582cc351b24.dir
+      size: 29938
+      nfiles: 6
     - path: src/mhd_surrogate/training
       hash: md5
       md5: 79483adbdd74c64d9faeca33bd8a7e99.dir

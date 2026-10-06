@@ -1,0 +1,12 @@
+# Time-delay (Hankel) DMD: DMD on the last `delays` frames' POD coefficients
+# (src/mhd_surrogate/models/hankel_dmd.py). The fit holds all training frames
+# in RAM like DMD (~8.3 GB, ~14 GB peak); the checkpoint is the rank-750
+# spatial basis (~880 MB) plus the delay basis (delays x spatial_rank x rank
+# float32: ~19 MB at the defaults, ~360 MB at delays 80, rank 1500).
+name: hankel_dmd
+rank: 750          # delay-embedded POD modes kept (the dynamics' dimension)
+delays: 8          # frames per state = the model's window (<= context_steps)
+spatial_rank: 750  # POD modes per frame, plain DMD's selected rank
+stabilize: true    # move eigenvalues outside the unit circle onto it
+chunk_t: 64        # frames per zarr read while loading
+column_block: 32768  # state entries per device block for the Gram matrix
