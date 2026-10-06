@@ -31,9 +31,11 @@ validation dataset through the training entry point (see "Baselines"). The
 first model with dynamics, DMD, beats both (see "DMD"), and time-delay
 (Hankel) DMD with 4 frames of context beats DMD (see "Hankel DMD") -- it is
 the canonical model. The first neural network, a U-Net, is built and
-smoke-tested, with early stopping on validation, resumable training and a
-Ray Tune hyperparameter search (Optuna + ASHA; see "U-Net"); training it to
-convergence and running the search come next.
+trained, with early stopping on validation, resumable training and a Ray
+Tune hyperparameter search (Optuna + ASHA; see "U-Net"). Its first search
+beats Hankel DMD on the short horizon (skill horizon 15 vs 7) but its long
+rollouts blow up, failing the physics guardrails, so Hankel DMD stays
+canonical; making the rollout stable is next.
 
 ## Setup
 
@@ -2086,14 +2088,61 @@ dataset and the forecast, ~1 GB each; the forecast is post-processed on the
 GPU and copied once, and its error is computed a chunk of lead times at a
 time), ~10 GB peak overall.
 
-**Status.** Wired up and smoke-tested on the real data (2-3 epochs of 160
-windows: val skill horizon 2-3), not yet trained to convergence or tuned.
-The defaults in `configs/model/unet.yaml` are a hand-picked starting point,
-for the hyperparameter search below to improve on. The U-Net isn't a DVC
-stage: only the canonical model is, and the U-Net becomes canonical only if
-it beats Hankel DMD on validation. `training/trainer.py` and
+**Status.** Trained (precision check below) and searched once (see "First
+search"): on the short horizon it beats Hankel DMD by a wide margin (skill
+horizon 15 vs 7), but its long rollouts are unstable and it fails the
+physics guardrails, so Hankel DMD stays canonical. The defaults in
+`configs/model/unet.yaml` are still the hand-picked starting point. The
+U-Net isn't a DVC stage: only the canonical model is, and the U-Net becomes
+canonical only if it beats Hankel DMD on validation. `training/trainer.py` and
 `training/tuning.py` aren't dependencies of the current `train` stage, so
 working on them doesn't mark Hankel DMD stale.
+
+### Precision check (bf16 vs float32)
+
+```bash
+uv run --extra gpu scripts/training/train.py model=unet model.training.max_epochs=15 seed=0
+uv run --extra gpu scripts/training/train.py model=unet model.training.max_epochs=15 seed=1
+uv run --extra gpu scripts/training/train.py model=unet model.training.max_epochs=15 seed=0 \
+    model.compute_dtype=float32 model.host_dtype=float32
+```
+
+Before spending a search on bf16, a check that it doesn't cost quality: the
+default config trained for 15 epochs in bf16 with two seeds (the
+seed-to-seed spread is the yardstick) and fully in float32 (network compute
+and the host frames) with the first seed. Validation:
+
+| run | skill horizon | RMSE lead 1 / 10 / 40 | best epoch | energy / enstrophy error | spectrum distance (x / y) | skill on train | train time |
+|---|---|---|---|---|---|---|---|
+| bf16, seed 0 | **15** | 0.079 / 0.394 / 1.07 | 10 | 22.3 / 50.7 | 0.69 / 1.17 | 11 | 833 s (46 s/epoch) |
+| bf16, seed 1 | 13 | 0.087 / 0.404 / 0.94 | 7 | 14.5 / 57.1 | 0.90 / 2.75 | 12 | 827 s (46 s/epoch) |
+| float32, seed 0 | 13 | 0.076 / 0.368 / 0.73 | 15 | 11.0 / 65.3 | 0.83 / 2.48 | 12 | 1456 s (83 s/epoch) |
+| *Hankel DMD (canonical)* | *7* | *0.281 / 0.571 / 0.58* | | *0.26 / 0.73* | *2.62 / 2.10* | *13* | |
+
+**Verdict: bf16 stays.** On what the search and early stopping select by,
+float32 is inside the bf16 spread: its selection score (12.73) ties seed 1's
+(12.71), below seed 0's (14.72); so are both spectrum distances and the
+train/validation gap. It falls outside the two seeds' range on RMSE at lead
+10 and the energy error (better) and the enstrophy error (worse), but a
+two-seed range is a weak yardstick -- a third bf16 seed would land outside
+the range of the first two with probability 2/3 on any one metric -- and the
+signs are mixed, which a systematic precision loss wouldn't give. The energy
+and enstrophy errors also measure a rollout that has already blown up (see
+below), where 11 vs 22 is a growth rate, not an accuracy. float32 costs 1.75x
+per epoch, which in a fixed search budget is ~4 fewer trials.
+
+**What the check showed about the model.** On the short horizon the U-Net
+is far ahead of everything so far: skill horizon 13-15 against Hankel DMD's
+7, RMSE at lead 1 0.08 against 0.28. But its **long rollouts are unstable**:
+the energy error is 11-22 (Hankel DMD: 0.26) and the mean RMSE 4-6. Rolled
+out past the validation dataset from its context (`seed 0` above), the
+domain energy is 1.3x the true level in the first 100 steps, 8x by step 300
+and still growing at step 1500, with no NaN: the classic drift of a network
+trained only on one-step errors, which never sees its own outputs. Two other
+things: the validation score is noisy from epoch to epoch (seed 0: 8.7,
+7.6, 7.6, 9.7, 8.7, 9.7, 9.7, 7.6, 11.7, 14.7, ...), so early stopping picks
+partly on noise; and the training dataset's skill (11-12) is no higher than
+validation's, so the model isn't overfitting at this budget.
 
 ### Hyperparameter search (Ray Tune: Optuna + ASHA)
 
@@ -2180,6 +2229,96 @@ scores and two were pruned (KILLED, tagged, log uploaded). The same seed
 proposed the same configurations on a rerun. Choosing the checkpoint to
 keep from a real search, and pruning the losers', follows CLAUDE.md's
 sweep rules.
+
+#### First search (2026-10-06)
+
+```bash
+uv run --extra gpu --extra ray scripts/training/tune.py search.num_samples=10 \
+    model.training.max_epochs=30 search.time_budget_s=8100 \
+    'search.space={model.base_channels:{type:choice,values:[16,32]}}'
+```
+
+Sized for a ~2.25 h budget: 10 samples, 30 epochs, the time cap as a
+backstop, and width 48 dropped from the space for this run (2.2x the cost
+of width 32 per epoch, and 4 epochs at width 48 with a 4-step rollout would
+have cost ~30 min before ASHA could judge it). bf16, per the precision
+check. The cap was reached: 8 of the 10 samples ran. Validation (sweep
+`tune-2026-10-06-17-08-15`), in order of Optuna's proposals:
+
+| # | learning rate | weight decay | width / depth | window | rollout steps | outcome | validations | best val score | skill horizon | RMSE lead 1 / 10 / 40 | energy / enstrophy error | spectrum distance (x / y) | skill on train |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 (defaults) | 1e-3 | 1e-4 | 32 / 4 | 4 | 1 | early-stopped (best epoch 10) | 18 | 12.72 | 13 | 0.080 / 0.392 / 0.89 | 25.6 / 62.5 | 0.93 / 2.59 | 13 |
+| 2 | 6.5e-4 | 1.4e-4 | 16 / 4 | 4 | 1 | early-stopped (best 17) | 25 | 11.71 | 12 | 0.083 / 0.405 / 1.03 | 583 / 1122 | 2.62 / 4.58 | 11 |
+| 3 | 2.3e-3 | 1.6e-6 | 16 / 3 | 2 | 1 | pruned at rung 12 | 12 | 8.66 | | | | | |
+| **4** | **1.6e-4** | **6.8e-4** | **16 / 4** | **8** | **4** | early-stopped (best 17) | 25 | **14.74** | **15** | 0.143 / **0.359** / 0.74 | 330 / 1782 | 2.07 / 3.49 | 14 |
+| 5 | 1.0e-3 | 1.2e-5 | 32 / 4 | 1 | 2 | pruned at rung 12 | 12 | 13.72 | | | | | |
+| 6 | 2.9e-3 | 2.0e-6 | 16 / 3 | 1 | 1 | pruned at rung 4 | 4 | 9.68 | | | | | |
+| 7 | 3.5e-4 | 2.9e-4 | 32 / 4 | 2 | 2 | GPU out of memory (epoch 3) | 2 | 9.67 | | | | | |
+| 8 | 2.7e-4 | 2.3e-6 | 32 / 4 | 1 | 2 | stopped by the time budget | 11 | 11.72 | | | | | |
+| *Hankel DMD (canonical)* | | | | *4* | | | | *6.64* | *7* | *0.281 / 0.571 / 0.58* | *0.26 / 0.73* | *2.62 / 2.10* | *13* |
+
+Pruned and budget-stopped trials have no final scores (only the selection
+score each validation reports). Trial 5's best (13.72, at epoch 10) was
+above the rung-12 cut, but ASHA judges the score *at* the rung (10.7), which
+the validation noise makes a coin toss.
+
+**Best trial: #4** (`9fc8ffad`, lr 1.6e-4, weight decay 6.8e-4, width 16,
+depth 4, window 8, 4-step rollout loss, 1.9M parameters, ~110 s/epoch).
+Against Hankel DMD under the selection rule:
+
+- **Ranking:** skill horizon 15 vs 7, RMSE at lead 10 0.359 vs 0.571. The
+  U-Net ranks first by a wide margin.
+- **Guardrails:** energy error 330 vs 0.26 and enstrophy error 1782 vs 0.73
+  (tolerance +0.03), spectrum distance along y 3.49 vs 2.10 (tolerance
+  +0.05) -- **failed**, by orders of magnitude. Spectrum distance along x
+  passes (2.07 vs 2.62). **It does not replace Hankel DMD**, and no trial
+  of this search would: every finished one fails the energy and enstrophy
+  guardrails.
+
+**Long rollouts are unstable**, for every U-Net trained so far. Rolled out
+from the validation context past the dataset's length (a scratch check:
+the model's own `predict` in 100-step blocks, domain-mean energy and
+enstrophy per block against the true validation range, energy 0.89-0.96):
+
+| steps | 0-100 | 100-200 | 200-300 | 500-600 | 900-1000 | 1400-1500 |
+|---|---|---|---|---|---|---|
+| best trial (#4, 4-step loss): energy | 0.89 | 6.8 | 41 | 383 | 1303 | 2953 |
+| precision run (defaults, 1-step loss): energy | 1.17 | 3.1 | 7.4 | 38 | 90 | 252 |
+| Hankel DMD: energy (500-step blocks) | 0.70 (0-500) | | | 0.65 (500-1000) | | 0.65 (1000-1500) |
+
+No NaN within 1500 steps, but the energy grows without bound in both U-Nets,
+while Hankel DMD's settles at a damped, smooth state (energy 0.65, enstrophy
+6 vs the true 27). Training on a 4-step rollout keeps the first ~100 steps
+on the attractor (energy 0.89) and makes the forecast more accurate at lead
+10-40, but it diverges *faster* after that, not slower: a 4-step horizon
+teaches it nothing about step 100.
+
+What the search shows:
+
+- **The selection score alone picks unstable models.** The search, early
+  stopping and the ranking all optimize the short horizon (skill horizon,
+  RMSE at lead 10), which a model can win while blowing up later; the
+  guardrails catch it only after training. The physics are checked once,
+  at the end, because they're too slow for every epoch.
+- **The validation score is noisy** (±2 between consecutive epochs of the
+  same run), so early stopping and ASHA's rung comparisons decide partly on
+  noise. Trial 5 was pruned at a rung where its score happened to dip.
+- **Small and slow-learning won:** the best trial is the narrower network
+  (width 16) with the lowest learning rate, so capacity isn't the
+  bottleneck at this budget.
+- **One trial hit a GPU out-of-memory** inside the validation forecast at
+  its third validation, after two that succeeded with the same shapes:
+  transient pressure on the shared 12 GB GPU (WSL shares it with the
+  desktop), not the configuration's size. Ray recorded it as an errored
+  trial (its run is FAILED) and went on.
+- The time cap worked as designed: the trial running at the deadline was
+  stopped and tagged `time_budget=true`, the three ASHA stopped
+  `pruned=true`.
+
+The losing trials' checkpoints were pruned after the search (CLAUDE.md's
+sweep rules): trials 1 and 2's logged models and `model/` directories (runs
+tagged `checkpoint_pruned`), and every losing trial's `training_state/`.
+The best trial's checkpoint is kept.
 
 ## Docker
 
