@@ -30,7 +30,8 @@ persistence and the mean field -- are fitted, checkpointed and scored on the
 validation dataset through the training entry point (see "Baselines"). The
 first model with dynamics, DMD, beats both (see "DMD"), and time-delay
 (Hankel) DMD with 4 frames of context beats DMD (see "Hankel DMD") -- it is
-the canonical model; no neural network exists yet.
+the canonical model. The first neural network, a U-Net, is in progress (its
+network is in `models/unet.py`; the surrogate and its training loop follow).
 
 ## Setup
 
@@ -74,7 +75,7 @@ src/mhd_surrogate/   importable package, split by pipeline stage
   analysis/          fields, summary, spectral
   training/          mlflow_utils, tracking
   evaluation/        protocol, metrics, diagnostics, evaluate
-  models/            base (interface), baselines, dmd, hankel_dmd, registry
+  models/            base (interface), baselines, dmd, hankel_dmd, unet, registry
   utils/             logging_config, parallel, jax_cache
 scripts/             CLI entry points, same split (plus viz/)
   data/              explore_data, convert_to_zarr, compute_stats
