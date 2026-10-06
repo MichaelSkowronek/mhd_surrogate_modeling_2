@@ -67,6 +67,32 @@ def search_space(space: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
     return domains
 
 
+def default_point(
+    config: Mapping[str, Any], space: Mapping[str, Mapping[str, Any]]
+) -> dict[str, Any]:
+    """The configuration's own values of the searched keys, as a point for
+    the search to evaluate first (so the hand-picked defaults are a trial,
+    and the search has a baseline to beat). Each value must lie in its
+    domain: a sampler can't evaluate a point outside it."""
+    point = {}
+    for dotted, spec in space.items():
+        node: Any = config
+        for part in dotted.split("."):
+            if not isinstance(node, Mapping) or part not in node:
+                raise KeyError(f"{dotted}: not a key of the config")
+            node = node[part]
+        if spec.get("type") == "choice":
+            inside = node in spec["values"]
+        else:  # randint's high is exclusive; the floats' isn't
+            inside = spec["low"] <= node and (
+                node < spec["high"] if spec.get("type") == "randint" else node <= spec["high"]
+            )
+        if not inside:
+            raise ValueError(f"{dotted}: default {node!r} is outside the search space {dict(spec)}")
+        point[dotted] = node
+    return point
+
+
 def apply_overrides(config: Mapping[str, Any], params: Mapping[str, Any]) -> dict[str, Any]:
     """A copy of the nested `config` with each dotted key in `params` set.
     Every key must already exist: a typo would otherwise tune nothing."""
