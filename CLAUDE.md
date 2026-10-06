@@ -96,12 +96,21 @@ conventions below; it shifts which tools are worth reaching for at all.
   (`MlflowClient.delete_logged_model`, then its artifact directory) and the
   `model/` directory, and tag the run `checkpoint_pruned`; keep the run
   record itself (params, metrics, log, small artifacts) -- the README's sweep
-  tables and later comparisons rely on it.
+  tables and later comparisons rely on it. The same goes for a Ray Tune
+  search's trials (`scripts/training/tune.py`), plus each losing trial's
+  `training_state/` directory (resumable weights). Trials ASHA stopped have
+  no logged model; they're already KILLED and tagged `pruned`, which is
+  distinct from `checkpoint_pruned`.
 - Never use `mlflow gc`, not even with `--run-ids`: besides the given runs,
   it permanently purges every deleted logged model in the store (including
   the pruned ones' records). To delete a run outright, delete its logged
   model as above, then `MlflowClient.delete_run` (a soft delete) and remove
   its artifact directory.
+- Smoke runs (checking that code works, not producing results) log to a
+  dated experiment, `mlflow.experiment_name=smoke-tests-<YYYY-MM-DD>`, not
+  the main `mhd-surrogate` one. Delete them as above once the change is
+  verified. A deleted experiment's name stays reserved (MLflow only
+  soft-deletes it), hence the date.
 - Wall-clock timings (`fit_seconds`, `eval_seconds`,
   `forecast_seconds_per_frame`, ...) are MLflow metrics only, never in a DVC
   stage's metrics/outputs (e.g. `Evaluation.scores`, which becomes
@@ -129,6 +138,21 @@ conventions below; it shifts which tools are worth reaching for at all.
   importing it in the registry: the registry imports a model only when it's
   built or loaded, so the DVC `train` stage depends only on the canonical
   model's code and editing another model doesn't mark it stale.
+- Neural models build on `models/neural.py`'s `AutoregressiveSurrogate` (a
+  new network supplies only `build_network` and `pad_multiple`) and train
+  with `training/trainer.py`. An iteratively trained model sets
+  `iterative = True` and takes `fit(datasets, hooks)` (`base.FitHooks`:
+  validation scores, MLflow training curves, a resumable state directory).
+  Early stopping and the hyperparameter search maximize
+  `evaluation.metrics.selection_score`, the selection rule as one number,
+  never a training loss or another metric.
+- Training entry points share `training/run.py`'s `run_training`
+  (`train.py` and every Ray Tune trial call it). A change to what a run
+  does goes there, not into `train.py`. NN-only code
+  (`training/trainer.py`, `training/tuning.py`, the neural models) stays
+  out of the DVC `train` stage's deps while a non-neural model is
+  canonical: the deps list exactly what `train.py` imports (checked by
+  `tests/training/test_dvc_train_stage.py`).
 - JAX entry points call `utils/jax_cache.py`'s `enable_compilation_cache`
   before anything is jitted (JAX ignores cache config changes after its
   first compile). The cache is a performance knob, not a DVC param: a warm
