@@ -10,6 +10,7 @@ from mhd_surrogate.training.tuning import (
     TRIAL_LOG,
     apply_overrides,
     close_stopped_runs,
+    default_point,
     recording_asha,
     run_trial,
     search_space,
@@ -43,6 +44,52 @@ def test_search_space_builds_each_domain_type():
 def test_search_space_rejects_an_unknown_type():
     with pytest.raises(ValueError, match="unknown type 'normal'"):
         search_space({"a": {"type": "normal"}})
+
+
+SPACE = {
+    "model.training.learning_rate": {"type": "loguniform", "low": 1e-4, "high": 3e-3},
+    "model.depth": {"type": "randint", "low": 3, "high": 5},
+    "model.window": {"type": "choice", "values": [1, 2, 4]},
+}
+
+
+def test_default_point_takes_the_configs_values_of_the_searched_keys():
+    config = {"model": {"window": 4, "depth": 4, "training": {"learning_rate": 1e-3}}}
+
+    point = default_point(config, SPACE)
+
+    assert point == {"model.training.learning_rate": 1e-3, "model.depth": 4, "model.window": 4}
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("window", 8),  # not one of the choices
+        ("depth", 5),  # randint's high is exclusive
+        ("learning_rate", 1e-2),  # above the float range
+    ],
+)
+def test_default_point_rejects_a_default_outside_the_space(key, value):
+    config = {"model": {"window": 4, "depth": 4, "training": {"learning_rate": 1e-3}}}
+    section = config["model"]["training"] if key == "learning_rate" else config["model"]
+    section[key] = value
+
+    with pytest.raises(ValueError, match="outside the search space"):
+        default_point(config, SPACE)
+
+
+def test_default_point_accepts_the_float_ranges_upper_end():
+    config = {"model": {"window": 4, "depth": 3, "training": {"learning_rate": 3e-3}}}
+
+    assert default_point(config, SPACE)["model.training.learning_rate"] == 3e-3
+
+
+@pytest.mark.parametrize(
+    ("config", "key"), [({"model": {"depth": 4}}, "model.window"), ({"model": 1}, "model.depth")]
+)
+def test_default_point_rejects_a_key_the_config_lacks(config, key):
+    with pytest.raises(KeyError, match="not a key"):
+        default_point(config, {key: {"type": "choice", "values": [1]}})
 
 
 def test_apply_overrides_sets_dotted_keys_on_a_copy():

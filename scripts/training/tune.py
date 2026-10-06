@@ -43,6 +43,7 @@ from mhd_surrogate.training.tuning import (  # noqa: E402
     METRIC,
     MODE,
     close_stopped_runs,
+    default_point,
     recording_asha,
     run_trial,
     search_space,
@@ -119,6 +120,7 @@ def _search(cfg: DictConfig, base_config: dict, output_dir: Path, sweep: str, pa
                 "memory": int(resources.memory_gb * 1024**3),
             },
         )
+        space = OmegaConf.to_container(search.space)
         training = cfg.model.training
         # One Tune iteration per validation. ASHA also stops a trial that
         # reaches max_t, which at the last validation would kill it before
@@ -133,11 +135,18 @@ def _search(cfg: DictConfig, base_config: dict, output_dir: Path, sweep: str, pa
         )
         tuner = tune.Tuner(
             trainable,
-            param_space=search_space(OmegaConf.to_container(search.space)),
+            param_space=search_space(space),
             tune_config=tune.TuneConfig(
                 metric=METRIC,
                 mode=MODE,
-                search_alg=OptunaSearch(seed=search.seed),
+                # Optuna's first trial is the configuration's own values, so
+                # the defaults are one of the trials.
+                search_alg=OptunaSearch(
+                    points_to_evaluate=[default_point(base_config, space)]
+                    if search.evaluate_defaults
+                    else None,
+                    seed=search.seed,
+                ),
                 scheduler=asha,
                 num_samples=search.num_samples,
                 max_concurrent_trials=search.max_concurrent_trials,

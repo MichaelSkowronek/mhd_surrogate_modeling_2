@@ -2131,6 +2131,13 @@ Tune. Its root config, `configs/tune.yaml`, is `config.yaml` plus a
   not 60. Both are needed: ASHA alone samples blindly, Optuna alone trains
   every trial to the end. (Not HyperOpt: Optuna is its maintained TPE
   successor and integrates with Tune the same way.)
+- **The defaults are the first trial.** With `search.evaluate_defaults`
+  (on by default), Optuna's first proposal is the config's own values of
+  the searched keys (`training/tuning.py:default_point`, passed as
+  `points_to_evaluate`): the hand-picked defaults are measured under the
+  same budget as everything else, and the search has a baseline to beat.
+  It counts as one of the `num_samples`, and a default outside its domain
+  is refused (a sampler can't evaluate it).
 - **MLflow.** The search is a parent run (`unet search`), holding the
   search config and, at the end, the best trial's values (`best.*`) and its
   run id (`best_run_id` tag). Each trial is a nested child run, tagged with
