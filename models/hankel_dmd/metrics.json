@@ -1,0 +1,36 @@
+{
+  "train.re16k_t400_0": {
+    "divergence_ratio": 0.202261,
+    "energy_rel_error": 0.249959,
+    "enstrophy_rel_error": 0.710283,
+    "rmse_lead_1": 0.203489,
+    "rmse_lead_10": 0.44208,
+    "rmse_lead_100": 0.639428,
+    "rmse_lead_40": 0.572989,
+    "rmse_mean": 0.787178,
+    "skill_horizon": 13.0,
+    "spectrum_x_lsd": 2.81622,
+    "spectrum_y_lsd": 2.19608,
+    "temporal_u_x_lsd": 4.46736,
+    "temporal_u_y_lsd": 4.10216,
+    "u_y_peak_power_ratio": 0.374877,
+    "u_y_period_error": 0.0384518
+  },
+  "val": {
+    "divergence_ratio": 0.192596,
+    "energy_rel_error": 0.263532,
+    "enstrophy_rel_error": 0.72763,
+    "rmse_lead_1": 0.281005,
+    "rmse_lead_10": 0.57086,
+    "rmse_lead_100": 0.702623,
+    "rmse_lead_40": 0.58258,
+    "rmse_mean": 0.779564,
+    "skill_horizon": 7.0,
+    "spectrum_x_lsd": 2.62274,
+    "spectrum_y_lsd": 2.09704,
+    "temporal_u_x_lsd": 4.31488,
+    "temporal_u_y_lsd": 4.04118,
+    "u_y_peak_power_ratio": 0.168771,
+    "u_y_period_error": 0.0392399
+  }
+}

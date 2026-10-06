@@ -34,11 +34,12 @@ stages:
       - data/processed/normalization_stats.json
 
   # The canonical model (see README "Data versioning (DVC)" -> "Training
-  # stage"): DMD at the rank the validation sweep selected. Exploration
-  # (sweeps, other models) stays in Hydra/MLflow; this stage pins what
-  # produced the selected model. It still logs to MLflow like any run.
+  # stage"): Hankel DMD at the delays and rank its validation sweep selected
+  # (until then, plain DMD at rank 750). Exploration (sweeps, other models)
+  # stays in Hydra/MLflow; this stage pins what produced the selected model.
+  # It still logs to MLflow like any run.
   train:
-    cmd: uv run scripts/training/train.py model=dmd export.dir=models/dmd
+    cmd: uv run scripts/training/train.py model=hankel_dmd export.dir=models/hankel_dmd
     # Code deps are exactly what train.py imports, transitively (checked by
     # tests/training/test_dvc_train_stage.py), not the whole package: editing
     # an unrelated module (e.g. analysis/pod.py) shouldn't force a ~2-minute
@@ -65,8 +66,10 @@ stages:
     # The keys that change the fitted model or its scores; performance knobs
     # (chunk sizes) are left out so tuning them doesn't retrain.
     params:
-      - configs/model/dmd.yaml:
+      - configs/model/hankel_dmd.yaml:
           - rank
+          - delays
+          - spatial_rank
           - stabilize
       - configs/data/re16k.yaml:
           - zarr_store
@@ -80,7 +83,7 @@ stages:
           - report_leads
           - train_datasets
     outs:
-      - models/dmd/model
+      - models/hankel_dmd/model
     metrics:
-      - models/dmd/metrics.json:
+      - models/hankel_dmd/metrics.json:
           cache: false
