@@ -73,8 +73,8 @@ stages:
       nfiles: 293
     - path: scripts/training/train.py
       hash: md5
-      md5: 974ff03419780f70f85e72035bcb78f4
-      size: 12527
+      md5: 4cb0061c793acdea1ce994d1dffe6a22
+      size: 4077
     - path: src/mhd_surrogate/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -148,6 +148,10 @@ stages:
       hash: md5
       md5: 42e538766a9f73593cd6ed9c2c030328
       size: 2199
+    - path: src/mhd_surrogate/training/run.py
+      hash: md5
+      md5: 3bcacf00ca7c73db2ad8027b7c25bfde
+      size: 10203
     - path: src/mhd_surrogate/training/tracking.py
       hash: md5
       md5: 44217f22d8d0a2c01d2cdc1944bf7ac7
@@ -166,8 +170,8 @@ stages:
       size: 1991
     - path: src/mhd_surrogate/utils/parallel.py
       hash: md5
-      md5: 1768d796dfd0a2d5615933712f40eed3
-      size: 8255
+      md5: 12780c8a2ef5c2334e0873254eb1eac2
+      size: 8491
     params:
       configs/data/re16k.yaml:
         context_steps: 80

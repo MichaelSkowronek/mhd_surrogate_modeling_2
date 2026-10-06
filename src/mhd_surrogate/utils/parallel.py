@@ -121,8 +121,11 @@ def run_parallel(
     return results
 
 
-def _init_ray(workers: int | None):
-    """Start a local Ray runtime limited to `workers` CPUs; caller shuts it down."""
+def init_ray(workers: int | None = None, num_gpus: int | None = None):
+    """Start a local Ray runtime limited to `workers` CPUs (and `num_gpus`
+    GPUs; None: Ray detects them) and return the `ray` module; the caller
+    shuts it down. Everything that uses Ray (including Ray Tune) starts it
+    here, for the settings below."""
     # When the driver was started with `uv run`, Ray's uv integration would
     # package the whole working directory (here: the repo, including ~20 GB
     # of data) as the workers' runtime environment. Workers already run in
@@ -134,6 +137,7 @@ def _init_ray(workers: int | None):
     # object store, since tasks here return only small result records.
     ray.init(
         num_cpus=workers,
+        num_gpus=num_gpus,
         include_dashboard=False,
         logging_level=logging.WARNING,
         object_store_memory=200 * 1024**2,
@@ -144,7 +148,7 @@ def _init_ray(workers: int | None):
 def _run_parallel_ray(
     jobs: list[tuple[str, list[str], str]], workers: int | None, memory_gb: Mapping[str, float]
 ) -> list[dict[str, Any]]:
-    ray = _init_ray(workers)
+    ray = init_ray(workers)
     try:
         # `memory` is a logical resource Ray budgets against the node's
         # memory (a scheduling hint, not a hard limit on the process).
@@ -184,7 +188,7 @@ def map_tasks(
             futures = [pool.submit(fn, *args) for args in arg_tuples]
             return [f.result() for f in futures]
 
-    ray = _init_ray(workers)
+    ray = init_ray(workers)
     try:
         remote = ray.remote(num_cpus=1)(fn)
         return ray.get([remote.remote(*args) for args in arg_tuples])

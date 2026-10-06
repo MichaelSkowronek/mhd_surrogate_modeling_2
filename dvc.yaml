@@ -62,6 +62,7 @@ stages:
       - src/mhd_surrogate/training/export.py
       - src/mhd_surrogate/training/mlflow_model.py
       - src/mhd_surrogate/training/mlflow_utils.py
+      - src/mhd_surrogate/training/run.py
       - src/mhd_surrogate/training/tracking.py
       - src/mhd_surrogate/data/__init__.py
       - src/mhd_surrogate/data/grid.py

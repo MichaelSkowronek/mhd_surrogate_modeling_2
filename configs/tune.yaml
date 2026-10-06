@@ -1,0 +1,14 @@
+# Root config of the hyperparameter search (scripts/training/tune.py): the
+# training config (config.yaml, as train.py sees it) plus a search space and
+# scheduler from search/. Every trial is a train.py run with the sampled
+# values applied as overrides; anything else is overridden as for train.py
+# (e.g. `model.training.max_epochs=30`, `search.num_samples=8`).
+defaults:
+  - config
+  - search: unet
+  - override model: unet
+  - _self_
+
+hydra:
+  run:
+    dir: outputs/tune/${now:%Y-%m-%d}/${now:%H-%M-%S}
