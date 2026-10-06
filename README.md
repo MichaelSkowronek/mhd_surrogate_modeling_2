@@ -436,8 +436,14 @@ chain leading to the stage, data stages included.)
 unrelated module (`analysis/pod.py`, say) doesn't make it stale. A test
 (`tests/training/test_dvc_train_stage.py`) computes that import set and fails
 if a module isn't covered, so the list can't drift into calling a stale model
-up to date. `models/` is listed whole, since the registry imports every model:
-editing another model's code does mark the canonical stage stale. Retraining is
+up to date. Only the canonical model's modules are deps, not all of `models/`:
+`models/registry.py` maps each model name to an import path
+(`"mhd_surrogate.models.dmd:DMD"`) and imports a model's module only when that
+model is built or loaded, so adding or editing another model (a baseline, a
+neural network) doesn't mark the canonical stage stale. The test can't see a
+string import in the import graph, so it adds the trained model's module
+itself, looked up from the stage's `model=` override; switching the canonical
+model makes the test name the new model's files as missing deps. Retraining is
 always explicit (`dvc repro`), and every retrain adds a new ~880 MB cache
 entry -- even for an irrelevant change, since the checkpoint's bytes differ
 each time -- and old entries are never removed automatically. Clean up the
