@@ -228,6 +228,17 @@ conventions below; it shifts which tools are worth reaching for at all.
 - CI (`tests.yml`, `docker.yml`, `pre-commit.yml`) runs on PRs into `main`
   and on push to `main`; branch protection on `main` requires a PR and a
   green CI run before merging.
+- Merge with `gh pr merge --squash --auto`: GitHub merges once the required
+  checks pass, so the next piece doesn't wait on CI. Branch it from the
+  pending PR's branch, not `main`, so it builds on and is tested against
+  that change; after the squash-merge, `git rebase --onto origin/main
+  <old-branch>` (a plain rebase would re-apply the commits the squash
+  already contains). Branch protection's up-to-date requirement makes the
+  squash commit's tree identical to the old branch's, so the rebase changes
+  no files and earlier testing stays valid -- unless the pending PR needed
+  a fix to pass CI, in which case rebase onto the fix and re-test. Start
+  MLflow runs meant to be kept only after the rebase, so their logged
+  commit is on `main`.
 - Tag milestones with an annotated git tag (e.g. `v0.1.0-eda-complete`)
   paired with a GitHub Release summarizing what the milestone covers -- not
   strict semver, since this project has no release artifact in the
