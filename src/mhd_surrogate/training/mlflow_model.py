@@ -23,6 +23,7 @@ from mlflow.models.model import ModelInfo
 from mlflow.types import ParamSchema, ParamSpec, Schema, TensorSpec
 
 import mlflow
+from mhd_surrogate.evaluation.protocol import predict_member
 from mhd_surrogate.models.base import SurrogateModel
 
 PACKAGE_DIR = Path(__file__).resolve().parents[1]
@@ -33,7 +34,9 @@ REQUIREMENTS = ("numpy", "jax", "mlflow")
 
 
 class SurrogatePyfunc(mlflow.pyfunc.PythonModel):
-    """`predict(context, params={"n_steps": n})` -> `model.predict(context, n)`.
+    """`predict(context, params={"n_steps": n, "seed": s})` ->
+    `model.predict(context, n)`, or for a stochastic model its sample for
+    seed `s` (an ensemble is one call per seed).
 
     `context` is the last `window` frames, shape (window, C, Nx, Ny), raw
     units; extra leading frames are ignored, as under the forecast protocol.
@@ -45,20 +48,22 @@ class SurrogatePyfunc(mlflow.pyfunc.PythonModel):
         self.model = load_model(context.artifacts["checkpoint"])
 
     def predict(self, context, model_input, params: dict[str, Any] | None = None) -> np.ndarray:
-        n_steps = int((params or {}).get("n_steps", 1))
+        params = params or {}
+        n_steps = int(params.get("n_steps", 1))
+        seed = int(params.get("seed", 0))
         frames = np.asarray(model_input)
         visible = frames[frames.shape[0] - self.model.window :]
-        return np.asarray(self.model.predict(visible, n_steps))
+        return np.asarray(predict_member(self.model, visible, n_steps, seed))
 
 
 def signature(frame_shape: tuple[int, ...]) -> ModelSignature:
     """Input and output are stacks of frames of `frame_shape` (C, Nx, Ny);
-    `n_steps` is a parameter."""
+    `n_steps` and `seed` (a stochastic model's sample) are parameters."""
     spec = TensorSpec(np.dtype(np.float32), (-1, *frame_shape))
     return ModelSignature(
         inputs=Schema([spec]),
         outputs=Schema([spec]),
-        params=ParamSchema([ParamSpec("n_steps", "long", 1)]),
+        params=ParamSchema([ParamSpec("n_steps", "long", 1), ParamSpec("seed", "long", 0)]),
     )
 
 

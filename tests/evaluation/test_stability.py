@@ -168,3 +168,22 @@ def test_rollout_block_means_of_a_model_without_a_window_pass_it_no_frames():
 
     assert blocks["energy"] == pytest.approx([1.0, 1.0, 1.0])
     assert blocks["enstrophy"] == pytest.approx([0.0, 0.0, 0.0])
+
+
+def test_rollout_block_means_sample_each_block_of_a_stochastic_model_with_its_own_seed():
+    class Sampler:
+        window = 1
+        stochastic = True
+
+        def __init__(self):
+            self.seeds = []
+
+        def predict(self, context, n_steps, seed=0):
+            self.seeds.append(seed)
+            return np.ones((n_steps, 2, 4, 4))
+
+    model = Sampler()
+
+    rollout_block_means(model, np.zeros((3, 2, 4, 4)), 5, 2, DX, DY)
+
+    assert model.seeds == [0, 1, 2]

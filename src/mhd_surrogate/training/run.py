@@ -221,6 +221,7 @@ def _score_and_log(
         report_leads=list(cfg.evaluation.report_leads),
         block_steps=cfg.evaluation.stability.block_steps,
         max_ratio=cfg.evaluation.stability.max_ratio,
+        n_members=cfg.evaluation.ensemble_size,
     )
     eval_seconds = time.perf_counter() - start
     log.info("evaluated on %s in %.1f s", name, eval_seconds)
@@ -240,6 +241,11 @@ def _score_and_log(
     if undefined:
         log.info("%s: undefined for this model, not logged: %s", prefix, ", ".join(undefined))
     log_metric_series(f"{prefix}.rmse", result.rmse, start_step=1, model_id=model_id)
+    log_metric_series(f"{prefix}.crps", result.ensemble.crps, start_step=1, model_id=model_id)
+    if result.ensemble.size > 1:
+        for name in ("spread", "ensemble_mean_rmse"):
+            curve = getattr(result.ensemble, name)
+            log_metric_series(f"{prefix}.{name}", curve, start_step=1, model_id=model_id)
     log.info(
         "%s scores:\n%s",
         prefix,

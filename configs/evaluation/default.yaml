@@ -16,6 +16,12 @@
 #   truth's own 100-step block means vary by ~5% (energy) and ~18%
 #   (enstrophy) on the validation dataset, so 2x is a blow-up, not noise.
 #
+# ensemble_size: members a stochastic (generative) model forecasts, seeds
+#   0..n-1, for the ensemble scores (CRPS, spread vs error; see
+#   src/mhd_surrogate/evaluation/ensemble.py). A deterministic model has a
+#   single member whatever this says, so it doesn't change their scores.
+#   Every other score is the seed-0 member's.
+#
 # tie_break_lead: candidates are ranked by stable steps, then by skill
 #   horizon, ties broken by the RMSE at this lead (CLAUDE.md, "Data
 #   analysis"); early stopping and the hyperparameter search maximize the
@@ -30,5 +36,6 @@ report_leads: [1, 10, 40, 100]
 stability:
   block_steps: 100
   max_ratio: 2.0
+ensemble_size: 8
 tie_break_lead: 10
 train_datasets: [re16k_t400_0]

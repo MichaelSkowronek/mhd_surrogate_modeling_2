@@ -81,3 +81,25 @@ def test_load_logged_surrogate_returns_the_model_and_the_run_that_logged_it(trac
     assert run_id == run.info.run_id
     assert loaded.name == "mean_field"
     assert (loaded.predict(np.empty((0, *FRAME)), 2) == model.mean).all()
+
+
+def test_logged_model_passes_the_seed_to_a_stochastic_model(tracking, tmp_path):
+    model = Persistence()
+    model.save(tmp_path / "ckpt")
+    with mlflow.start_run():
+        info = log_surrogate(model, tmp_path / "ckpt", FRAME)
+    loaded = mlflow.pyfunc.load_model(info.model_uri)
+    wrapper = loaded.unwrap_python_model()
+
+    class Sampler:
+        window = 1
+        stochastic = True
+
+        def predict(self, context, n_steps, seed=0):
+            return np.full((n_steps, *context.shape[1:]), float(seed), dtype=np.float32)
+
+    wrapper.model = Sampler()
+    context = np.zeros((1, *FRAME), dtype=np.float32)
+
+    assert (loaded.predict(context, params={"n_steps": 2, "seed": 3}) == 3.0).all()
+    assert (loaded.predict(context, params={"n_steps": 2}) == 0.0).all()

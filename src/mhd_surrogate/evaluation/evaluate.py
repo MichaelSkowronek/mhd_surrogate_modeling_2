@@ -13,8 +13,15 @@ from mhd_surrogate.evaluation.diagnostics import (
     compare_summaries,
     series_summary,
 )
+from mhd_surrogate.evaluation.ensemble import EnsembleAccumulator, EnsembleScores
 from mhd_surrogate.evaluation.metrics import rmse_per_step, selection_score, skill_horizon
-from mhd_surrogate.evaluation.protocol import ForecastModel, forecast
+from mhd_surrogate.evaluation.protocol import (
+    ForecastModel,
+    ensemble_size,
+    forecast,
+    forecast_members,
+    is_stochastic,
+)
 from mhd_surrogate.evaluation.stability import QUANTITIES, energy_and_enstrophy, stability_scores
 
 
@@ -31,12 +38,14 @@ def train_eval_datasets(requested: list[str], train_datasets: list[str]) -> list
 @dataclass(frozen=True)
 class Evaluation:
     """`scores` are scalars (ready for `mlflow.log_metrics`); `rmse` is the
-    per-step error curve, index 0 = lead time 1. `predict_seconds` is the
-    wall time of the model's forecast alone (no data reading or scoring);
-    it's kept out of `scores`, which must be reproducible."""
+    per-step error curve, index 0 = lead time 1, and `ensemble` the
+    ensemble's per-step curves (CRPS, spread). `predict_seconds` is the wall
+    time of one member's forecast alone (no data reading or scoring); it's
+    kept out of `scores`, which must be reproducible."""
 
     scores: dict[str, float]
     rmse: np.ndarray
+    ensemble: EnsembleScores
     predict_seconds: float
 
     @property
@@ -54,11 +63,12 @@ class _TimedModel:
     def __init__(self, model: ForecastModel) -> None:
         self.model = model
         self.window = model.window
+        self.stochastic = is_stochastic(model)
         self.seconds = 0.0
 
-    def predict(self, context: np.ndarray, n_steps: int) -> np.ndarray:
+    def predict(self, context: np.ndarray, n_steps: int, **seed) -> np.ndarray:
         start = time.perf_counter()
-        prediction = np.asarray(self.model.predict(context, n_steps))
+        prediction = np.asarray(self.model.predict(context, n_steps, **seed))
         self.seconds = time.perf_counter() - start
         return prediction
 
@@ -74,6 +84,7 @@ def evaluate(
     report_leads: list[int],
     block_steps: int,
     max_ratio: float,
+    n_members: int = 1,
     chunk_t: int = DEFAULT_CHUNK_T,
     nperseg: int = NPERSEG,
 ) -> Evaluation:
@@ -84,6 +95,14 @@ def evaluate(
     also reported as scalars, `rmse_lead_<n>`; leads past the forecast are
     skipped. `block_steps` and `max_ratio` configure the stability check
     (`stability.stability_scores`).
+
+    A stochastic model forecasts an ensemble of `n_members` (seeds 0, 1,
+    ...; a deterministic model has one member, whatever `n_members`). Every
+    score above is the seed-0 member's, the single trajectory `predict`
+    gives; the ensemble adds `crps_mean`, `crps_lead_<n>`,
+    `ensemble_size` and, for more than one member, `spread_skill_lead_<n>`
+    (`ensemble.EnsembleScores`). For one member the CRPS is the absolute
+    error, so deterministic and generative models share that score.
     """
     timed = _TimedModel(model)
     prediction, targets = forecast(timed, series, context_steps)
@@ -106,7 +125,22 @@ def evaluate(
             max_ratio,
         )
     )
-    return Evaluation(scores=scores, rmse=rmse, predict_seconds=timed.seconds)
+
+    members = EnsembleAccumulator(targets, scale, chunk_t)
+    members.add(prediction)
+    del prediction  # one member at a time from here on (~1 GB each)
+    size = ensemble_size(model, n_members)
+    for member in forecast_members(model, series, context_steps, range(1, size)):
+        members.add(member)
+    ensemble = members.scores()
+    scores["ensemble_size"] = float(ensemble.size)
+    scores["crps_mean"] = float(ensemble.crps.mean())
+    for lead in report_leads:
+        if 1 <= lead <= len(rmse):
+            scores[f"crps_lead_{lead}"] = float(ensemble.crps[lead - 1])
+            if ensemble.size > 1:
+                scores[f"spread_skill_lead_{lead}"] = float(ensemble.spread_skill[lead - 1])
+    return Evaluation(scores=scores, rmse=rmse, ensemble=ensemble, predict_seconds=timed.seconds)
 
 
 def selection_scores(

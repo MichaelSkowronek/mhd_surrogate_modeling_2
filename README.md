@@ -1675,6 +1675,36 @@ rollout as one long `predict` up to float rounding at the block boundaries;
 (Hankel) DMD restarts from the projection of its own last frames at every
 block. The test dataset is refused, like in the forecast videos.
 
+**Ensembles** (`protocol.py`, `ensemble.py`). The deterministic models
+so far have one answer per context; a generative surrogate (flow matching,
+diffusion) samples one, and its forecast is a distribution. The contract is
+ready for it without changing anything for the others: a model with
+`stochastic = True` takes `predict(context, n_steps, seed=...)` and returns
+its sample for that seed, an ensemble is the samples for seeds 0, 1, ...,
+`evaluation.ensemble_size` (8), and a deterministic model is a one-member
+ensemble. Every score above is the seed-0 member's (one trajectory, as
+`predict` gives it; the ensemble *mean* would be smooth and fail the
+physics), and the ensemble adds:
+
+- *CRPS* per lead time (`crps_mean`, `crps_lead_<n>`): E|X - y| - E|X -
+  X'|/2 over members X, X' and truth y, per pixel. A proper score -- it is
+  minimized by forecasting the true distribution -- so unlike the RMSE it
+  doesn't reward collapsing toward the mean. For one member it *is* the
+  absolute error, so deterministic and generative models share a score.
+- *Spread vs error* (`spread_skill_lead_<n>`, more than one member):
+  sqrt((M + 1) / M) times the ensemble's spread over the RMSE of its mean,
+  ~1 for a calibrated ensemble of M members (Fortin et al. 2014), below 1
+  for an overconfident one.
+
+Members are streamed one at a time (an 837-step member is ~1 GB): the
+pairwise terms use consecutive members only, each an independent pair, so
+they're unbiased like all M (M - 1) / 2 pairs, with some more variance.
+MLflow gets the per-lead `crps` curve (and `spread`, `ensemble_mean_rmse`
+for an ensemble), and the logged pyfunc model takes `seed` as a parameter
+next to `n_steps`, so a server can sample an ensemble one call per seed.
+How the ensemble scores enter the selection rule is decided when the first
+generative model exists; until then the rule is unchanged.
+
 **How big a score is "perfect"?** Scoring a different realization of the same
 flow (train datasets 0 and 10 against the validation targets) -- right
 dynamics, wrong phase -- bounds what the metrics can resolve: spatial spectrum
