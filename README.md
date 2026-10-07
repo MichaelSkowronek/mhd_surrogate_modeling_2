@@ -2331,16 +2331,26 @@ machine, and later stages (training jobs, serving) have a unit to deploy.
   everything), then the project non-editable. `runtime` (default) copies only
   the finished virtualenv plus `scripts/` and `configs/` into a fresh
   `python:3.14-slim`: no uv, no dev tools, runs as a non-root user.
-  `test` adds the dev group and `tests/` and runs pytest.
+  `test` adds the dev group, `tests/` and the DVC pointer files its tests
+  parse (`dvc.yaml`, `dvc.lock`, `data/raw.dvc`), and runs pytest.
 - **Data is never in the image.** The zarr store is ~9 GB and changes
   independently of the code, so `data/`, `reports/`, and `outputs/` are bind
   mounts, as is the JAX compilation cache (`.jax_cache/`), so the container
   doesn't recompile on every run. `.dockerignore` keeps them out of the build context too.
 - **`docker-compose.yml`** — the app container plus a full MLflow tracking
   stack (below).
+- **The source commit is baked in, not read from git.** The image has no git
+  and no `.git`, so MLflow can't detect a run's commit itself. Mounting `.git`
+  wouldn't fix that properly: it shows the checkout's *current* commit, which
+  needn't be the one the image's code was built from, and a wrong tag is
+  worse than none. Instead the `GIT_COMMIT` build arg becomes the
+  `MHD_GIT_COMMIT` env var (and the `org.opencontainers.image.revision`
+  label), and `tracked_run` sets it as `mlflow.source.git.commit` on new
+  runs. CI passes `github.sha`; locally, build with the variable set (it's
+  empty otherwise, and runs go untagged).
 
 ```bash
-docker compose build
+GIT_COMMIT=$(git rev-parse HEAD) docker compose build
 docker compose up -d                          # tracking stack; UI on http://localhost:5000
 docker compose run --rm app                   # train.py, logging to the stack
 docker compose run --rm --no-deps app python scripts/analysis/run_all_checks.py

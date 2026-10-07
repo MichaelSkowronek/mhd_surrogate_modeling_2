@@ -31,6 +31,8 @@ jobs:
           context: .
           target: runtime
           tags: mhd-surrogate:latest
+          # On a PR, the merge commit: the tree the image is actually built from.
+          build-args: GIT_COMMIT=${{ github.sha }}
           load: true
           cache-from: type=gha,scope=runtime
           cache-to: type=gha,mode=max,scope=runtime

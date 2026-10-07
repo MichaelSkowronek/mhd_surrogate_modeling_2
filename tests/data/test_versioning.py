@@ -39,7 +39,7 @@ def test_data_provenance_missing_output_is_an_error(tmp_path):
 
 @pytest.mark.skipif(
     not (Path("dvc.lock").exists() and Path("data/raw.dvc").exists()),
-    reason="DVC files aren't in the test image (data/ is dockerignored); tests.yml runs this",
+    reason="needs the committed dvc.lock and data/raw.dvc (run from the repo root)",
 )
 def test_data_provenance_parses_the_committed_dvc_files():
     # Guards against dvc.yaml/dvc.lock drifting from what this module expects.

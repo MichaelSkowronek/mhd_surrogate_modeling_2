@@ -23,6 +23,10 @@ x-app: &app
   build:
     context: .
     target: runtime
+    # The commit runs are tagged with in MLflow (no git in the image): build
+    # with `GIT_COMMIT=$(git rev-parse HEAD) docker compose build`.
+    args:
+      GIT_COMMIT: ${GIT_COMMIT:-}
   image: mhd-surrogate:latest
   # Ray's object store lives in /dev/shm (64 MB by default in a container).
   shm_size: 1gb
@@ -144,6 +148,7 @@ services:
       target: runtime
       args:
         UV_EXTRAS: --extra server --extra ray --extra gpu
+        GIT_COMMIT: ${GIT_COMMIT:-}
     image: mhd-surrogate:gpu
     environment:
       # Allocate GPU memory on demand rather than preallocating 75% of it,
