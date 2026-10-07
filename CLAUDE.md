@@ -100,7 +100,9 @@ conventions below; it shifts which tools are worth reaching for at all.
   search's trials (`scripts/training/tune.py`), plus each losing trial's
   `training_state/` directory (resumable weights). Trials ASHA stopped have
   no logged model; they're already KILLED and tagged `pruned`, which is
-  distinct from `checkpoint_pruned`.
+  distinct from `checkpoint_pruned`. The same goes for a trial the search's
+  time budget (`search.time_budget_s`) stopped, tagged `time_budget`
+  instead: it was cut short, not judged worse.
 - Never use `mlflow gc`, not even with `--run-ids`: besides the given runs,
   it permanently purges every deleted logged model in the store (including
   the pruned ones' records). To delete a run outright, delete its logged
