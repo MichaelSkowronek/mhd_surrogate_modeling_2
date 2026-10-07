@@ -36,8 +36,14 @@ def decay_series(lengths=(12, 9), factor=0.5):
     ]
 
 
-def one_step_loss(network, batch):
+def one_step_loss(network, batch, key):
     return jnp.mean((network(batch[:, 0]) - batch[:, 1]) ** 2)
+
+
+def noisy_loss(network, batch, key):
+    """The one-step loss with the input perturbed by noise from `key`."""
+    noise = 0.3 * jax.random.normal(key, batch[:, 0].shape)
+    return jnp.mean((network(batch[:, 0] + noise) - batch[:, 1]) ** 2)
 
 
 def config(**kwargs):
@@ -162,12 +168,12 @@ def test_prefetch_reraises_an_error_from_the_producer():
 # -- training -------------------------------------------------------------------
 
 
-def run(tmp_path=None, validate=None, network=None, **kwargs):
+def run(tmp_path=None, validate=None, network=None, loss=one_step_loss, **kwargs):
     log = Recorder()
     hooks = FitHooks(log_metrics=log, state_dir=tmp_path)
     result = train(
         network or Gain(jnp.array(1.0)),
-        one_step_loss,
+        loss,
         WindowSampler(decay_series(), span=2),
         config(**kwargs),
         hooks,
@@ -240,8 +246,8 @@ def test_without_validation_the_last_network_is_returned():
 
 @pytest.mark.parametrize("bad", [jnp.nan, 1e6])
 def test_a_non_finite_or_blown_up_loss_is_divergence(bad):
-    def loss(network, batch):
-        return one_step_loss(network, batch) * 0 + bad
+    def loss(network, batch, key):
+        return one_step_loss(network, batch, key) * 0 + bad
 
     with pytest.raises(DivergenceError, match="diverged"):
         train(
@@ -276,6 +282,36 @@ def test_resume_continues_exactly_where_an_interrupted_run_stopped(tmp_path):
     assert resumed.info["resumed_at_epoch"] == 2
     assert float(resumed.network.gain) == float(uninterrupted.network.gain)
     assert min(step for step, _ in log.records) > state["step"]
+
+
+def test_a_random_loss_gets_a_new_key_every_step_derived_from_the_seed():
+    first, _ = run(loss=noisy_loss, max_epochs=2)
+    again, _ = run(loss=noisy_loss, max_epochs=2)
+    other_seed, _ = run(loss=noisy_loss, max_epochs=2, seed=1)
+
+    assert float(first.network.gain) == float(again.network.gain)
+    assert float(first.network.gain) != float(other_seed.network.gain)
+
+
+def test_a_resumed_random_loss_draws_the_keys_an_uninterrupted_run_would(tmp_path):
+    uninterrupted, _ = run(
+        tmp_path / "a", loss=noisy_loss, max_epochs=3, validate=ScriptedValidation([1, 2, 3])
+    )
+
+    def crash_at_epoch_2(network, calls=[]):  # noqa: B006 -- counts calls
+        calls.append(1)
+        if len(calls) == 2:
+            raise Interrupt
+        return {"selection_score": 1.0}
+
+    with pytest.raises(Interrupt):
+        run(tmp_path / "b", loss=noisy_loss, max_epochs=3, validate=crash_at_epoch_2)
+    resumed, _ = run(
+        tmp_path / "b", loss=noisy_loss, max_epochs=3, validate=ScriptedValidation([2, 3])
+    )
+
+    assert resumed.info["resumed_at_epoch"] == 1
+    assert float(resumed.network.gain) == float(uninterrupted.network.gain)
 
 
 def test_resume_keeps_the_best_network_from_before_the_interruption(tmp_path):

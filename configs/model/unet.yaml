@@ -10,6 +10,7 @@ window: 4             # input frames (<= data.context_steps); Hankel DMD's selec
 base_channels: 32     # channels at full resolution, doubled per level (~7.8M parameters at 32, depth 4)
 depth: 4              # down/up levels; frames are padded to a multiple of 2**depth (1152 x 128)
 rollout_steps: 1      # autoregressive steps in the training loss (1 = one-step teacher forcing)
+input_noise_std: 0.0  # Gaussian noise on the training inputs, normalized units (0 = off; models/neural.py)
 compute_dtype: bfloat16  # network compute; parameters and optimizer stay float32 (~1.8x faster than float32)
 host_dtype: float16   # training frames in host RAM (~4 GB for the 7 train datasets)
 seed: ${seed}         # network init and batch order

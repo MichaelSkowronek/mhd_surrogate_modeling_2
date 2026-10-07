@@ -21,6 +21,14 @@ supply a different `build_network`):
   the model the errors it will compound at forecast time. Each step is
   rematerialized (`jax.checkpoint`), so memory grows with the rollout only by
   one step's activations.
+- Input noise (`input_noise_std`, normalized units; 0 = off): Gaussian noise
+  on the true input frames of every training window, the targets left
+  clean, so the network learns to pull a perturbed state back toward the
+  flow rather than carry the perturbation on -- the cheap counter to the
+  drift of a rollout that feeds on its own imperfect outputs
+  (Sanchez-Gonzalez et al. 2020, "Learning to Simulate Complex Physics with
+  Graph Networks"; Stachenfeld et al. 2022 for turbulence). Constant pixels
+  get none: they're exact at forecast time.
 - Mixed precision: with `compute_dtype: bfloat16` the network runs in bf16
   (parameters, optimizer and the residual sum stay float32), ~1.8x faster
   on the RTX 3060.
@@ -124,10 +132,35 @@ def rollout(network, frame: Frame, window: jax.Array, n_steps: int, dtype) -> ja
     return predictions
 
 
-def rollout_loss(network, frame: Frame, batch: jax.Array, window: int, dtype) -> jax.Array:
+def add_input_noise(
+    batch: jax.Array, window: int, noise_std: float, frame: Frame, key: jax.Array
+) -> jax.Array:
+    """`batch` (B, window + rollout_steps, C, Hp, Wp) with Gaussian noise of
+    std `noise_std` on its first `window` frames (the inputs), on the pixels
+    the loss counts only (not constant pixels or padding); the targets stay
+    clean."""
+    inputs = batch[:, :window]
+    noise = noise_std * jax.random.normal(key, inputs.shape, dtype=batch.dtype)
+    return batch.at[:, :window].add(noise * frame.loss_weight)
+
+
+def rollout_loss(
+    network,
+    frame: Frame,
+    batch: jax.Array,
+    window: int,
+    dtype,
+    noise_std: float = 0.0,
+    key: jax.Array | None = None,
+) -> jax.Array:
     """Mean squared error of rolling each sequence of `batch` (B, window +
     rollout_steps, C, Hp, Wp) forward from its first `window` frames, against
-    the rest; averaged over steps, real non-constant pixels and the batch."""
+    the rest; averaged over steps, real non-constant pixels and the batch.
+    With `noise_std` > 0 the input frames get `add_input_noise` (drawn from
+    `key`) first."""
+    batch = batch.astype(jnp.float32)
+    if noise_std > 0:
+        batch = add_input_noise(batch, window, noise_std, frame, key)
 
     def sequence_loss(sequence):
         @jax.checkpoint
@@ -139,7 +172,7 @@ def rollout_loss(network, frame: Frame, batch: jax.Array, window: int, dtype) ->
         _, errors = jax.lax.scan(advance, sequence[:window], sequence[window:])
         return errors.mean() / frame.loss_weight.sum()
 
-    return jax.vmap(sequence_loss)(batch.astype(jnp.float32)).mean()
+    return jax.vmap(sequence_loss)(batch).mean()
 
 
 @eqx.filter_jit
@@ -161,6 +194,7 @@ class AutoregressiveSurrogate:
         self,
         window: int = 4,
         rollout_steps: int = 1,
+        input_noise_std: float = 0.0,
         compute_dtype: str = "float32",
         host_dtype: str = "float16",
         seed: int = 0,
@@ -171,11 +205,14 @@ class AutoregressiveSurrogate:
             raise ValueError(
                 f"window and rollout_steps must be >= 1, got {window}, {rollout_steps}"
             )
+        if not input_noise_std >= 0:
+            raise ValueError(f"input_noise_std must be >= 0, got {input_noise_std}")
         for dtype in (compute_dtype, host_dtype):
             if dtype not in DTYPES:
                 raise ValueError(f"unknown dtype {dtype!r}, expected one of {sorted(DTYPES)}")
         self.window = window
         self.rollout_steps = rollout_steps
+        self.input_noise_std = input_noise_std
         self.compute_dtype = compute_dtype
         self.host_dtype = host_dtype
         self.seed = seed
@@ -210,6 +247,7 @@ class AutoregressiveSurrogate:
         return {
             "window": self.window,
             "rollout_steps": self.rollout_steps,
+            "input_noise_std": self.input_noise_std,
             "compute_dtype": self.compute_dtype,
             "host_dtype": self.host_dtype,
             "seed": self.seed,
@@ -294,10 +332,11 @@ class AutoregressiveSurrogate:
         log.info("%s: %d parameters", self.name, n_parameters)
 
         multiple, window, dtype = self.pad_multiple(), self.window, DTYPES[self.compute_dtype]
-        frame = self.frame
+        frame, noise_std = self.frame, self.input_noise_std
 
-        def loss_fn(network, batch):
-            return rollout_loss(network, frame, pad_to_multiple(batch, multiple), window, dtype)
+        def loss_fn(network, batch, key):
+            padded = pad_to_multiple(batch, multiple)
+            return rollout_loss(network, frame, padded, window, dtype, noise_std, key)
 
         validate = None
         if hooks.validate is not None:

@@ -2077,6 +2077,16 @@ of the domain.
   matters over a long forecast. Each step is rematerialized
   (`jax.checkpoint`), so memory grows by one step's activations at most,
   but time grows linearly (1.3 s/step for 4 steps at batch 8, vs 0.32 s for one).
+- *Input noise* (`input_noise_std`, normalized units, off by default):
+  Gaussian noise on each training window's true input frames, the targets
+  left clean, so the network learns to pull a perturbed state back toward
+  the flow instead of carrying the perturbation on. A rollout feeds on its
+  own imperfect outputs; training on slightly-off inputs is the standard
+  cheap counter to the drift that follows (Sanchez-Gonzalez et al. 2020;
+  Stachenfeld et al. 2022 for turbulence), much cheaper than a longer
+  rollout loss. Constant pixels get none. The noise is drawn from a key the
+  trainer derives from the seed and the step count, so a run is still
+  reproducible and a resumed one draws the same noise.
 - *Optimizer:* AdamW with gradients clipped by global norm; the learning
   rate warms up linearly, then decays by cosine over `max_epochs`.
 - *Epochs* are `samples_per_epoch` windows (2048 of ~7k by default) drawn
