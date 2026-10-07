@@ -356,6 +356,15 @@ and output, so which data and which stats a commit used is recorded in git.
 The stats file embeds no timestamp, so re-running the stage on the same inputs
 reproduces it byte for byte (the lock file doesn't change).
 
+The lock is only true if it's refreshed with every change to what a stage
+depends on. `tests/data/test_dvc_lock.py` asks DVC for the status of every
+stage's code and params deps (not the data, which CI doesn't have; ~0.5 s)
+and fails if any changed since `dvc.lock` was written, so a PR that edits,
+say, the evaluation code without re-running the `train` stage fails CI
+instead of leaving the canonical model's `metrics.json` claiming code that
+no longer exists (#52 slipped through exactly that way; #54 refreshed the
+lock).
+
 Design choices:
 
 - **Raw only.** The zarr store is `cache: false`: it's a regenerable ~9 GB
