@@ -152,6 +152,12 @@ def compare_diagnostics(
     """
     pred = series_summary(prediction, dx, dy, chunk_t)
     true = series_summary(target, dx, dy, chunk_t)
+    return compare_summaries(pred, true, nperseg)
+
+
+def compare_summaries(pred: dict, true: dict, nperseg: int = NPERSEG) -> dict[str, float]:
+    """`compare_diagnostics` of two `series_summary` results, for a caller
+    that also needs the summaries themselves."""
 
     def rel_error(key: str) -> float:
         return float(abs(pred[key].mean() - true[key].mean()) / true[key].mean())

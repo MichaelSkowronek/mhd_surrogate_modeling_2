@@ -93,6 +93,7 @@ stages:
       - configs/evaluation/default.yaml:
           - skill_threshold
           - report_leads
+          - stability
           - train_datasets
     outs:
       - models/hankel_dmd/model

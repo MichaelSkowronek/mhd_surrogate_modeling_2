@@ -35,7 +35,10 @@ trained, with early stopping on validation, resumable training and a Ray
 Tune hyperparameter search (Optuna + ASHA; see "U-Net"). Its first search
 beats Hankel DMD on the short horizon (skill horizon 15 vs 7) but its long
 rollouts blow up, failing the physics guardrails, so Hankel DMD stays
-canonical; making the rollout stable is next.
+canonical. Selection now ranks by how long a forecast stays bounded first
+(see "How candidates are ranked"), so early stopping and the search no
+longer reward a model that blows up; making the U-Net's rollout stable is
+next.
 
 ## Setup
 
@@ -537,14 +540,24 @@ Reporting every finalist's test score side by side is the point of step 3;
 what would spoil the test set is going back to iterate after looking at it.
 
 **How candidates are ranked.** A surrogate is useful for as long as its
-forecast stays close to the truth, so the primary criterion is the
-validation **skill horizon** (lead steps with RMSE <= 0.5), ties broken by
-**RMSE at lead 10**. The mean RMSE over all leads is deliberately not used:
+forecast stays close to the truth, and only if it stays bounded after that.
+The primary criterion is the validation **stable steps**: how many leading
+steps of the forecast stay bounded (see "Forecast evaluation"; the whole
+837 for a stable forecast). Then the validation **skill horizon** (lead
+steps with RMSE <= 0.5), ties broken by **RMSE at lead 10**. Stability comes
+first because the short-horizon scores can't see a blow-up: the first
+U-Net search picked, by skill horizon alone, models whose energy is 1000x
+the truth's by the end of the validation forecast (see "First search").
+Among stable forecasts, which is what a usable candidate has to be, the
+rule is skill horizon and RMSE at lead 10 as before; among unstable ones,
+lasting longer wins, so early stopping and the search are pushed toward
+stability even while nothing is stable yet. The mean RMSE over all leads is deliberately not used:
 after a few dozen steps every forecast of this chaotic flow has decorrelated,
 and from there pointwise error favors whatever sits closest to the mean -- in
 the DMD rank sweep it ranks the smoothest, lowest-rank model first. The
 physics scores are **guardrails**, not objectives (optimizing one directly
-invites gaming it): a candidate replaces the incumbent only if its energy and
+invites gaming it): a candidate replaces the incumbent only if it is stable
+over the whole validation forecast, its energy and
 enstrophy errors are no more than 0.03 worse and its x/y spectrum distances
 no more than 0.05 worse. Those tolerances are about the spread a different
 realization of the flow scores (energy <1%, enstrophy <3%, spectrum
@@ -1614,6 +1627,18 @@ neither achievable nor the only thing worth measuring.
   regresses toward the mean keeps a modest pointwise error but loses the small
   scales, which these catch. They are computed in chunks, so a long series is
   never held in float64 at once.
+- *Stability* (`stability.py`): how long does the forecast stay bounded?
+  The forecast is cut into 100-step blocks, and a block fails when its mean
+  kinetic energy or enstrophy exceeds 2x the truth's largest block mean
+  (`evaluation.stability` in `configs/evaluation/default.yaml`).
+  `stable_steps` is where the first failing block starts (all 837 steps if
+  none fails), and `energy_peak_ratio` / `enstrophy_peak_ratio` are the
+  forecast's largest block mean over the truth's, i.e. how far it strayed.
+  The truth's own block means vary by ~5% (energy) and ~18% (enstrophy) on
+  the validation dataset, so a 2x excess is a blow-up, not noise. The check
+  is one-sided: a forecast that damps toward a smooth state is bounded, just
+  wrong, and the guardrails below judge that. It costs ~3 s per forecast,
+  cheap enough for every validation during training.
 - *Long horizon, in time* (`diagnostics.temporal_scores`): the spatial scores
   look at each snapshot, so they can't see a forecast that has the right
   structure at every instant but the wrong dynamics. The EDA's most robust
@@ -2039,15 +2064,16 @@ of the domain.
   hyperparameter search's pruning) can follow the curve.
 - *Early stopping on validation:* every `eval_every` epochs the model
   forecasts the whole validation dataset under the protocol, and is scored
-  with `evaluation.selection_scores`. That is the selection rule's two
-  numbers, skill horizon and RMSE at lead 10, folded into one
-  `selection_score` (skill minus `r / (1 + r)`, which orders like the rule
-  exactly). Training stops after `patience` evaluations without a strictly
-  better score, and the best epoch's network is the result. These are the
-  same scores models are compared by, so early stopping is another decision
-  made on validation. The physics diagnostics are left out because they're
-  too slow to run every epoch; the final model is scored in full like every
-  model.
+  with `evaluation.selection_scores`. That is the selection rule's three
+  numbers, stable steps, skill horizon and RMSE at lead 10, folded into one
+  `selection_score`: `(n + 1) * stable_steps + skill - r / (1 + r)` for an
+  `n`-step forecast, which orders like the rule exactly (one more stable
+  step outweighs any skill, one more skill step any RMSE). Training stops
+  after `patience` evaluations without a strictly better score, and the
+  best epoch's network is the result. These are the same scores models are
+  compared by, so early stopping is another decision made on validation.
+  The physics guardrails are left out because they're too slow to run
+  every epoch; the final model is scored in full like every model.
 - *Divergence:* a non-finite loss, or one above `max_loss`, raises
   `DivergenceError`, so the run is tagged `diverged`.
 - *Speed:* `compute_dtype: bfloat16` runs the network in bf16 (parameters,
@@ -2061,7 +2087,8 @@ of the domain.
 **What's logged.** Training curves go to MLflow with the optimizer step as
 the step: `loss`, `grad_norm`, `lr` and `samples_per_second` every
 `log_every` steps, and `epoch_loss`, `epoch_seconds` and
-`val_monitor.{skill_horizon,rmse_lead_10,selection_score}` every epoch. After
+`val_monitor.{skill_horizon,rmse_lead_10,stable_steps,energy_peak_ratio,enstrophy_peak_ratio,selection_score}`
+every epoch. After
 training, the model is checkpointed, logged and scored like every model
 (`val.*`, `train.<dataset>.*`, `fit.*`, where `fit.best_epoch`,
 `fit.stopped_early` and `fit.parameters` come from training).
@@ -2167,8 +2194,8 @@ Tune. Its root config, `configs/tune.yaml`, is `config.yaml` plus a
   why the run body moved there.)
 - **One metric, the selection rule.** A trial reports its validation scores
   to Tune after every validation, and the search maximizes
-  `selection_score`: skill horizon with RMSE at lead 10 as tie-break, the
-  number early stopping already uses. The search optimizes what models are
+  `selection_score`: stable steps, then skill horizon with RMSE at lead 10
+  as tie-break, the number early stopping already uses. The search optimizes what models are
   chosen by, on validation only.
 - **Optuna proposes, ASHA prunes.** Optuna's TPE sampler (seeded) models
   which regions of the space score well, from the trials so far, and samples
@@ -2299,7 +2326,13 @@ What the search shows:
   stopping and the ranking all optimize the short horizon (skill horizon,
   RMSE at lead 10), which a model can win while blowing up later; the
   guardrails catch it only after training. The physics are checked once,
-  at the end, because they're too slow for every epoch.
+  at the end, because they're too slow for every epoch. *Since fixed:* the
+  selection rule now ranks by stable steps first, a check cheap enough for
+  every validation (see "How candidates are ranked"). Re-scored under it,
+  the best trial is stable for 100 of the 837 validation steps (energy peak
+  995x the truth's, enstrophy 4408x) and Hankel DMD for all 837 (peaks
+  0.81x and 0.38x), so Hankel DMD now ranks first by the rule itself, not
+  only by the guardrails.
 - **The validation score is noisy** (±2 between consecutive epochs of the
   same run), so early stopping and ASHA's rung comparisons decide partly on
   noise. Trial 5 was pruned at a rung where its score happened to dip.

@@ -109,9 +109,9 @@ stages:
       size: 1480
     - path: src/mhd_surrogate/evaluation
       hash: md5
-      md5: c62d6c508de1d3e8d8ab8384abdaacca.dir
-      size: 16933
-      nfiles: 5
+      md5: 9508b4c85f9bff4f584cd67010229cd8.dir
+      size: 22696
+      nfiles: 6
     - path: src/mhd_surrogate/models/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -150,12 +150,12 @@ stages:
       size: 2199
     - path: src/mhd_surrogate/training/run.py
       hash: md5
-      md5: 3bcacf00ca7c73db2ad8027b7c25bfde
-      size: 10203
+      md5: 3ea4419a9ba0bec0786909e8f895b191
+      size: 10559
     - path: src/mhd_surrogate/training/tracking.py
       hash: md5
-      md5: 44217f22d8d0a2c01d2cdc1944bf7ac7
-      size: 4424
+      md5: f7ac0ed45b5a5cb13688f36dcdbd59d1
+      size: 5213
     - path: src/mhd_surrogate/utils/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -192,6 +192,9 @@ stages:
         - 40
         - 100
         skill_threshold: 0.5
+        stability:
+          block_steps: 100
+          max_ratio: 2.0
         train_datasets:
         - re16k_t400_0
       configs/model/hankel_dmd.yaml:
@@ -204,8 +207,8 @@ stages:
     outs:
     - path: models/hankel_dmd/metrics.json
       hash: md5
-      md5: 5a274365c14044808c77ff3a7848cfa3
-      size: 1003
+      md5: 171c5348e9e7c2c1dc24f01b482ad67e
+      size: 1204
     - path: models/hankel_dmd/model
       hash: md5
       md5: e175d98a7035bdf06e9c7f7c38b7fc0c.dir

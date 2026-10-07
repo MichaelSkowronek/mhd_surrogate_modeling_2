@@ -50,12 +50,30 @@ def test_skill_horizon_treats_a_nan_error_as_no_skill():
 
 def test_selection_score_ranks_by_skill_then_by_lower_tie_break_rmse():
     ranked = [(7, 0.5), (7, 0.9), (6, 0.0), (6, 5.0), (6, math.inf), (5, 0.0)]
-    scores = [selection_score(skill, rmse) for skill, rmse in ranked]
+    scores = [selection_score(skill, rmse, 20, 20) for skill, rmse in ranked]
 
     assert scores == sorted(scores, reverse=True)
     assert scores[2] > scores[3] > scores[4]
     assert scores[4] >= scores[5]  # infinite RMSE ties at worst with one step less skill
 
 
+def test_selection_score_ranks_stable_steps_above_any_skill_and_rmse():
+    n_steps = 20
+    # One more stable step beats the most skill and the least RMSE possible.
+    ranked = [(20, 0, 9.0), (19, 20, 0.0), (19, 0, 9.0), (5, 3, 0.1), (5, 3, 0.2), (0, 20, 0.0)]
+    scores = [selection_score(skill, rmse, stable, n_steps) for stable, skill, rmse in ranked]
+
+    assert scores == sorted(scores, reverse=True)
+    assert len(set(scores)) == len(scores)
+    # Without a skill step of its own, a stable step still wins.
+    assert selection_score(0, 1e9, 6, n_steps) > selection_score(n_steps, 0.0, 5, n_steps)
+
+
+def test_selection_score_of_a_fully_stable_forecast_orders_like_skill_and_rmse():
+    stable = selection_score(7, 0.5, 20, 20)
+
+    assert stable == pytest.approx(20 * 21 + 7 - 0.5 / 1.5)
+
+
 def test_selection_score_of_a_nan_rmse_is_the_worst_possible():
-    assert selection_score(10, math.nan) == -math.inf
+    assert selection_score(10, math.nan, 20, 20) == -math.inf
