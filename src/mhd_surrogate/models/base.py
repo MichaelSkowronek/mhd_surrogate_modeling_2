@@ -10,6 +10,12 @@ A checkpoint is a directory holding `model.json` (the registry name plus the
 model's own metadata) and whatever arrays the model needs; `registry.load_model`
 reads the name and dispatches to the right class.
 
+A generative model sets `stochastic = True` and takes
+`predict(context, n_steps, seed=...)`: each seed gives one sample of the
+forecast distribution, and an ensemble is the samples for seeds 0, 1, ...
+(`evaluation.protocol.forecast_members`). A deterministic model has one
+answer: it takes no seed and is scored as a one-member ensemble.
+
 A model trained iteratively (a neural network) sets `iterative = True` and
 takes `fit(datasets, hooks)`: the `FitHooks` give it what a closed-form fit
 doesn't need -- a validation score to early-stop on, somewhere to log its
@@ -38,7 +44,8 @@ class SurrogateModel(Protocol):
         (zarr arrays are fine: models read them in chunks)."""
 
     def predict(self, context: np.ndarray, n_steps: int) -> np.ndarray:
-        """`n_steps` forecast frames from the last `window` context frames."""
+        """`n_steps` forecast frames from the last `window` context frames
+        (a stochastic model also takes `seed=`, see the module docstring)."""
 
     def save(self, directory: Path) -> None:
         """Write the checkpoint into `directory` (created if missing)."""

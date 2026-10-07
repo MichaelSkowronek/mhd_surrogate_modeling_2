@@ -23,7 +23,7 @@ from collections.abc import Mapping
 import numpy as np
 
 from mhd_surrogate.evaluation.diagnostics import DEFAULT_CHUNK_T, enstrophy, kinetic_energy
-from mhd_surrogate.evaluation.protocol import ForecastModel
+from mhd_surrogate.evaluation.protocol import ForecastModel, predict_member
 
 QUANTITIES = ("energy", "enstrophy")
 
@@ -117,12 +117,13 @@ def rollout_block_means(
     up to float rounding at the block boundaries (amplified by a rollout
     that is blowing up: ~1% by step 200 for the first U-Nets); a model that
     projects its input (DMD) restarts from the projection of its own last
-    frames at every block.
+    frames at every block. A stochastic model samples block i with seed i.
     """
     window = np.asarray(context[len(context) - model.window :])
     means = {q: [] for q in QUANTITIES}
     for start in range(0, n_steps, block_steps):
-        block = np.asarray(model.predict(window, min(block_steps, n_steps - start)))
+        n = min(block_steps, n_steps - start)
+        block = np.asarray(predict_member(model, window, n, seed=start // block_steps))
         for quantity, values in energy_and_enstrophy(block, dx, dy, chunk_t).items():
             means[quantity].append(values.mean())
         if model.window:

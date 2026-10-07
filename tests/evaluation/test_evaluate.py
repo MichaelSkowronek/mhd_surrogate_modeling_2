@@ -234,3 +234,55 @@ def test_evaluate_and_selection_scores_agree_on_stability():
 
     for key in ("stable_steps", "energy_peak_ratio", "enstrophy_peak_ratio"):
         assert full[key] == pytest.approx(monitor[key])
+
+
+class NoisyOracle:
+    """A stochastic model: the true continuation plus N(0, noise^2) noise
+    drawn from `seed`."""
+
+    window = 0
+    stochastic = True
+
+    def __init__(self, series, context_steps, noise):
+        self.future = series[context_steps:]
+        self.noise = noise
+        self.seeds = []
+
+    def predict(self, context, n_steps, seed=0):
+        self.seeds.append(seed)
+        rng = np.random.default_rng(seed)
+        return self.future[:n_steps] + self.noise * rng.normal(size=self.future[:n_steps].shape)
+
+
+def test_a_deterministic_model_is_a_one_member_ensemble_whose_crps_is_its_error():
+    series = make_series()
+
+    result = run(Persistence(), series, n_members=8)
+
+    assert result.scores["ensemble_size"] == 1
+    assert result.ensemble.size == 1
+    assert "spread_skill_lead_1" not in result.scores
+    targets, prediction = series[10:], np.broadcast_to(series[9], (20, 2, 8, 6))
+    expected = np.abs(prediction - targets).mean(axis=(1, 2, 3))
+    assert result.scores["crps_lead_5"] == pytest.approx(expected[4])
+    assert result.scores["crps_mean"] == pytest.approx(expected.mean())
+
+
+def test_a_stochastic_model_is_scored_on_its_ensemble_and_its_seed_0_member():
+    series = make_series()
+    model = NoisyOracle(series, 10, noise=0.3)
+
+    result = run(model, series, n_members=4)
+
+    assert sorted(model.seeds) == [0, 1, 2, 3]
+    assert result.scores["ensemble_size"] == 4
+    # The pointwise scores are the seed-0 member's...
+    member_0 = NoisyOracle(series, 10, noise=0.3).predict(None, 20, seed=0)
+    assert result.rmse == pytest.approx(
+        np.sqrt(((member_0 - series[10:]) ** 2).mean(axis=(1, 2, 3)))
+    )
+    # ...the ensemble's spread is the noise level, and it is overconfident
+    # (members scatter around the truth, not with it).
+    assert result.ensemble.spread == pytest.approx(np.full(20, 0.3), rel=0.25)
+    assert "spread_skill_lead_5" in result.scores
+    assert result.scores["crps_lead_1"] < result.scores["rmse_lead_1"]
