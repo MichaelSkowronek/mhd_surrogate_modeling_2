@@ -49,7 +49,7 @@ from mhd_surrogate.analysis.fields import FIELDS, compute_field  # noqa: E402
 from mhd_surrogate.data.grid import grid_spacing  # noqa: E402
 from mhd_surrogate.data.normalization import NormalizationStats  # noqa: E402
 from mhd_surrogate.evaluation.metrics import rmse_per_step  # noqa: E402
-from mhd_surrogate.evaluation.protocol import forecast  # noqa: E402
+from mhd_surrogate.evaluation.protocol import check_readable, forecast  # noqa: E402
 from mhd_surrogate.models.registry import load_model  # noqa: E402
 from mhd_surrogate.utils.jax_cache import (  # noqa: E402
     DEFAULT_CACHE_DIR,
@@ -111,27 +111,15 @@ def forecast_limits(truth_sample: np.ndarray, symmetric: bool) -> tuple[float, f
     return float(lo), float(hi), float((hi - lo) / 2)
 
 
-def check_dataset(name: str, data_config: dict) -> None:
-    """Allowed: the validation and training datasets; never the test one."""
-    if name == data_config["test_dataset"]:
-        raise SystemExit(
-            f"{name} is the test dataset: it is read once, by the final evaluation, not here"
-        )
-    allowed = [data_config["val_dataset"], *data_config["train_datasets"]]
-    if name not in allowed:
-        raise SystemExit(f"{name} is not a validation or training dataset ({allowed})")
-
-
 def load_forecast_model(args: argparse.Namespace):
     """The model plus, for --model-id, the run that logged it."""
     if args.checkpoint is not None:
         return load_model(args.checkpoint), None
     import mlflow
+    from mhd_surrogate.training.mlflow_model import load_logged_surrogate
 
     mlflow.set_tracking_uri(args.tracking_uri)
-    logged = mlflow.get_logged_model(args.model_id)
-    pyfunc = mlflow.pyfunc.load_model(f"models:/{args.model_id}")
-    return pyfunc.unwrap_python_model().model, logged.source_run_id
+    return load_logged_surrogate(args.model_id)
 
 
 def main() -> None:
@@ -143,7 +131,7 @@ def main() -> None:
 
     data_config = yaml.safe_load(args.data_config.read_text())
     dataset = args.dataset or data_config["val_dataset"]
-    check_dataset(dataset, data_config)
+    check_readable(dataset, data_config)
 
     model, run_id = load_forecast_model(args)
     root = zarr.open_group(store=data_config["zarr_store"], mode="r")

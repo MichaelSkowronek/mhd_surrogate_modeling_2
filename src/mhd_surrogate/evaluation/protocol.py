@@ -64,3 +64,17 @@ def forecast(model: ForecastModel, series, context_steps: int) -> tuple[np.ndarr
             f"model predicted shape {prediction.shape}, expected the targets' {targets.shape}"
         )
     return prediction, np.asarray(targets)
+
+
+def check_readable(name: str, data_config: dict) -> None:
+    """For a script outside the training run (a video, a rollout check):
+    `name` must be the validation dataset or a training one (`data_config`
+    is `configs/data/re16k.yaml`). Never the test dataset: it is read once,
+    by the final evaluation."""
+    if name == data_config["test_dataset"]:
+        raise ValueError(
+            f"{name} is the test dataset: it is read once, by the final evaluation, not here"
+        )
+    allowed = [data_config["val_dataset"], *data_config["train_datasets"]]
+    if name not in allowed:
+        raise ValueError(f"{name} is not a validation or training dataset ({allowed})")

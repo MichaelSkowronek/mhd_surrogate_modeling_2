@@ -3,7 +3,11 @@ import pytest
 
 import mlflow
 from mhd_surrogate.models.baselines import MeanField, Persistence
-from mhd_surrogate.training.mlflow_model import log_surrogate, pinned_requirements
+from mhd_surrogate.training.mlflow_model import (
+    load_logged_surrogate,
+    log_surrogate,
+    pinned_requirements,
+)
 
 FRAME = (2, 5, 4)
 
@@ -64,3 +68,16 @@ def test_a_model_adds_its_own_requirements_once():
     pins = pinned_requirements(("equinox", "jax"))
 
     assert [p.split("==")[0] for p in pins] == ["numpy", "jax", "mlflow", "equinox"]
+
+
+def test_load_logged_surrogate_returns_the_model_and_the_run_that_logged_it(tracking, tmp_path):
+    model = fitted_mean_field()
+    model.save(tmp_path / "ckpt")
+    with mlflow.start_run() as run:
+        info = log_surrogate(model, tmp_path / "ckpt", FRAME)
+
+    loaded, run_id = load_logged_surrogate(info.model_id)
+
+    assert run_id == run.info.run_id
+    assert loaded.name == "mean_field"
+    assert (loaded.predict(np.empty((0, *FRAME)), 2) == model.mean).all()

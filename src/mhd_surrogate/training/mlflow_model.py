@@ -86,3 +86,11 @@ def log_surrogate(
         pip_requirements=pinned_requirements(getattr(model, "requirements", ())),
         params={k: str(v) for k, v in (params or {}).items()},
     )
+
+
+def load_logged_surrogate(model_id: str) -> tuple[SurrogateModel, str]:
+    """The surrogate inside the logged model `model_id` (from the current
+    tracking URI), plus the id of the run that logged it."""
+    logged = mlflow.get_logged_model(model_id)
+    pyfunc = mlflow.pyfunc.load_model(f"models:/{model_id}")
+    return pyfunc.unwrap_python_model().model, logged.source_run_id
