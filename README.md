@@ -2549,8 +2549,14 @@ the letter of the rule:
 - Noise 0.03's checkpoint is the top one by luck of its seed (its recipe
   holds 1 time in 3); noise 0.1, seed 0 is the robust recipe's best.
 - A stable validation forecast is necessary but, as noise 0.03 at seed 42
-  showed, not sufficient: the 3000-step rollout should be part of the
-  guardrails before a switch.
+  showed, not sufficient: the long rollout should be part of the
+  guardrails before a switch, and its length and threshold need choosing.
+  Rolled out for 10000 steps, noise 0.1, seed 0 never runs away (energy
+  0.65-1.45x the truth's throughout, 0.70-0.86x over the last 1000 steps),
+  but 9 of its 100 blocks have bursts of small-scale activity just over
+  the 2x line (enstrophy 2.05-2.73x, from step 3300 on), each of which
+  recovers: by the letter of the check it is stable for 3300 steps, by eye
+  it stays on a slightly too energetic attractor.
 - The U-Nets' domain-mean `u_y` wanders slowly instead of oscillating
   (above), which the temporal scores flag but no score decides on.
 
