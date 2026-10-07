@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from mhd_surrogate.evaluation.protocol import check_window, forecast, split_context
+from mhd_surrogate.evaluation.protocol import check_readable, check_window, forecast, split_context
 
 
 class Persistence:
@@ -85,3 +85,18 @@ def test_forecast_rejects_a_prediction_of_the_wrong_shape():
 
     with pytest.raises(ValueError, match="shape"):
         forecast(Wrong(), make_series(10), context_steps=4)
+
+
+DATA_CONFIG = {"train_datasets": ["a", "b"], "val_dataset": "v", "test_dataset": "t"}
+
+
+def test_check_readable_allows_validation_and_training_datasets():
+    check_readable("v", DATA_CONFIG)
+    check_readable("b", DATA_CONFIG)
+
+
+def test_check_readable_refuses_the_test_dataset_and_unknown_names():
+    with pytest.raises(ValueError, match="test dataset"):
+        check_readable("t", DATA_CONFIG)
+    with pytest.raises(ValueError, match="not a validation or training"):
+        check_readable("x", DATA_CONFIG)

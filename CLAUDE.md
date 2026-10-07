@@ -19,7 +19,7 @@ conventions below; it shifts which tools are worth reaching for at all.
 - Organize code by pipeline stage. Under `src/mhd_surrogate/` the
   subpackages are `data/`, `analysis/`, `models/`, `training/`,
   `evaluation/` and `utils/`; under `scripts/` the subdirectories are
-  `data/`, `analysis/`, `viz/` and `training/`. Put new code in the one
+  `data/`, `analysis/`, `viz/`, `training/` and `evaluation/`. Put new code in the one
   matching its stage rather than at the top level of `src/mhd_surrogate/` or
   `scripts/`, and add a new subpackage/subdirectory only when a genuinely new
   stage appears.

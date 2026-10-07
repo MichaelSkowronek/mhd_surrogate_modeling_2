@@ -89,6 +89,7 @@ scripts/             CLI entry points, same split (plus viz/)
   analysis/          check_*.py, run_all_checks, benchmark_backends
   viz/               make_video, make_all_videos, make_forecast_video
   training/          train, tune
+  evaluation/        check_rollout_stability
 tests/               mirrors src/ and scripts/ (data/, analysis/, training/, evaluation/, models/, utils/, viz/)
 dvc.yaml, dvc.lock  data pipeline (raw -> zarr -> stats) and its pinned hashes
 data/raw.dvc         DVC pointer to the raw .npy files (.dvc/ holds the remote config)
@@ -1654,6 +1655,26 @@ neither achievable nor the only thing worth measuring.
   a score (it needs mode matching between prediction and truth and an
   eigendecomposition per frequency), so it stays a plotting diagnostic.
 
+**Long rollouts** (`scripts/evaluation/check_rollout_stability.py`). The
+stability score sees only the scored forecast, 837 steps of the validation
+dataset, but a surrogate is meant to be rolled out for as long as one likes.
+The check rolls a model out for `--steps` steps (1500 by default) from the
+dataset's context, one block at a time (only one block in memory), and
+prints each block's mean energy and enstrophy and their ratio to the
+truth's largest block mean -- the selection rule's reference, so its first
+blocks reproduce `stable_steps`:
+
+```bash
+uv run scripts/evaluation/check_rollout_stability.py --checkpoint models/hankel_dmd/model
+uv run --extra gpu scripts/evaluation/check_rollout_stability.py --model-id m-... \
+    --steps 5000 --block-steps 500
+```
+
+For an autoregressive network, predicting block by block is the same
+rollout as one long `predict` up to float rounding at the block boundaries;
+(Hankel) DMD restarts from the projection of its own last frames at every
+block. The test dataset is refused, like in the forecast videos.
+
 **How big a score is "perfect"?** Scoring a different realization of the same
 flow (train datasets 0 and 10 against the validation targets) -- right
 dynamics, wrong phase -- bounds what the metrics can resolve: spatial spectrum
@@ -2163,7 +2184,7 @@ is far ahead of everything so far: skill horizon 13-15 against Hankel DMD's
 7, RMSE at lead 1 0.08 against 0.28. But its **long rollouts are unstable**:
 the energy error is 11-22 (Hankel DMD: 0.26) and the mean RMSE 4-6. Rolled
 out past the validation dataset from its context (`seed 0` above), the
-domain energy is 1.3x the true level in the first 100 steps, 8x by step 300
+domain energy is 1.2x the true level in the first 100 steps, 6x by step 300
 and still growing at step 1500, with no NaN: the classic drift of a network
 trained only on one-step errors, which never sees its own outputs. Two other
 things: the validation score is noisy from epoch to epoch (seed 0: 8.7,
@@ -2303,20 +2324,24 @@ Against Hankel DMD under the selection rule:
   guardrails.
 
 **Long rollouts are unstable**, for every U-Net trained so far. Rolled out
-from the validation context past the dataset's length (a scratch check:
-the model's own `predict` in 100-step blocks, domain-mean energy and
-enstrophy per block against the true validation range, energy 0.89-0.96):
+from the validation context past the dataset's length (the model's own
+`predict` in 100-step blocks, domain-mean energy per block against the true
+validation range, 0.91-0.95; see "Long rollouts" under "Forecast
+evaluation"):
 
 | steps | 0-100 | 100-200 | 200-300 | 500-600 | 900-1000 | 1400-1500 |
 |---|---|---|---|---|---|---|
-| best trial (#4, 4-step loss): energy | 0.89 | 6.8 | 41 | 383 | 1303 | 2953 |
-| precision run (defaults, 1-step loss): energy | 1.17 | 3.1 | 7.4 | 38 | 90 | 252 |
+| best trial (#4, 4-step loss): energy | 0.97 | 7.1 | 40 | 410 | 1234 | 3140 |
+| precision run (defaults, 1-step loss): energy | 1.15 | 2.9 | 6.1 | 28 | 88 | 226 |
 | Hankel DMD: energy (500-step blocks) | 0.70 (0-500) | | | 0.65 (500-1000) | | 0.65 (1000-1500) |
 
+(Regenerated with `scripts/evaluation/check_rollout_stability.py`, which
+replaced the scratch check; the U-Net rows came out within ~10-30% of the
+scratch numbers, which an unstable rollout amplifies from rounding.)
 No NaN within 1500 steps, but the energy grows without bound in both U-Nets,
 while Hankel DMD's settles at a damped, smooth state (energy 0.65, enstrophy
 6 vs the true 27). Training on a 4-step rollout keeps the first ~100 steps
-on the attractor (energy 0.89) and makes the forecast more accurate at lead
+at about the truth's energy (0.97) and makes the forecast more accurate at lead
 10-40, but it diverges *faster* after that, not slower: a 4-step horizon
 teaches it nothing about step 100.
 

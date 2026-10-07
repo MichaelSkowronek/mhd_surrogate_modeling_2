@@ -5,6 +5,8 @@ from mhd_surrogate.evaluation.diagnostics import enstrophy, kinetic_energy
 from mhd_surrogate.evaluation.stability import (
     block_means,
     energy_and_enstrophy,
+    first_failing_step,
+    rollout_block_means,
     stability_scores,
 )
 
@@ -116,3 +118,53 @@ def test_a_forecast_failing_its_first_block_has_no_stable_steps():
 def test_series_of_different_lengths_are_rejected():
     with pytest.raises(ValueError, match="steps"):
         stability_scores(series_of(np.ones(7)), series_of(np.ones(8)), 4, 2.0)
+
+
+def test_first_failing_step_takes_the_earliest_block_over_any_quantity():
+    ratios = {"energy": np.array([1.0, 1.0, 3.0]), "enstrophy": np.array([1.0, 2.5, 1.0])}
+
+    assert first_failing_step(ratios, 10, 2.0, 25) == 10
+    assert first_failing_step(ratios, 10, 5.0, 25) == 25
+
+
+class Doubling:
+    """Each step doubles the newest frame; reads a window of `window`."""
+
+    def __init__(self, window):
+        self.window = window
+        self.calls = []
+
+    def predict(self, context, n_steps):
+        self.calls.append((len(context), n_steps))
+        last = context[-1]
+        return np.stack([last * 2.0 ** (k + 1) for k in range(n_steps)])
+
+
+def test_rollout_block_means_continue_from_the_models_own_last_frames():
+    rng = np.random.default_rng(1)
+    context = rng.normal(size=(5, 2, 6, 5))
+    model = Doubling(window=2)
+
+    blocks = rollout_block_means(model, context, n_steps=7, block_steps=3, dx=DX, dy=DY)
+
+    # One predict per block, each from the last `window` frames, the last
+    # block shorter; the same as one 7-step rollout.
+    assert model.calls == [(2, 3), (2, 3), (2, 1)]
+    whole = Doubling(window=2).predict(context[-2:], 7)
+    expected = energy_and_enstrophy(whole, DX, DY)
+    assert blocks["energy"] == pytest.approx(block_means(expected["energy"], 3))
+    assert blocks["enstrophy"] == pytest.approx(block_means(expected["enstrophy"], 3))
+
+
+def test_rollout_block_means_of_a_model_without_a_window_pass_it_no_frames():
+    class Constant:
+        window = 0
+
+        def predict(self, context, n_steps):
+            assert len(context) == 0
+            return np.ones((n_steps, 2, 4, 4))
+
+    blocks = rollout_block_means(Constant(), np.zeros((3, 2, 4, 4)), 5, 2, DX, DY)
+
+    assert blocks["energy"] == pytest.approx([1.0, 1.0, 1.0])
+    assert blocks["enstrophy"] == pytest.approx([0.0, 0.0, 0.0])
