@@ -37,15 +37,28 @@ def skill_horizon(curve: np.ndarray, threshold: float) -> int:
     return int(above[0]) if above.size else len(curve)
 
 
-def selection_score(skill: float, rmse_at_tie_break_lead: float) -> float:
-    """One number that ranks candidates like the selection rule: by skill
-    horizon, ties broken by the RMSE at the tie-break lead (CLAUDE.md, "Data
-    analysis"). The RMSE term r / (1 + r) lies in [0, 1) and grows with r, so
-    it orders equal skill horizons without ever outweighing one step of
-    skill (an infinite RMSE scores 1, at worst tying the next skill down): a
-    higher score is a better candidate under the rule. Early stopping and the
-    hyperparameter search maximize it."""
+def selection_score(
+    skill: float, rmse_at_tie_break_lead: float, stable_steps: float, n_steps: int
+) -> float:
+    """One number that ranks candidates like the selection rule (CLAUDE.md,
+    "Data analysis"): by stable steps (how long the forecast stays bounded,
+    `evaluation.stability`), then by skill horizon, ties broken by the RMSE
+    at the tie-break lead. A higher score is a better candidate under the
+    rule; early stopping and the hyperparameter search maximize it.
+
+    The RMSE term r / (1 + r) lies in [0, 1) and grows with r, so it orders
+    equal skill horizons without ever outweighing one step of skill (an
+    infinite RMSE scores 1, at worst tying the next skill down). Skill minus
+    that term lies in (-1, n_steps] for a forecast of `n_steps` steps, so
+    weighting the stable steps by n_steps + 1 makes one more stable step
+    outweigh any skill and RMSE (again tying at worst for an infinite RMSE).
+    Scores are therefore comparable only between forecasts of the same
+    length, i.e. on the same dataset."""
     r = rmse_at_tie_break_lead
     if not r >= 0:  # also catches NaN
         return float("-inf")
-    return float(skill) - (1.0 if math.isinf(r) else r / (1.0 + r))
+    return (
+        float(stable_steps) * (n_steps + 1)
+        + float(skill)
+        - (1.0 if math.isinf(r) else r / (1.0 + r))
+    )

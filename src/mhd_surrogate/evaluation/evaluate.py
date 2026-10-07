@@ -7,9 +7,15 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from mhd_surrogate.evaluation.diagnostics import DEFAULT_CHUNK_T, NPERSEG, compare_diagnostics
+from mhd_surrogate.evaluation.diagnostics import (
+    DEFAULT_CHUNK_T,
+    NPERSEG,
+    compare_summaries,
+    series_summary,
+)
 from mhd_surrogate.evaluation.metrics import rmse_per_step, selection_score, skill_horizon
 from mhd_surrogate.evaluation.protocol import ForecastModel, forecast
+from mhd_surrogate.evaluation.stability import QUANTITIES, energy_and_enstrophy, stability_scores
 
 
 def train_eval_datasets(requested: list[str], train_datasets: list[str]) -> list[str]:
@@ -66,6 +72,8 @@ def evaluate(
     scale: np.ndarray,
     skill_threshold: float,
     report_leads: list[int],
+    block_steps: int,
+    max_ratio: float,
     chunk_t: int = DEFAULT_CHUNK_T,
     nperseg: int = NPERSEG,
 ) -> Evaluation:
@@ -74,7 +82,8 @@ def evaluate(
     RMSE is scaled per channel by `scale` (the training std), so 1.0 means an
     error as large as the flow's own variability. `report_leads` (1-based) are
     also reported as scalars, `rmse_lead_<n>`; leads past the forecast are
-    skipped.
+    skipped. `block_steps` and `max_ratio` configure the stability check
+    (`stability.stability_scores`).
     """
     timed = _TimedModel(model)
     prediction, targets = forecast(timed, series, context_steps)
@@ -86,7 +95,17 @@ def evaluate(
     for lead in report_leads:
         if 1 <= lead <= len(rmse):
             scores[f"rmse_lead_{lead}"] = float(rmse[lead - 1])
-    scores.update(compare_diagnostics(prediction, targets, dx, dy, chunk_t, nperseg))
+    pred = series_summary(prediction, dx, dy, chunk_t)
+    true = series_summary(targets, dx, dy, chunk_t)
+    scores.update(compare_summaries(pred, true, nperseg))
+    scores.update(
+        stability_scores(
+            {q: pred[q] for q in QUANTITIES},
+            {q: true[q] for q in QUANTITIES},
+            block_steps,
+            max_ratio,
+        )
+    )
     return Evaluation(scores=scores, rmse=rmse, predict_seconds=timed.seconds)
 
 
@@ -97,13 +116,18 @@ def selection_scores(
     scale: np.ndarray,
     skill_threshold: float,
     tie_break_lead: int,
+    dx: float,
+    dy: float,
+    block_steps: int,
+    max_ratio: float,
     chunk_t: int = DEFAULT_CHUNK_T,
 ) -> dict[str, float]:
     """The scores the selection rule ranks by, without the physics
-    diagnostics: `skill_horizon`, `rmse_lead_<tie_break_lead>` and their
-    combination `selection_score`. Cheap enough to run during training
-    (early stopping, the hyperparameter search); `evaluate` scores the final
-    model in full."""
+    guardrails: `skill_horizon`, `rmse_lead_<tie_break_lead>`, the stability
+    scores (`stable_steps` and the peak ratios) and their combination
+    `selection_score`. Cheap enough to run during training (early stopping,
+    the hyperparameter search; the stability check adds ~3 s to an 837-step
+    validation forecast); `evaluate` scores the final model in full."""
     prediction, targets = forecast(model, series, context_steps)
     # A chunk of lead times at a time: the per-step float64 error of a whole
     # ~840-step forecast would take ~6 GB of temporaries, at every validation.
@@ -115,8 +139,15 @@ def selection_scores(
     )
     skill = skill_horizon(rmse, skill_threshold)
     tie_break = float(rmse[min(tie_break_lead, len(rmse)) - 1])
+    stability = stability_scores(
+        energy_and_enstrophy(prediction, dx, dy, chunk_t),
+        energy_and_enstrophy(targets, dx, dy, chunk_t),
+        block_steps,
+        max_ratio,
+    )
     return {
         "skill_horizon": float(skill),
         f"rmse_lead_{tie_break_lead}": tie_break,
-        "selection_score": selection_score(skill, tie_break),
+        **stability,
+        "selection_score": selection_score(skill, tie_break, stability["stable_steps"], len(rmse)),
     }

@@ -179,9 +179,11 @@ class ValidationMonitor:
         self.series = series
         self.frames: np.ndarray | None = None
         self.scale = scale
+        self.dx, self.dy = grid_spacing(series.shape[2], series.shape[3])
         self.context_steps = cfg.data.context_steps
         self.skill_threshold = cfg.evaluation.skill_threshold
         self.tie_break_lead = cfg.evaluation.tie_break_lead
+        self.stability = cfg.evaluation.stability
 
     def __call__(self, model) -> dict[str, float]:
         if self.frames is None:
@@ -193,6 +195,10 @@ class ValidationMonitor:
             self.scale,
             self.skill_threshold,
             self.tie_break_lead,
+            self.dx,
+            self.dy,
+            self.stability.block_steps,
+            self.stability.max_ratio,
         )
 
 
@@ -213,6 +219,8 @@ def _score_and_log(
         scale=scale,
         skill_threshold=cfg.evaluation.skill_threshold,
         report_leads=list(cfg.evaluation.report_leads),
+        block_steps=cfg.evaluation.stability.block_steps,
+        max_ratio=cfg.evaluation.stability.max_ratio,
     )
     eval_seconds = time.perf_counter() - start
     log.info("evaluated on %s in %.1f s", name, eval_seconds)

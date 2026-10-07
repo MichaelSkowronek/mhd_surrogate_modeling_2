@@ -8,9 +8,18 @@
 # report_leads: lead times (1-based) also logged as scalars, besides the full
 #   per-step curve; 40 is the longest characteristic period found in the EDA.
 #
-# tie_break_lead: candidates are ranked by skill horizon, ties broken by the
-#   RMSE at this lead (CLAUDE.md, "Data analysis"); early stopping and the
-#   hyperparameter search maximize the two combined (`selection_score`).
+# stability: how long the forecast stays bounded
+#   (src/mhd_surrogate/evaluation/stability.py). The forecast is cut into
+#   `block_steps`-step blocks; a block fails when its mean kinetic energy or
+#   enstrophy exceeds `max_ratio` times the truth's largest block mean, and
+#   `stable_steps` counts the steps before the first failing block. The
+#   truth's own 100-step block means vary by ~5% (energy) and ~18%
+#   (enstrophy) on the validation dataset, so 2x is a blow-up, not noise.
+#
+# tie_break_lead: candidates are ranked by stable steps, then by skill
+#   horizon, ties broken by the RMSE at this lead (CLAUDE.md, "Data
+#   analysis"); early stopping and the hyperparameter search maximize the
+#   three combined (`selection_score`).
 #
 # train_datasets: train datasets also scored the same way, logged as
 #   `train.<name>.*` -- a sanity check of the fit and the train/val gap, not
@@ -18,5 +27,8 @@
 #   data.train_datasets.
 skill_threshold: 0.5
 report_leads: [1, 10, 40, 100]
+stability:
+  block_steps: 100
+  max_ratio: 2.0
 tie_break_lead: 10
 train_datasets: [re16k_t400_0]

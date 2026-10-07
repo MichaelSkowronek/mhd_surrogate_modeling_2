@@ -59,6 +59,8 @@ def run(model, series, **kwargs):
         scale=np.array([1.0, 1.0]),
         skill_threshold=0.5,
         report_leads=[1, 5, 100],
+        block_steps=5,
+        max_ratio=2.0,
         chunk_t=8,
         nperseg=8,
     )
@@ -75,6 +77,8 @@ def test_a_perfect_forecast_has_zero_error_and_full_skill():
     assert result.scores["rmse_mean"] == pytest.approx(0.0)
     assert result.scores["skill_horizon"] == 20
     assert result.scores["energy_rel_error"] == pytest.approx(0.0, abs=1e-12)
+    assert result.scores["stable_steps"] == 20
+    assert result.scores["energy_peak_ratio"] == pytest.approx(1.0)
 
 
 def test_scores_include_reported_leads_and_skip_leads_past_the_forecast():
@@ -146,24 +150,47 @@ class Offset:
         return self.future[:n_steps] + self.offset(leads)[:, None, None, None]
 
 
+class Growing:
+    """Predicts the true continuation scaled by `growth ** lead`: a forecast
+    whose energy grows without bound."""
+
+    window = 0
+
+    def __init__(self, series, context_steps, growth):
+        self.future = series[context_steps:]
+        self.growth = growth
+
+    def predict(self, context, n_steps):
+        factor = self.growth ** np.arange(1, n_steps + 1, dtype=float)
+        return self.future[:n_steps] * factor[:, None, None, None]
+
+
+def select(model, series, tie_break_lead=10, **kwargs):
+    defaults = dict(dx=DX, dy=DY, block_steps=5, max_ratio=2.0)
+    return selection_scores(
+        model, series, 10, np.array([1.0, 1.0]), 0.5, tie_break_lead, **{**defaults, **kwargs}
+    )
+
+
 def test_selection_scores_match_the_skill_horizon_and_the_tie_break_lead():
     series = make_series()
     # Error 0.1 * lead: within the 0.5 threshold up to lead 5.
     model = Offset(series, 10, lambda lead: 0.1 * lead)
 
-    scores = selection_scores(model, series, 10, np.array([1.0, 1.0]), 0.5, tie_break_lead=10)
+    scores = select(model, series)
 
     assert scores["skill_horizon"] == 5
     assert scores["rmse_lead_10"] == pytest.approx(1.0)
-    assert scores["selection_score"] == pytest.approx(selection_score(5, 1.0))
+    # The offset adds o**2 to the energy (~1 for this noise): the third
+    # block's mean (o = 1.1..1.5) is the first over 2x the truth's.
+    assert scores["stable_steps"] == 10
+    assert scores["selection_score"] == pytest.approx(selection_score(5, 1.0, 10, 20))
 
 
 def test_selection_scores_use_the_last_lead_when_the_forecast_is_shorter():
     series = make_series(n=15)  # 5 scored steps
 
-    scores = selection_scores(
-        Offset(series, 10, lambda lead: lead), series, 10, np.array([1.0, 1.0]), 0.5, 10
-    )
+    scores = select(Offset(series, 10, lambda lead: lead), series)
 
     assert scores["rmse_lead_10"] == pytest.approx(5.0)
 
@@ -174,7 +201,36 @@ def test_selection_scores_rmse_does_not_depend_on_the_chunk_size(chunk_t):
     model = Offset(series, 10, lambda lead: 0.07 * lead)
     expected = run(model, series).rmse
 
-    scores = selection_scores(model, series, 10, np.array([1.0, 1.0]), 0.5, 10, chunk_t=chunk_t)
+    scores = select(model, series, chunk_t=chunk_t)
 
     assert scores["skill_horizon"] == 7
     assert scores["rmse_lead_10"] == expected[9]
+
+
+def test_a_blowing_up_forecast_loses_its_stable_steps_and_ranks_below_a_stable_one():
+    series = make_series()
+    # Energy grows as 1.1 ** (2 * lead): the second 5-step block's mean is
+    # over 2x the truth's (white noise, so its block means are all ~1).
+    blowing_up = Growing(series, 10, 1.1)
+    # Off by 0.6 everywhere: no skill (RMSE over 0.5), but bounded.
+    stable = Offset(series, 10, lambda lead: 0.6 + 0.0 * lead)
+
+    unstable_scores = select(blowing_up, series)
+    stable_scores = select(stable, series)
+
+    assert unstable_scores["stable_steps"] == 5
+    assert unstable_scores["energy_peak_ratio"] > 2.0
+    assert stable_scores["stable_steps"] == 20
+    assert unstable_scores["skill_horizon"] > stable_scores["skill_horizon"] == 0
+    assert unstable_scores["selection_score"] < stable_scores["selection_score"]
+
+
+def test_evaluate_and_selection_scores_agree_on_stability():
+    series = make_series()
+    model = Growing(series, 10, 1.1)
+
+    full = run(model, series).scores
+    monitor = select(model, series)
+
+    for key in ("stable_steps", "energy_peak_ratio", "enstrophy_peak_ratio"):
+        assert full[key] == pytest.approx(monitor[key])

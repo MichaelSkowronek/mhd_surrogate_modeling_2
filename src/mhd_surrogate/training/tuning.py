@@ -11,9 +11,10 @@ around it.
   search's `sweep` name, with a checkpoint, logged model and full validation
   scores if it finishes.
 - After every validation the trial reports its selection scores to Tune.
-  The metric is `selection_score`: the selection rule (skill horizon,
-  ties broken by the RMSE at lead 10) as one number, the same one early
-  stopping maximizes, so the search optimizes what models are chosen by.
+  The metric is `selection_score`: the selection rule (stable steps, then
+  skill horizon, ties broken by the RMSE at lead 10) as one number, the
+  same one early stopping maximizes, so the search optimizes what models
+  are chosen by.
 - Optuna's TPE sampler proposes the next configuration from the finished
   and running ones; ASHA (asynchronous successive halving) stops trials
   whose score after `grace_period`, `grace_period * reduction_factor`, ...
