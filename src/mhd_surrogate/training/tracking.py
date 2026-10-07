@@ -12,15 +12,24 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from mlflow.utils.mlflow_tags import MLFLOW_GIT_COMMIT
+
 import mlflow
 from mhd_surrogate.training.mlflow_utils import flatten_for_mlflow
 
 log = logging.getLogger(__name__)
+
+# The commit the container image was built from (the Dockerfile's
+# GIT_COMMIT build arg). The image has no git or .git, so MLflow can't detect
+# it, and reading a mounted .git would give the checkout's current commit,
+# not the one baked into the image.
+IMAGE_COMMIT_ENV = "MHD_GIT_COMMIT"
 
 
 class DivergenceError(RuntimeError):
@@ -53,11 +62,18 @@ def tracked_run(
     training run, see `resumed_run_id`) and tagged `resumed`; the config
     must be the one it was started with, as MLflow refuses to change a
     logged param's value.
+
+    A new run started in the container image is tagged with the image's
+    commit (`IMAGE_COMMIT_ENV`) as `mlflow.source.git.commit`, the tag
+    MLflow sets itself from git outside the container. Like MLflow's own
+    tag, it's set only when a run is created, not on resume.
     """
     mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(experiment_name)
 
-    with mlflow.start_run(run_id=run_id, run_name=None if run_id else run_name) as run:
+    image_commit = os.environ.get(IMAGE_COMMIT_ENV)
+    tags = {MLFLOW_GIT_COMMIT: image_commit} if image_commit and run_id is None else None
+    with mlflow.start_run(run_id=run_id, run_name=None if run_id else run_name, tags=tags) as run:
         log.info("mlflow run: %s (experiment: %s)", run.info.run_id, experiment_name)
         if run_id is not None:
             mlflow.set_tag("resumed", "true")

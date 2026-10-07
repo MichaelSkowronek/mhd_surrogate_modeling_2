@@ -7,6 +7,8 @@
 .ruff_cache
 **/__pycache__
 data
+# Except the raw data's DVC pointer (the test image's test_versioning.py).
+!data/raw.dvc
 reports/figures
 reports/videos
 reports/summaries

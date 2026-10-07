@@ -196,6 +196,11 @@ conventions below; it shifts which tools are worth reaching for at all.
     the existing MLflow stack (`postgres/`, `seaweedfs/` under `mlflow/`),
     not a Docker-managed named volume that a `down -v` or volume prune can
     silently delete.
+- Build the image with `GIT_COMMIT=$(git rev-parse HEAD) docker compose
+  build`: the image has no git, so runs started in it get their MLflow
+  source-commit tag from that build arg (`tracked_run`); without it they're
+  untagged. Don't add git or mount `.git` instead: the checkout's current
+  commit needn't be the one the image was built from.
 - See the README's "Docker" section for the full rationale and the
   tracking-stack architecture.
 

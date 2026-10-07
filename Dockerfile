@@ -56,8 +56,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY scripts ./scripts
 COPY configs ./configs
 COPY tests ./tests
-# tests/training/test_dvc_train_stage.py checks the train stage's deps.
-COPY dvc.yaml ./
+# tests/training/test_dvc_train_stage.py checks the train stage's deps;
+# tests/data/test_versioning.py parses the committed dvc.lock and raw.dvc.
+COPY dvc.yaml dvc.lock ./
+COPY data/raw.dvc ./data/
 ENV PATH="/app/.venv/bin:$PATH"
 CMD ["pytest"]
 
@@ -75,8 +77,9 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     MPLCONFIGDIR=/tmp/matplotlib \
     GIT_PYTHON_REFRESH=quiet
-# GIT_PYTHON_REFRESH: MLflow imports GitPython to record the source commit;
-# the slim image has no git binary, so silence its startup warning.
+# GIT_PYTHON_REFRESH: MLflow imports GitPython to detect the source commit;
+# the image has no git binary (nor .git), so silence its startup warning.
+# The commit comes from the GIT_COMMIT build arg instead, see the end.
 
 WORKDIR /app
 COPY --from=builder --chown=app:app /app/.venv ./.venv
@@ -89,6 +92,15 @@ COPY --chown=app:app configs ./configs
 # inherits the right ownership.
 RUN mkdir -p data reports/figures reports/videos reports/summaries outputs models .jax_cache \
     && chown -R app:app data reports outputs models .jax_cache
+
+# The commit the image is built from, for MLflow's source-commit tag
+# (training/tracking.py) and the OCI revision label. Passed in by compose
+# (`GIT_COMMIT=$(git rev-parse HEAD) docker compose build`) and CI; empty
+# if not given, and runs are then not tagged. Declared last so a new commit
+# rebuilds no layers, only the image metadata.
+ARG GIT_COMMIT=""
+ENV MHD_GIT_COMMIT=${GIT_COMMIT}
+LABEL org.opencontainers.image.revision=${GIT_COMMIT}
 
 USER ${UID}:${GID}
 CMD ["python", "scripts/training/train.py"]

@@ -4,6 +4,7 @@ import pytest
 
 import mlflow
 from mhd_surrogate.training.tracking import (
+    IMAGE_COMMIT_ENV,
     DivergenceError,
     resumed_run_id,
     save_run_record,
@@ -129,3 +130,40 @@ def test_run_record_refuses_a_different_config_and_names_what_changed(tmp_path):
 def test_resuming_without_a_run_record_fails(tmp_path):
     with pytest.raises(FileNotFoundError, match="no resumable training run"):
         resumed_run_id(tmp_path, {})
+
+
+def test_image_commit_is_the_run_source_commit(uri, monkeypatch):
+    monkeypatch.setenv(IMAGE_COMMIT_ENV, "abc123")
+    with tracked_run(uri, "exp", {}) as run:
+        pass
+
+    finished, _ = _run(uri, run.info.run_id)
+    assert finished.data.tags["mlflow.source.git.commit"] == "abc123"
+
+
+def test_resume_keeps_the_original_source_commit(uri, monkeypatch):
+    monkeypatch.setenv(IMAGE_COMMIT_ENV, "abc123")
+    with tracked_run(uri, "exp", {}) as run:
+        pass
+    monkeypatch.setenv(IMAGE_COMMIT_ENV, "def456")
+    with tracked_run(uri, "exp", {}, run_id=run.info.run_id):
+        pass
+
+    finished, _ = _run(uri, run.info.run_id)
+    assert finished.data.tags["mlflow.source.git.commit"] == "abc123"
+
+
+def test_no_image_commit_leaves_the_tag_to_mlflow(uri, monkeypatch):
+    # Whatever MLflow detects itself: HEAD in a git checkout, nothing in the
+    # test image (no git there).
+    monkeypatch.delenv(IMAGE_COMMIT_ENV, raising=False)
+    with tracked_run(uri, "exp", {}) as run:
+        pass
+    with mlflow.start_run() as plain:
+        pass
+
+    finished, _ = _run(uri, run.info.run_id)
+    detected, _ = _run(uri, plain.info.run_id)
+    assert finished.data.tags.get("mlflow.source.git.commit") == detected.data.tags.get(
+        "mlflow.source.git.commit"
+    )
