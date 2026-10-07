@@ -36,9 +36,10 @@ Tune hyperparameter search (Optuna + ASHA; see "U-Net"). Its first search
 beats Hankel DMD on the short horizon (skill horizon 15 vs 7) but its long
 rollouts blow up, failing the physics guardrails, so Hankel DMD stays
 canonical. Selection now ranks by how long a forecast stays bounded first
-(see "How candidates are ranked"), so early stopping and the search no
-longer reward a model that blows up; making the U-Net's rollout stable is
-next.
+(see "How candidates are ranked"), and with noise on its training inputs
+the U-Net is stable over 3000-step rollouts and passes every guardrail
+(skill horizon 10-12 against Hankel DMD's 7; see "Input noise"), making it
+the candidate to replace Hankel DMD as the canonical model.
 
 ## Setup
 
@@ -2116,7 +2117,8 @@ of the domain.
   matters over a long forecast. Each step is rematerialized
   (`jax.checkpoint`), so memory grows by one step's activations at most,
   but time grows linearly (1.3 s/step for 4 steps at batch 8, vs 0.32 s for one).
-- *Input noise* (`input_noise_std`, normalized units, off by default):
+- *Input noise* (`input_noise_std`, normalized units, 0.1 by default; see
+  "Input noise" below for why that value):
   Gaussian noise on each training window's true input frames, the targets
   left clean, so the network learns to pull a perturbed state back toward
   the flow instead of carrying the perturbation on. A rollout feeds on its
@@ -2185,11 +2187,15 @@ dataset and the forecast, ~1 GB each; the forecast is post-processed on the
 GPU and copied once, and its error is computed a chunk of lead times at a
 time), ~10 GB peak overall.
 
-**Status.** Trained (precision check below) and searched once (see "First
-search"): on the short horizon it beats Hankel DMD by a wide margin (skill
-horizon 15 vs 7), but its long rollouts are unstable and it fails the
-physics guardrails, so Hankel DMD stays canonical. The defaults in
-`configs/model/unet.yaml` are still the hand-picked starting point. The
+**Status.** Trained (precision check below), searched once (see "First
+search") and stabilized with input noise (see "Input noise"). Before the
+noise: on the short horizon it beat Hankel DMD by a wide margin (skill
+horizon 15 vs 7), but its long rollouts were unstable and it failed the
+physics guardrails. With noise 0.1 it is stable over 3000-step rollouts
+(3 seeds of 3) and passes every guardrail with skill horizon 10-12; Hankel
+DMD stays canonical until that switch is decided (see "Input noise"). The
+defaults in `configs/model/unet.yaml` are the hand-picked starting point
+plus input noise 0.1. The
 U-Net isn't a DVC stage: only the canonical model is, and the U-Net becomes
 canonical only if it beats Hankel DMD on validation. `training/trainer.py` and
 `training/tuning.py` aren't dependencies of the current `train` stage, so
@@ -2426,6 +2432,136 @@ The losing trials' checkpoints were pruned after the search (CLAUDE.md's
 sweep rules): trials 1 and 2's logged models and `model/` directories (runs
 tagged `checkpoint_pruned`), and every losing trial's `training_state/`.
 The best trial's checkpoint is kept.
+
+#### Input noise (2026-10-07)
+
+```bash
+uv run --extra gpu scripts/training/train.py -m model=unet \
+    'model.input_noise_std=0.1,0.3,0.03,0.0' model.training.max_epochs=30
+uv run --extra gpu scripts/evaluation/check_rollout_stability.py \
+    --checkpoint outputs/multirun/<date>/<time>/<n>/model --steps 3000
+```
+
+With the selection rule now ranking by stable steps first, the U-Net was
+retried with the cheapest standard fix for autoregressive drift: Gaussian
+noise on the training inputs (`model.input_noise_std`, see "U-Net"). The
+defaults otherwise (width 32, depth 4, window 4, one-step loss, lr 1e-3),
+seed 42, 30 epochs, patience 8; sweep `12-15-40`. Validation, at each run's
+selected epoch, plus a 3000-step rollout of its checkpoint
+(`check_rollout_stability.py`, 100-step blocks):
+
+| input noise | selected / last epoch | stable steps (val) | skill horizon | RMSE lead 1 / 10 / 40 | energy / enstrophy error | spectrum distance (x / y) | stable steps (train dataset) | 3000-step rollout |
+|---|---|---|---|---|---|---|---|---|
+| 0 (control) | 10 / 18 | 200 | 13 | 0.080 / 0.392 / 0.89 | 25.6 / 62.5 | 0.93 / 2.59 | 200 | unstable from 200 (energy 1650x by 3000) |
+| 0.03 | 20 / 28 | 837 | 11 | 0.072 / 0.440 / 0.87 | 0.165 / 0.547 | 0.81 / 0.63 | 300 | unstable from 300 |
+| **0.1** | **5 / 13** | **837** | **10** | 0.091 / **0.486** / 0.93 | **0.129 / 0.244** | **1.35 / 0.73** | **1168 (all)** | **stable** (energy 0.95-1.25x the truth's) |
+| 0.3 | 7 / 15 | 837 | 7 | 0.108 / 0.705 / 1.28 | 0.317 / 0.021 | 0.62 / 0.69 | 300 | stable, damped (energy 0.47-0.88x) |
+| *Hankel DMD (canonical)* | | *837* | *7* | *0.281 / 0.571 / 0.58* | *0.264 / 0.728* | *2.62 / 2.10* | *1168* | *stable, damped (0.68-0.81x)* |
+
+**Noise makes the U-Net stable.** Without it, no epoch of any U-Net so far
+stayed bounded past 200-300 validation steps (500 with the full schedule,
+below). With noise 0.1, the selected model stays on the attractor for the
+whole validation forecast, the training dataset's (1168 steps) and a
+3000-step rollout, its energy within 25% of the truth's throughout -- the
+first U-Net that does. Under the
+selection rule it ranks above Hankel DMD (equal stable steps, skill
+horizon 10 vs 7, RMSE at lead 10 0.486 vs 0.571) and passes every
+guardrail with a margin: energy and enstrophy error 0.13 and 0.24 against
+Hankel DMD's 0.26 and 0.73, spectrum distances 1.35 / 0.73 against 2.62 /
+2.10. The price is short-horizon accuracy: skill 10 against the noise-free
+U-Net's 13-15, because the network now also learns to undo perturbations.
+Too much noise (0.3) damps the flow; too little (0.03) leaves it only
+marginally stable.
+
+**Stability on one validation forecast can be luck.** Stable steps flip
+between consecutive epochs of the same run (noise 0.1: 0, 837, 0, 200,
+837, 100, 0, ...), and noise 0.03's selected epoch, stable over the
+validation forecast, diverges from step 300 in the block-wise rollout,
+whose only difference is float rounding where the blocks join, and in the
+training dataset's forecast. A marginally stable model passes or fails the
+check depending on which trajectory it happens to take. Two consequences:
+early stopping on a flipping score keeps an early lucky epoch and stops
+before the learning rate has decayed (noise 0.1 stopped at epoch 13 of
+30), and a candidate should also pass the long rollout before it replaces
+the incumbent.
+
+**The domain-mean `u_y` drifts.** The truth's domain-mean cross-stream
+velocity stays at 0 +- 0.006, oscillating with the EDA's ~25-step period.
+The forecasts of these four models drift away from it (time means of
+0.06-0.64 over the validation forecast; noise 0.1's is 0.10, a quarter of
+`u_y`'s per-pixel std of 0.42 and ~20x the amplitude of the truth's
+coherent oscillation). The temporal scores show it as `u_y_period_error`
+6.806, which every U-Net ever trained has: the slow drift puts the Welch
+peak in the lowest-frequency bin, which `interpolated_peak` returns
+unrefined (period 200, the segment length; 200 / 25.6 - 1 = 6.806). It is a
+spurious net cross-stream flow, not an oscillation, and neither the
+stability check nor the guardrails see it. (The fully trained models below
+drift far less; see there.)
+
+**Seeds and the full schedule** (sweep `13-40-27`). Two questions the
+first sweep left open: is noise 0.1's stability luck of one seed, and is it
+the noise or just the learning rate decaying (the noise-free run had
+stopped early, at epoch 18)? Each setting again with seeds 0 and 1, all 30
+epochs (`model.training.patience=30`, so early stopping can't end a run
+before the cosine schedule has decayed; the best epoch is still the one
+kept):
+
+| input noise | seed | selected epoch | stable steps (val) | skill horizon | RMSE lead 1 / 10 / 40 | energy / enstrophy error | spectrum distance (x / y) | stable steps (train dataset) | 3000-step rollout |
+|---|---|---|---|---|---|---|---|---|---|
+| 0 | 0 | 23 | 500 | 14 | 0.071 / 0.369 / 0.65 | 0.073 / 2.13 | 0.66 / 1.03 | 200 | unstable from 400 (energy 556x by 3000) |
+| 0 | 1 | 21 | 400 | 11 | 0.071 / 0.452 / 0.81 | 0.970 / 3.87 | 0.59 / 1.57 | 400 | unstable from 400 (54x) |
+| 0.03 | 0 | 22 | 837 | 13 | 0.069 / 0.418 / 0.75 | 0.230 / 0.362 | 0.72 / 0.79 | 1168 | stable (energy 0.71-0.88x, enstrophy 0.97-1.24x) |
+| 0.03 | 1 | 21 | 600 | 12 | 0.072 / 0.420 / 0.76 | 0.126 / 1.01 | 0.77 / 0.75 | 800 | over 2x from 700 (enstrophy up to 5.3x, then back to ~1.4x) |
+| **0.1** | **0** | **25** | **837** | **12** | 0.073 / **0.416** / 1.05 | **0.162 / 0.306** | **0.69 / 0.78** | **1168** | **stable** (energy 0.65-1.14x, enstrophy 0.88-1.94x) |
+| 0.1 | 1 | 12 | 837 | 11 | 0.080 / 0.475 / 0.89 | 0.240 / 0.625 | 1.28 / 0.74 | 1168 | stable (energy 1.13-1.33x, enstrophy 1.14-1.84x) |
+
+Over the three seeds (42, 0, 1), the selected checkpoint survives the
+3000-step rollout **3 of 3 times with noise 0.1, 1 of 3 with 0.03 and 0 of
+3 without noise**. The full schedule alone doesn't do it: the noise-free
+runs' late epochs blow up more slowly (energy peaks of 1.3-40x instead of
+hundreds), but none stays bounded over the validation forecast, and their
+enstrophy -- the small scales -- runs away first (13-15x at the selected
+epochs). Noise 0.1 is the setting that works, and it is now the default
+(`configs/model/unet.yaml`). What it doesn't fix completely is the small
+scales: seed 1's late epochs keep their energy within 1.4x of the truth's
+but carry 4.5-7.5x its enstrophy, so its best stable epoch is an early one
+(12), and its spectrum distance along x is the worst of the three.
+
+The fully trained noise models also mostly lose the domain-mean `u_y`
+drift: their time means are -0.030 (noise 0.03, seed 0), -0.0002 and 0.006
+(noise 0.1, seeds 0 and 1) instead of 0.06-0.64. It still wanders slowly,
+though, with 2-4x the truth's variability (std 0.011-0.021 against 0.0055),
+and the lowest frequencies dominate its spectrum instead of the truth's
+25.6-step oscillation -- hence the same 6.806 period error.
+
+**Against Hankel DMD.** By the selection rule the top checkpoint is noise
+0.03, seed 0 (skill horizon 13), then noise 0.1, seed 0 (12, RMSE at lead
+10 0.416): both stable over the validation forecast, both through every
+guardrail by a wide margin (energy and enstrophy error 0.23 / 0.36 and 0.16
+/ 0.31 against Hankel DMD's 0.26 / 0.73; spectrum distances 0.7-0.8
+against 2.1-2.6), both stable over 3000 steps. Every noise-0.1 checkpoint,
+and both noise-0.03 ones stable over the validation forecast (seed 42's
+included, though it diverges in the long rollout), would replace Hankel DMD
+under the rule as written. **The canonical model is unchanged** -- that switch is a separate
+decision, and three things argue for making it deliberately rather than by
+the letter of the rule:
+
+- Noise 0.03's checkpoint is the top one by luck of its seed (its recipe
+  holds 1 time in 3); noise 0.1, seed 0 is the robust recipe's best.
+- A stable validation forecast is necessary but, as noise 0.03 at seed 42
+  showed, not sufficient: the 3000-step rollout should be part of the
+  guardrails before a switch.
+- The U-Nets' domain-mean `u_y` wanders slowly instead of oscillating
+  (above), which the temporal scores flag but no score decides on.
+
+Cost: ~57 s per epoch including its validation, ~31 min for 30 epochs and
+the final scoring; a 3000-step rollout check takes ~35 s on the GPU (it
+needs one: an 837-step U-Net forecast on the CPU hadn't finished after 45
+minutes).
+
+The losing checkpoints of both sweeps were pruned (CLAUDE.md's sweep
+rules); the kept ones are noise 0.1 at seeds 42, 0 and 1 and noise 0.03 at
+seed 0 (the stable candidates).
 
 ## Docker
 
