@@ -8,6 +8,7 @@ from mhd_surrogate.models.base import FitHooks
 from mhd_surrogate.models.neural import (
     AutoregressiveSurrogate,
     Frame,
+    add_input_noise,
     coordinate_channels,
     crop,
     pad_to_multiple,
@@ -156,6 +157,47 @@ def test_rollout_loss_ignores_constant_and_padding_pixels():
     assert float(loss) == pytest.approx(1.0)
 
 
+def test_input_noise_perturbs_only_the_counted_pixels_of_the_input_frames():
+    constant = np.zeros((2, 8, 8), dtype=bool)
+    constant[:, 0, :] = True
+    batch = jnp.zeros((64, 3, 2, 8, 8))  # window 2, 1 target
+
+    noisy = add_input_noise(batch, 2, 0.5, frame((2, 8, 8), constant), jax.random.key(0))
+
+    inputs = np.asarray(noisy[:, :2])
+    assert np.all(noisy[:, 2] == 0.0)  # the target stays clean
+    assert np.all(inputs[:, :, :, 0, :] == 0.0)  # constant pixels too
+    assert np.std(inputs[:, :, :, 1:, :]) == pytest.approx(0.5, rel=0.03)
+
+
+def test_rollout_loss_with_input_noise_is_the_noise_variance_for_an_exact_model():
+    """A model that adds nothing predicts its (noisy) input: off by the
+    noise, so the loss is ~noise_std**2; without noise it is exact."""
+
+    class Zero(eqx.Module):
+        def __call__(self, x):
+            return jnp.zeros((2, *x.shape[1:]))
+
+    batch = jnp.zeros((256, 2, 2, 8, 8))
+    key = jax.random.key(1)
+
+    clean = rollout_loss(Zero(), frame((2, 8, 8)), batch, 1, jnp.float32, 0.0, key)
+    noisy = rollout_loss(Zero(), frame((2, 8, 8)), batch, 1, jnp.float32, 0.2, key)
+
+    assert float(clean) == 0.0
+    assert float(noisy) == pytest.approx(0.04, rel=0.05)
+
+
+def test_input_noise_trains_and_is_kept_in_the_checkpoint(tmp_path):
+    model = small_model(input_noise_std=0.1)
+
+    model.fit(wave_datasets())
+    model.save(tmp_path)
+
+    assert np.all(np.isfinite(model.predict(wave_datasets()["d0"][:2], 4)))
+    assert load_model(tmp_path).input_noise_std == 0.1
+
+
 # -- the model ------------------------------------------------------------------
 
 
@@ -256,6 +298,7 @@ def test_seed_is_the_trainer_seed_too():
     [
         ({"window": 0}, "window"),
         ({"rollout_steps": 0}, "rollout_steps"),
+        ({"input_noise_std": -0.1}, "input_noise_std"),
         ({"compute_dtype": "int8"}, "dtype"),
         ({"host_dtype": "float64"}, "dtype"),
     ],

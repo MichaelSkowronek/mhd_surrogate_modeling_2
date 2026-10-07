@@ -1,10 +1,12 @@
 """Gradient-descent training loop for neural surrogates.
 
 Generic over the network: a model hands `train` an Equinox module, a loss
-`loss_fn(network, batch)` and a `WindowSampler` over its (normalized)
+`loss_fn(network, batch, key)` and a `WindowSampler` over its (normalized)
 training frames, and gets back the trained network. What a batch means --
 `window` input frames followed by `rollout_steps` targets, unrolled -- is the
-loss function's business.
+loss function's business. `key` is a JAX PRNG key for a loss that's random
+(e.g. noise on its inputs): a different one every optimizer step, derived
+from the seed and the step count, so a resumed run draws the same ones.
 
 - Optimizer: AdamW, gradients clipped by global norm, learning rate with a
   linear warmup and cosine decay over `max_epochs`.
@@ -186,7 +188,7 @@ def make_optimizer(config: TrainerConfig, total_steps: int) -> tuple[Any, Any]:
 
 def train(
     network: eqx.Module,
-    loss_fn: Callable[[eqx.Module, jax.Array], jax.Array],
+    loss_fn: Callable[[eqx.Module, jax.Array, jax.Array], jax.Array],
     sampler: WindowSampler,
     config: TrainerConfig,
     hooks: FitHooks,
@@ -227,9 +229,11 @@ def train(
         )
     resumed_at = state.epoch
 
+    base_key = jax.random.key(config.seed)
+
     @eqx.filter_jit
-    def step(network, opt_state, batch):
-        loss, grads = eqx.filter_value_and_grad(loss_fn)(network, batch)
+    def step(network, opt_state, batch, key):
+        loss, grads = eqx.filter_value_and_grad(loss_fn)(network, batch, key)
         updates, opt_state = optimizer.update(grads, opt_state, _inexact(network))
         return eqx.apply_updates(network, updates), opt_state, loss, optax.tree.norm(grads)
 
@@ -241,7 +245,8 @@ def train(
         losses, epoch_losses, norms = [], [], []
         batches = sampler.epoch(rng, config.batch_size, config.samples_per_epoch)
         for batch in prefetch(batches, config.prefetch):
-            network, opt_state, loss, grad_norm = step(network, opt_state, batch)
+            key = jax.random.fold_in(base_key, state.step)
+            network, opt_state, loss, grad_norm = step(network, opt_state, batch, key)
             losses.append(loss)
             norms.append(grad_norm)
             state.step += 1
@@ -280,10 +285,10 @@ def train(
                 state.evals_since_best += 1
                 state.stopped_early = state.evals_since_best >= config.patience
             log.info(
-                "epoch %d: loss %.4g, val selection score %.4g (best %.4g at epoch %d)",
+                "epoch %d: loss %.4g, val %s (best score %.10g at epoch %d)",
                 epoch,
                 epoch_metrics["epoch_loss"],
-                score,
+                ", ".join(f"{k} {v:.4g}" for k, v in scores.items()),
                 state.best_score,
                 state.best_epoch,
             )
