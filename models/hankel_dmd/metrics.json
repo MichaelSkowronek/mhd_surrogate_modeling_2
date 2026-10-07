@@ -1,8 +1,14 @@
 {
   "train.re16k_t400_0": {
+    "crps_lead_1": 0.128925,
+    "crps_lead_10": 0.295641,
+    "crps_lead_100": 0.432791,
+    "crps_lead_40": 0.384345,
+    "crps_mean": 0.569862,
     "divergence_ratio": 0.202261,
     "energy_peak_ratio": 0.856177,
     "energy_rel_error": 0.249959,
+    "ensemble_size": 1.0,
     "enstrophy_peak_ratio": 0.461238,
     "enstrophy_rel_error": 0.710283,
     "rmse_lead_1": 0.203489,
@@ -20,9 +26,15 @@
     "u_y_period_error": 0.0384518
   },
   "val": {
+    "crps_lead_1": 0.169423,
+    "crps_lead_10": 0.363931,
+    "crps_lead_100": 0.478494,
+    "crps_lead_40": 0.404452,
+    "crps_mean": 0.562241,
     "divergence_ratio": 0.192596,
     "energy_peak_ratio": 0.808688,
     "energy_rel_error": 0.263532,
+    "ensemble_size": 1.0,
     "enstrophy_peak_ratio": 0.378341,
     "enstrophy_rel_error": 0.72763,
     "rmse_lead_1": 0.281005,
