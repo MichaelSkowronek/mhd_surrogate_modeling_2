@@ -16,7 +16,7 @@ host_dtype: float16   # training frames in host RAM (~4 GB for the 7 train datas
 seed: ${seed}         # network init and batch order
 chunk_t: 64           # frames per zarr read while loading
 training:             # training/trainer.py's TrainerConfig
-  max_epochs: 60
+  max_epochs: 30      # the cosine schedule decays over these
   samples_per_epoch: 2048  # windows per epoch (of ~7k), i.e. per validation/checkpoint
   batch_size: 8
   learning_rate: 1.0e-3
@@ -24,7 +24,9 @@ training:             # training/trainer.py's TrainerConfig
   final_lr_fraction: 0.01
   weight_decay: 1.0e-4
   grad_clip: 1.0
-  patience: 8         # validations without a better selection score before stopping
+  patience: 30        # validations without a better score before stopping: the full schedule for
+                      # every run, since stable steps flip between epochs and an early stop misses the
+                      # annealed ones (README "Input noise"); the best epoch is still the one kept
   eval_every: 1
   log_every: 20
   max_loss: 100.0     # normalized MSE above this is divergence (one-step persistence is ~0.25)
