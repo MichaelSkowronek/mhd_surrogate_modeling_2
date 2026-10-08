@@ -9,7 +9,10 @@ its window, or none -- is scored on exactly the same targets, steps
 A stochastic model (a generative one, `stochastic = True`) forecasts one
 sample per `seed`; an ensemble is the samples for seeds 0, 1, ...
 (`forecast_members`), and `forecast` is the member for seed 0. A
-deterministic model has one answer and takes no seed.
+deterministic model has one answer and takes no seed. A stochastic model
+may also sample several members in one call (`predict_members`), which a
+GPU with room to spare turns into throughput; `forecast_members` uses it
+when asked to batch.
 """
 
 from __future__ import annotations
@@ -28,7 +31,13 @@ class ForecastModel(Protocol):
     `predict(context, n_steps)` returns `n_steps` forecast frames, shape
     (n_steps, *context.shape[1:]), given a context of shape (window, ...).
     A model with `stochastic = True` also takes `seed=` and returns the
-    sample for it (call it through `predict_member`).
+    sample for it (call it through `predict_member`), and may have
+    `predict_members(context, n_steps, seeds)`, shape (len(seeds), n_steps,
+    ...): the samples for `seeds` in one call. Member k must be the sample
+    for `seeds[k]` whatever else is in the batch -- its randomness drawn from
+    its own seed, not split from a key shared by the batch -- so it equals
+    `predict(..., seed=seeds[k])` up to float rounding (GPU kernels can
+    differ by batch shape, and a long chaotic rollout amplifies that).
     """
 
     window: int
@@ -94,11 +103,24 @@ def ensemble_size(model: ForecastModel, n_members: int) -> int:
 
 
 def forecast_members(
-    model: ForecastModel, series, context_steps: int, seeds: Iterable[int]
+    model: ForecastModel,
+    series,
+    context_steps: int,
+    seeds: Iterable[int],
+    batch_size: int = 1,
 ) -> Iterator[np.ndarray]:
     """Ensemble members under the protocol, one at a time (an 837-step
     member is ~1 GB): the prediction for each of `seeds`, as `forecast`
-    makes it."""
+    makes it.
+
+    With `batch_size` > 1, a model that has `predict_members` samples up to
+    that many members per call; one that hasn't falls back to one call per
+    member. Members are still yielded one at a time, so a caller holds one
+    batch at most. Batching is for throughput, but since it can change the
+    rounding, a batch size is part of what reproduces an ensemble's scores.
+    """
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be >= 1, got {batch_size}")
     check_window(model.window, context_steps)
     n = series.shape[0]
     if not 1 <= context_steps < n:
@@ -106,14 +128,20 @@ def forecast_members(
     # Only the context is read: the targets aren't needed, just their shape.
     visible = np.asarray(series[context_steps - model.window : context_steps])
     shape = (n - context_steps, *series.shape[1:])
-    for seed in seeds:
-        yield _checked(predict_member(model, visible, shape[0], seed), shape)
+    seeds = list(seeds)
+    if batch_size == 1 or not hasattr(model, "predict_members"):
+        for seed in seeds:
+            yield _checked(predict_member(model, visible, shape[0], seed), shape)
+        return
+    for start in range(0, len(seeds), batch_size):
+        batch = seeds[start : start + batch_size]
+        yield from _checked(model.predict_members(visible, shape[0], batch), (len(batch), *shape))
 
 
 def _checked(prediction, shape: tuple[int, ...]) -> np.ndarray:
     prediction = np.asarray(prediction)
     if prediction.shape != shape:
-        raise ValueError(f"model predicted shape {prediction.shape}, expected the targets' {shape}")
+        raise ValueError(f"model predicted shape {prediction.shape}, expected {shape}")
     return prediction
 
 

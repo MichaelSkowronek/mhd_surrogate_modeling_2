@@ -222,6 +222,7 @@ def _score_and_log(
         block_steps=cfg.evaluation.stability.block_steps,
         max_ratio=cfg.evaluation.stability.max_ratio,
         n_members=cfg.evaluation.ensemble_size,
+        member_batch=cfg.evaluation.member_batch,
     )
     eval_seconds = time.perf_counter() - start
     log.info("evaluated on %s in %.1f s", name, eval_seconds)

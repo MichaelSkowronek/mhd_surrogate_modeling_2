@@ -85,6 +85,7 @@ def evaluate(
     block_steps: int,
     max_ratio: float,
     n_members: int = 1,
+    member_batch: int = 1,
     chunk_t: int = DEFAULT_CHUNK_T,
     nperseg: int = NPERSEG,
 ) -> Evaluation:
@@ -103,6 +104,8 @@ def evaluate(
     `ensemble_size` and, for more than one member, `spread_skill_lead_<n>`
     (`ensemble.EnsembleScores`). For one member the CRPS is the absolute
     error, so deterministic and generative models share that score.
+    `member_batch` members are sampled per call where the model can
+    (`protocol.forecast_members`).
     """
     timed = _TimedModel(model)
     prediction, targets = forecast(timed, series, context_steps)
@@ -130,7 +133,10 @@ def evaluate(
     members.add(prediction)
     del prediction  # one member at a time from here on (~1 GB each)
     size = ensemble_size(model, n_members)
-    for member in forecast_members(model, series, context_steps, range(1, size)):
+    members_after_0 = forecast_members(
+        model, series, context_steps, range(1, size), batch_size=member_batch
+    )
+    for member in members_after_0:
         members.add(member)
     ensemble = members.scores()
     scores["ensemble_size"] = float(ensemble.size)

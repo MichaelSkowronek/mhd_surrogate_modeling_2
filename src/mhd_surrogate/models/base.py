@@ -13,8 +13,12 @@ reads the name and dispatches to the right class.
 A generative model sets `stochastic = True` and takes
 `predict(context, n_steps, seed=...)`: each seed gives one sample of the
 forecast distribution, and an ensemble is the samples for seeds 0, 1, ...
-(`evaluation.protocol.forecast_members`). A deterministic model has one
-answer: it takes no seed and is scored as a one-member ensemble.
+(`evaluation.protocol.forecast_members`). It may also implement
+`predict_members(context, n_steps, seeds)` to sample several members in one
+call (throughput on a GPU); member k must be the sample for `seeds[k]`
+whatever else is in the batch (see `evaluation.protocol.ForecastModel`). A
+deterministic model has one answer: it takes no seed and is scored as a
+one-member ensemble.
 
 A model trained iteratively (a neural network) sets `iterative = True` and
 takes `fit(datasets, hooks)`: the `FitHooks` give it what a closed-form fit
