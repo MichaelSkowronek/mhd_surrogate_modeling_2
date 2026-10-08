@@ -314,6 +314,62 @@ def test_a_resumed_random_loss_draws_the_keys_an_uninterrupted_run_would(tmp_pat
     assert float(resumed.network.gain) == float(uninterrupted.network.gain)
 
 
+def test_ema_decay_must_be_a_fraction():
+    for bad in (0.0, 1.0, 1.5):
+        with pytest.raises(ValueError, match="ema_decay"):
+            config(ema_decay=bad)
+
+
+def test_the_weight_average_is_what_training_returns():
+    """At the limits: a decay near 1 barely moves the average off the initial
+    weights, a decay near 0 makes it the last weights."""
+    raw, _ = run(max_epochs=3)
+    slow, _ = run(max_epochs=3, ema_decay=1 - 1e-9)
+    fast, _ = run(max_epochs=3, ema_decay=1e-9)
+
+    assert float(raw.network.gain) == pytest.approx(0.5, abs=0.15)  # it did train
+    assert float(slow.network.gain) == pytest.approx(1.0, abs=1e-6)
+    assert float(fast.network.gain) == pytest.approx(float(raw.network.gain), rel=1e-6)
+
+
+def test_one_step_of_the_weight_average_is_the_weighted_sum():
+    raw, _ = run(max_epochs=1, samples_per_epoch=2)  # one optimizer step
+    averaged, _ = run(max_epochs=1, samples_per_epoch=2, ema_decay=0.9)
+
+    expected = 0.9 * 1.0 + 0.1 * float(raw.network.gain)
+    assert float(averaged.network.gain) == pytest.approx(expected, rel=1e-6)
+
+
+def test_validation_and_early_stopping_see_the_weight_average():
+    validate = ScriptedValidation([1.0, 2.0])
+
+    result, _ = run(validate=validate, max_epochs=2, ema_decay=1 - 1e-9)
+
+    assert validate.gains == pytest.approx([1.0, 1.0], abs=1e-6)
+    assert float(result.network.gain) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_a_resumed_run_continues_the_weight_average(tmp_path):
+    uninterrupted, _ = run(
+        tmp_path / "a", validate=ScriptedValidation([1, 2, 3]), max_epochs=3, ema_decay=0.95
+    )
+
+    def crash_at_epoch_2(network, calls=[]):  # noqa: B006 -- counts calls
+        calls.append(1)
+        if len(calls) == 2:
+            raise Interrupt
+        return {"selection_score": 1.0}
+
+    with pytest.raises(Interrupt):
+        run(tmp_path / "b", validate=crash_at_epoch_2, max_epochs=3, ema_decay=0.95)
+    assert sorted(p.name for p in (tmp_path / "b").glob("ema-*.eqx")) == ["ema-epoch-0001.eqx"]
+    resumed, _ = run(
+        tmp_path / "b", validate=ScriptedValidation([2, 3]), max_epochs=3, ema_decay=0.95
+    )
+
+    assert float(resumed.network.gain) == float(uninterrupted.network.gain)
+
+
 def test_resume_keeps_the_best_network_from_before_the_interruption(tmp_path):
     run(tmp_path, validate=ScriptedValidation([5.0, 1.0]), max_epochs=2)
     first = Gain(jnp.array(1.0))
