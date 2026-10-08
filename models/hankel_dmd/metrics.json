@@ -22,6 +22,8 @@
     "stable_steps": 1168.0,
     "temporal_u_x_lsd": 4.46736,
     "temporal_u_y_lsd": 4.10216,
+    "u_y_mean_offset": 0.0260656,
+    "u_y_mean_std_ratio": 0.456061,
     "u_y_peak_power_ratio": 0.374877,
     "u_y_period_error": 0.0384518
   },
@@ -48,6 +50,8 @@
     "stable_steps": 837.0,
     "temporal_u_x_lsd": 4.31488,
     "temporal_u_y_lsd": 4.04118,
+    "u_y_mean_offset": 0.0684369,
+    "u_y_mean_std_ratio": 0.413375,
     "u_y_peak_power_ratio": 0.168771,
     "u_y_period_error": 0.0392399
   }

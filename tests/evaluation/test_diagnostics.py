@@ -6,6 +6,7 @@ from mhd_surrogate.evaluation.diagnostics import (
     enstrophy,
     kinetic_energy,
     log_spectral_distance,
+    mean_drift_scores,
     rms_divergence,
     series_summary,
     temporal_scores,
@@ -192,3 +193,34 @@ def test_temporal_scores_detect_a_mistimed_oscillation():
     assert scores["temporal_u_y_lsd"] > 0.05
     # u_x is the same noise in both, so its temporal spectrum is untouched.
     assert scores["temporal_u_x_lsd"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_a_drifting_forecast_has_no_period_and_its_drift_is_measured():
+    """A forecast whose domain-mean u_y drifts slowly away has its spectral
+    peak in the lowest bin: a drift, not a period."""
+    t = np.arange(600, dtype=float)
+    oscillation = 0.01 * np.sin(2 * np.pi * t / 25.6)
+    u_x = 1.0 + 0.01 * np.cos(2 * np.pi * t / 40.0)
+    true = np.stack([u_x, oscillation], axis=1)
+    drifting = np.stack([u_x, oscillation + 0.2 * t / 600], axis=1)
+
+    scores = temporal_scores(drifting, true, nperseg=200)
+
+    assert np.isnan(scores["u_y_period_error"])
+    assert scores["u_y_mean_offset"] > 5
+    assert scores["u_y_mean_std_ratio"] > 5
+
+
+def test_mean_drift_scores_are_in_units_of_the_truths_variability():
+    rng = np.random.default_rng(0)
+    true = rng.normal(0.0, 2.0, 100_000)
+
+    on_mean = mean_drift_scores(rng.normal(0.0, 2.0, 100_000), true)
+    offset = mean_drift_scores(true + 1.0, true)
+    damped = mean_drift_scores(0.5 * true, true)
+
+    assert on_mean["u_y_mean_offset"] == pytest.approx(0.0, abs=0.02)
+    assert on_mean["u_y_mean_std_ratio"] == pytest.approx(1.0, rel=0.02)
+    assert offset["u_y_mean_offset"] == pytest.approx(1.0 / true.std())  # ~0.5
+    assert offset["u_y_mean_std_ratio"] == pytest.approx(1.0)
+    assert damped["u_y_mean_std_ratio"] == pytest.approx(0.5)
