@@ -2199,6 +2199,14 @@ of the domain.
   reproducible and a resumed one draws the same noise.
 - *Optimizer:* AdamW with gradients clipped by global norm; the learning
   rate warms up linearly, then decays by cosine over `max_epochs`.
+- *Weight averaging* (`training.ema_decay`, off by default): an exponential
+  moving average of the weights, updated after every optimizer step, is
+  what's validated, early-stopped on, checkpointed and returned; the
+  optimizer keeps training the raw weights. The raw weights move with every
+  noisy batch, and for an autoregressive model that's enough to flip a long
+  rollout between stable and unstable from one epoch to the next (see
+  "Input noise"); the average moves smoothly. It's part of the resumable
+  training state.
 - *Epochs* are `samples_per_epoch` windows (2048 of ~7k by default) drawn
   without replacement. An epoch is the unit of validation and
   checkpointing, so it's kept short enough that early stopping (and the

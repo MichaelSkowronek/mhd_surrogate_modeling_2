@@ -17,6 +17,13 @@ from the seed and the step count, so a resumed run draws the same ones.
 - Early stopping: `validate(network)` scores the network every `eval_every`
   epochs; training stops after `patience` evaluations without a strictly
   better `selection_score`, and the best network is returned, not the last.
+- Weight averaging (`ema_decay`, off by default): an exponential moving
+  average of the weights, updated after every optimizer step, is what gets
+  validated, early-stopped on, checkpointed and returned. The raw weights
+  move with every noisy batch, and for an autoregressive model that's
+  enough to flip a long rollout between stable and unstable from one epoch
+  to the next; the average moves smoothly. The optimizer keeps training the
+  raw weights.
 - Divergence: a non-finite or blown-up loss raises `DivergenceError`
   (`training/tracking.py` tags the run).
 - Resumable: with a `state_dir`, the network, optimizer state, sampler RNG
@@ -71,11 +78,14 @@ class TrainerConfig:
     max_loss: float = 100.0  # a loss above this (or non-finite) is divergence
     seed: int = 0
     prefetch: int = 2  # batches prepared ahead on a background thread; 0: none
+    ema_decay: float | None = None  # weight averaging per step (e.g. 0.999); None: off
 
     def __post_init__(self) -> None:
         for name in ("max_epochs", "batch_size", "patience", "eval_every", "log_every"):
             if getattr(self, name) < 1:
                 raise ValueError(f"{name} must be >= 1, got {getattr(self, name)}")
+        if self.ema_decay is not None and not 0.0 < self.ema_decay < 1.0:
+            raise ValueError(f"ema_decay must be in (0, 1), got {self.ema_decay}")
 
 
 class WindowSampler:
@@ -155,6 +165,7 @@ class TrainingState:
     stopped_early: bool = False
     rng_state: dict[str, Any] = field(default_factory=dict)
     latest_file: str = ""
+    ema_file: str = ""
     best_file: str = ""
     fingerprint: dict[str, Any] = field(default_factory=dict)
 
@@ -214,10 +225,14 @@ def train(
     rng = np.random.default_rng(config.seed)
     state = TrainingState(fingerprint=fingerprint)
     best = network
+    # The weight average starts at the initial weights.
+    ema = network if config.ema_decay is not None else None
 
     state_dir = hooks.state_dir
     if state_dir is not None and (state_dir / STATE_FILE).exists():
-        state, network, opt_state, best = _restore(state_dir, fingerprint, network, opt_state)
+        state, network, opt_state, best, ema = _restore(
+            state_dir, fingerprint, network, opt_state, ema
+        )
         rng.bit_generator.state = state.rng_state
         log.info(
             "resumed from %s at epoch %d (step %d, best score %.4g at epoch %d)",
@@ -232,10 +247,13 @@ def train(
     base_key = jax.random.key(config.seed)
 
     @eqx.filter_jit
-    def step(network, opt_state, batch, key):
+    def step(network, opt_state, ema, batch, key):
         loss, grads = eqx.filter_value_and_grad(loss_fn)(network, batch, key)
         updates, opt_state = optimizer.update(grads, opt_state, _inexact(network))
-        return eqx.apply_updates(network, updates), opt_state, loss, optax.tree.norm(grads)
+        network = eqx.apply_updates(network, updates)
+        if ema is not None:
+            ema = _average(ema, network, config.ema_decay)
+        return network, opt_state, ema, loss, optax.tree.norm(grads)
 
     for epoch in range(state.epoch + 1, config.max_epochs + 1):
         if state.stopped_early:
@@ -246,7 +264,7 @@ def train(
         batches = sampler.epoch(rng, config.batch_size, config.samples_per_epoch)
         for batch in prefetch(batches, config.prefetch):
             key = jax.random.fold_in(base_key, state.step)
-            network, opt_state, loss, grad_norm = step(network, opt_state, batch, key)
+            network, opt_state, ema, loss, grad_norm = step(network, opt_state, ema, batch, key)
             losses.append(loss)
             norms.append(grad_norm)
             state.step += 1
@@ -274,13 +292,15 @@ def train(
             "epoch_seconds": time.perf_counter() - start,
         }
 
+        # What's validated, kept and returned: the weight average if there is one.
+        current = ema if ema is not None else network
         if validate is not None and (epoch % config.eval_every == 0 or epoch == config.max_epochs):
-            scores = validate(network)
+            scores = validate(current)
             epoch_metrics.update({f"val_monitor.{k}": v for k, v in scores.items()})
             score = scores["selection_score"]
             if score > state.best_score:
                 state.best_score, state.best_epoch, state.evals_since_best = score, epoch, 0
-                best = network
+                best = current
             else:
                 state.evals_since_best += 1
                 state.stopped_early = state.evals_since_best >= config.patience
@@ -298,11 +318,12 @@ def train(
 
         if state_dir is not None:
             state.rng_state = rng.bit_generator.state
-            _save(state_dir, state, network, opt_state, best)
+            _save(state_dir, state, network, opt_state, best, ema)
         if state.stopped_early:
             log.info("early stop: no improvement in %d evaluations", config.patience)
 
-    result = best if validate is not None and state.best_epoch > 0 else network
+    last = ema if ema is not None else network
+    result = best if validate is not None and state.best_epoch > 0 else last
     info = {
         "epochs": float(state.epoch),
         "steps": float(state.step),
@@ -324,11 +345,22 @@ def _check_loss(losses: list[jax.Array], max_loss: float, step: int) -> float:
     return float(values.mean())
 
 
-def _save(state_dir: Path, state: TrainingState, network, opt_state, best) -> None:
+def _average(ema, network, decay: float):
+    """decay * ema + (1 - decay) * network, over the trainable arrays."""
+    averaged = jax.tree.map(
+        lambda e, w: decay * e + (1.0 - decay) * w, _inexact(ema), _inexact(network)
+    )
+    return eqx.combine(averaged, ema)
+
+
+def _save(state_dir: Path, state: TrainingState, network, opt_state, best, ema=None) -> None:
     state_dir.mkdir(parents=True, exist_ok=True)
     old = _load_state(state_dir)
     state.latest_file = f"latest-epoch-{state.epoch:04d}.eqx"
     eqx.tree_serialise_leaves(state_dir / state.latest_file, (network, opt_state))
+    if ema is not None:
+        state.ema_file = f"ema-epoch-{state.epoch:04d}.eqx"
+        eqx.tree_serialise_leaves(state_dir / state.ema_file, ema)
     if state.best_epoch > 0:
         state.best_file = f"best-epoch-{state.best_epoch:04d}.eqx"
         if not (state_dir / state.best_file).exists():
@@ -338,7 +370,8 @@ def _save(state_dir: Path, state: TrainingState, network, opt_state, best) -> No
     os.replace(tmp, state_dir / STATE_FILE)
     # Only now are the previous epoch's files no longer referenced.
     if old is not None:
-        for name in {old.latest_file, old.best_file} - {state.latest_file, state.best_file, ""}:
+        previous = {old.latest_file, old.ema_file, old.best_file}
+        for name in previous - {state.latest_file, state.ema_file, state.best_file, ""}:
             (state_dir / name).unlink(missing_ok=True)
 
 
@@ -349,7 +382,7 @@ def _load_state(state_dir: Path) -> TrainingState | None:
     return TrainingState(**json.loads(path.read_text()))
 
 
-def _restore(state_dir: Path, fingerprint: dict, network, opt_state):
+def _restore(state_dir: Path, fingerprint: dict, network, opt_state, ema=None):
     state = _load_state(state_dir)
     if state.fingerprint != json.loads(json.dumps(fingerprint)):
         raise ValueError(
@@ -362,4 +395,6 @@ def _restore(state_dir: Path, fingerprint: dict, network, opt_state):
     best = network
     if state.best_file:
         best = eqx.tree_deserialise_leaves(state_dir / state.best_file, network)
-    return state, network, opt_state, best
+    if ema is not None:
+        ema = eqx.tree_deserialise_leaves(state_dir / state.ema_file, network)
+    return state, network, opt_state, best, ema

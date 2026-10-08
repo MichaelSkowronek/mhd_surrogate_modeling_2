@@ -31,3 +31,4 @@ training:             # training/trainer.py's TrainerConfig
   log_every: 20
   max_loss: 100.0     # normalized MSE above this is divergence (one-step persistence is ~0.25)
   prefetch: 2
+  ema_decay: null     # weight averaging per optimizer step (e.g. 0.999); validated/kept instead of the raw weights
