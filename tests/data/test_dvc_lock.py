@@ -6,8 +6,10 @@ claim to come from exactly those. A PR that changes a stage's code or
 params without re-running it leaves them claiming to come from code that no
 longer exists (CLAUDE.md: dvc.lock is committed with the change that
 produced it). This test asks DVC itself, dependency by dependency, so it
-needs no data: the data deps (`data/...`) are left out -- CI has none, and
-their staleness is `dvc status`'s to report.
+needs no data: the data deps (`data/...`) and the deps another stage
+produces (the `evaluate` stage's checkpoint) are left out -- CI has neither,
+and their staleness is `dvc status`'s to report (an upstream stage's code
+and params are checked here as its own deps).
 
 Needs the DVC repository (`.dvc/`), so it's skipped in the Docker image,
 which copies dvc.yaml and dvc.lock but not `.dvc/`.
@@ -25,13 +27,15 @@ def stale_code_and_params_deps() -> dict[str, dict]:
 
     stale = {}
     with Repo(str(ROOT)) as repo:
+        produced = {str(out.def_path) for stage in repo.index.stages for out in stage.outs}
         for stage in repo.index.stages:
             for dep in stage.deps:
-                if str(dep.def_path).startswith("data/"):
+                path = str(dep.def_path)
+                if path.startswith("data/") or path in produced:
                     continue
                 status = dep.status()
                 if status:
-                    stale[f"{stage.addressing}: {dep.def_path}"] = dict(status)
+                    stale[f"{stage.addressing}: {path}"] = dict(status)
     return stale
 
 
