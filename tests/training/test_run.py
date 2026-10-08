@@ -14,7 +14,10 @@ import mhd_surrogate.utils.hydra_resolvers  # noqa: F401
 import mlflow
 from mhd_surrogate.data.normalization import compute_normalization_stats
 from mhd_surrogate.training import run as run_module
+from mhd_surrogate.training import scoring as scoring_module
+from mhd_surrogate.training.export import checkpoint_digest
 from mhd_surrogate.training.run import run_training
+from mhd_surrogate.training.scoring import run_evaluation
 from mlflow import MlflowClient
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -46,6 +49,7 @@ def workspace(tmp_path, monkeypatch):
     shutil.copy(ROOT / "configs" / "analysis" / "grid.yaml", tmp_path / "configs" / "analysis")
     (tmp_path / "dvc.lock").write_text("schema: '2.0'\n")
     monkeypatch.setattr(run_module, "data_provenance", lambda: {"raw": "stub"})
+    monkeypatch.setattr(scoring_module, "data_provenance", lambda: {"raw": "stub"})
     return tmp_path
 
 
@@ -178,6 +182,68 @@ def test_export_dir_gets_the_checkpoint_and_metrics(workspace):
     metrics = json.loads((workspace / "export" / "metrics.json").read_text())
     assert set(metrics) == {"val", "train.a"}
     assert (workspace / "export" / "model" / "model.json").exists()
+
+
+def test_a_non_scoring_run_exports_only_the_checkpoint_tagged_with_its_digest(workspace):
+    export = workspace / "export"
+
+    scores = run_training(
+        config(workspace, "model=persistence", f"export.dir={export}", "evaluation.final=false"),
+        workspace / "out",
+        None,
+        "persistence",
+    )
+
+    assert scores == {}
+    assert (export / "model" / "model.json").exists()
+    assert not (export / "metrics.json").exists()
+    run, client = only_run(workspace)
+    assert not any(key.startswith("val.") for key in run.data.metrics)
+    digest = checkpoint_digest(export / "model")
+    assert run.data.tags["checkpoint_sha256"] == digest
+    (model,) = client.search_logged_models([run.info.experiment_id])
+    assert model.tags["checkpoint_sha256"] == digest
+
+
+def test_evaluating_a_stored_checkpoint_scores_it_like_the_end_of_a_run(workspace):
+    export = workspace / "export"
+    trained = config(workspace, "model=persistence", f"export.dir={export}")
+    in_run = run_training(trained, workspace / "out", None, "persistence")
+    (export / "metrics.json").rename(workspace / "in_run.json")
+
+    scores = run_evaluation(
+        config(workspace, f"checkpoint={export / 'model'}", f"export.dir={export}"), None
+    )
+
+    assert scores.keys() == in_run.keys()
+    for prefix, values in in_run.items():  # nan_ok: undefined scores, e.g. a period
+        assert scores[prefix] == pytest.approx(values, nan_ok=True)
+    assert json.loads((export / "metrics.json").read_text()) == json.loads(
+        (workspace / "in_run.json").read_text()
+    )
+    client = MlflowClient(f"sqlite:///{workspace / 'mlruns.db'}")
+    experiment = mlflow.get_experiment_by_name("test").experiment_id
+    evaluation = [r for r in client.search_runs([experiment]) if r.data.tags.get("stage")]
+    (model,) = client.search_logged_models([experiment])
+    assert evaluation[0].info.run_name == "evaluate persistence"
+    assert evaluation[0].data.tags["evaluates_model_id"] == model.model_id
+    assert "val.skill_horizon" in evaluation[0].data.metrics
+    assert "model.name" not in evaluation[0].data.params  # the checkpoint's, not the config's
+
+
+def test_a_checkpoint_without_a_logged_model_is_still_scored(workspace, tmp_path):
+    from mhd_surrogate.models.baselines import Persistence
+
+    Persistence().save(tmp_path / "foreign")
+
+    scores = run_evaluation(config(workspace, f"checkpoint={tmp_path / 'foreign'}"), None)
+
+    assert set(scores) == {"val", "train.a"}
+
+
+def test_evaluation_needs_a_checkpoint(workspace):
+    with pytest.raises(ValueError, match="checkpoint"):
+        run_evaluation(config(workspace), None)
 
 
 def mhd_surrogate_config(cfg):

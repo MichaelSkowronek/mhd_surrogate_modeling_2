@@ -81,8 +81,8 @@ uv run pre-commit run --all-files
 src/mhd_surrogate/   importable package, split by pipeline stage
   data/              dataset, grid, normalization, versioning, conversion
   analysis/          fields, summary, spectral
-  training/          mlflow_utils, tracking, export, mlflow_model, run, trainer, tuning
-  evaluation/        protocol, metrics, diagnostics, evaluate
+  training/          mlflow_utils, tracking, export, mlflow_model, run, scoring, trainer, tuning
+  evaluation/        protocol, metrics, quantities, stability, selection, diagnostics, ensemble, evaluate
   models/            base (interface), baselines, dmd, hankel_dmd, neural, unet, registry
   utils/             logging_config, parallel, jax_cache, jax_determinism, hydra_resolvers
 scripts/             CLI entry points, same split (plus viz/)
@@ -90,7 +90,7 @@ scripts/             CLI entry points, same split (plus viz/)
   analysis/          check_*.py, run_all_checks, benchmark_backends
   viz/               make_video, make_all_videos, make_forecast_video
   training/          train, tune
-  evaluation/        check_rollout_stability
+  evaluation/        check_rollout_stability, evaluate_checkpoint
 tests/               mirrors src/ and scripts/ (data/, analysis/, training/, evaluation/, models/, utils/, viz/)
 dvc.yaml, dvc.lock  data pipeline (raw -> zarr -> stats) and its pinned hashes
 data/raw.dvc         DVC pointer to the raw .npy files (.dvc/ holds the remote config)
@@ -361,7 +361,7 @@ The lock is only true if it's refreshed with every change to what a stage
 depends on. `tests/data/test_dvc_lock.py` asks DVC for the status of every
 stage's code and params deps (not the data, which CI doesn't have; ~0.5 s)
 and fails if any changed since `dvc.lock` was written, so a PR that edits,
-say, the evaluation code without re-running the `train` stage fails CI
+say, the evaluation code without re-running the `evaluate` stage fails CI
 instead of leaving the canonical model's `metrics.json` claiming code that
 no longer exists (#52 slipped through exactly that way; #54 refreshed the
 lock).
@@ -392,7 +392,8 @@ Design choices:
 the zarr store and stats on disk match `dvc.lock`; the way to be sure is to
 produce them with `dvc repro`, which re-runs exactly the stages whose inputs
 changed (and `dvc status` shows what's out of date). That's the usual DVC
-division of labor, and for the canonical model the `train` stage below makes
+division of labor, and for the canonical model the `train` and `evaluate`
+stages below make
 it hold by construction. An enforcing
 check inside the training script was tried and dropped: it needed a
 DVC-only image and a compose dependency to cover the container, and could
@@ -410,99 +411,122 @@ run through `dvc repro`, and wrong if the data was changed behind its back.
 CI doesn't pull data (the remote is local), but `tests.yml` runs `dvc dag`
 so a malformed `dvc.yaml` fails the PR.
 
-### Training stage
+### Training and evaluation stages
 
 ```bash
-uv run dvc repro train      # refit only if data, code or the relevant config changed
+uv run dvc repro            # re-runs only the stages whose inputs changed
 uv run dvc metrics show     # the canonical model's validation (and train) scores
 uv run dvc metrics diff     # ... compared with the last commit
 ```
 
 DVC is more than data versioning: `dvc.yaml` is a pipeline of stages with
-declared dependencies, parameters and outputs, and the `train` stage extends
-it from the data to the **canonical model** -- Hankel DMD at the delays and
-rank its validation sweep selected (see "Delay sweep"; before it, plain DMD
-at rank 750). It depends on the zarr store, the normalization stats,
-`train.py`, the whole `src/mhd_surrogate` package and the grid config, plus
-the config keys that change the fitted model or its scores (`model.rank`,
-`delays`, `spatial_rank`, `stabilize`, the split, `context_steps`,
-`std_mode`, the evaluation settings; performance knobs like chunk sizes are
-left out so tuning them doesn't retrain). Its outputs are the checkpoint
-(`models/hankel_dmd/model`, ~890 MB, cached and pushed like the stats) and
-`models/hankel_dmd/metrics.json`, declared as DVC metrics and kept in git, so `dvc metrics diff` shows how a code change
-moved the scores between commits. `dvc.lock` then pins exactly which data,
-code and config produced the committed model, and `dvc repro` rebuilds it only
-when one of them changes. The stage runs `train.py` with `export.dir` set,
-which puts the checkpoint and metrics at that fixed path instead of the
-run's timestamped Hydra directory; it still logs to MLflow like any run.
-`.dvcignore` excludes `__pycache__`, which importing the package would
-otherwise change, making the stage look out of date after every run.
+declared dependencies, parameters and outputs, and two stages extend it from
+the data to the **canonical model** -- currently Hankel DMD at the delays and
+rank its validation sweep selected (see "Delay sweep"):
 
-**Not bitwise reproducible, and why that's fine.** Unlike the data stages
-(re-running `convert_to_zarr` and `compute_stats` reproduces their hashes
-exactly), retraining gives a checkpoint with different bytes every time: the
-GPU's float32 reductions aren't bitwise deterministic, so two runs on the same
-inputs differ around the 8th significant digit of every score. `dvc.lock`
-therefore records what *was* produced, and `dvc repro` guarantees the model
-matches the current data, code and config -- not that a retrain reproduces it
-bit for bit. To keep that noise out of git, `metrics.json` is rounded to 6
-significant digits, so retraining an unchanged model leaves it unchanged.
-(Use `dvc repro -f -s train` to force a retrain: `-f` alone re-runs the whole
+- **`train`** fits the model (`train.py ... evaluation.final=false`) and
+  stores its checkpoint at a fixed path (`export.dir`): `models/<model>/model`,
+  cached and pushed like the stats. Its deps are the data, the stats, the
+  code `train.py` imports and the config keys that change the fitted model
+  (the model's own, the split, and for a model trained iteratively what early
+  stopping scores on).
+- **`evaluate`** scores that stored checkpoint
+  (`scripts/evaluation/evaluate_checkpoint.py`) exactly as a training run
+  scores itself at the end, and writes `models/<model>/metrics.json`,
+  declared as DVC metrics and kept in git, so `dvc metrics diff` shows how a
+  change moved the scores between commits. Its deps are the checkpoint, the
+  data, the evaluation code and the evaluation config.
+
+The split is about what a change costs. A new score or a fix in the
+diagnostics re-runs `evaluate` on the stored checkpoint (about a minute)
+instead of refitting the model (minutes for Hankel DMD, half an hour or more
+for a neural network), and the `metrics.json` diff then shows the change's
+effect on the *same* model. What early stopping needs from the evaluation
+code (`evaluation/selection.py`: the selection score, the stability check)
+is a `train` dep; the rest (diagnostics, ensemble scores, the full
+`evaluate`) is only `evaluate`'s, because `run.py` imports the final scoring
+(`training/scoring.py`) by name and only when a run scores itself, which the
+`train` stage doesn't. Both stages still log to MLflow like any run: the
+`train` run tags itself and its logged model with the checkpoint's content
+hash (`checkpoint_sha256`), and the `evaluate` run finds that logged model by
+it and links its scores to it.
+
+**Deps are exactly what's imported.** Each stage's code deps are the modules
+its entry point imports, transitively -- not the whole package -- so editing
+an unrelated module (`analysis/pod.py`, say) doesn't make either stale. A test
+(`tests/training/test_dvc_train_stage.py`) computes those import sets and
+fails if a module isn't covered, and that the `train` stage really leaves
+scoring to `evaluate`. Only the canonical model's modules are deps, not all
+of `models/`: `models/registry.py` maps each model name to an import path and
+imports a model's module only when it's built or loaded, so editing another
+model doesn't mark the stages stale (the test adds the trained model's module
+itself, from the `train` stage's `model=` override). A second test
+(`tests/data/test_dvc_lock.py`) asks DVC whether any stage's code or params
+changed since `dvc.lock` was written, so a PR can't merge with a stale lock.
+`.dvcignore` excludes `__pycache__`, which importing the package would
+otherwise change. When only the dep *list* changes, not the code, `uv run dvc
+commit -f <stage>` records the new deps without re-running.
+
+**Re-runs reproduce their outputs.** Both stages run with deterministic GPU
+kernels (`jax.deterministic_ops=true`, see "Training config (Hydra)"), so on
+the same GPU and software stack a re-run produces the same checkpoint and
+the same `metrics.json`, bit for bit, and a re-run after a change that
+shouldn't alter the model (a refactor) is a regression test: anything but an
+unchanged `metrics.json` means it did. Since identical checkpoints share a
+cache entry, an unchanged re-run doesn't grow the cache either; a real change
+adds one entry per checkpoint version, which `uv run dvc gc --workspace
+--all-commits` prunes to what some commit references (not `--cloud` without
+thinking: that deletes from the remote too). `metrics.json` is still rounded
+to 6 significant digits, as a margin against float noise from other sources.
+(Use `dvc repro -f -s train` to force a refit: `-f` alone re-runs the whole
 chain leading to the stage, data stages included.)
 
-**Retrains and cache growth.** The stage's code deps are exactly the modules
-`train.py` imports, transitively -- not the whole package -- so editing an
-unrelated module (`analysis/pod.py`, say) doesn't make it stale. A test
-(`tests/training/test_dvc_train_stage.py`) computes that import set and fails
-if a module isn't covered, so the list can't drift into calling a stale model
-up to date. Only the canonical model's modules are deps, not all of `models/`:
-`models/registry.py` maps each model name to an import path
-(`"mhd_surrogate.models.dmd:DMD"`) and imports a model's module only when that
-model is built or loaded, so adding or editing another model (a baseline, a
-neural network) doesn't mark the canonical stage stale. The test can't see a
-string import in the import graph, so it adds the trained model's module
-itself, looked up from the stage's `model=` override; switching the canonical
-model makes the test name the new model's files as missing deps. Retraining is
-always explicit (`dvc repro`), and every retrain adds a new ~880 MB cache
-entry -- even for an irrelevant change, since the checkpoint's bytes differ
-each time -- and old entries are never removed automatically. Clean up the
-local cache now and then with
-
-```bash
-uv run dvc gc --workspace --all-commits
-```
-
-which keeps every version any git commit references and deletes the retrains
-that were never committed. Don't add `--cloud` without thinking: that deletes
-from the remote too. When only the dep *list* changes, not the code, `uv run
-dvc commit -f train` records the new deps against the existing model instead of
-retraining.
-
-**When to retrain, and what it doesn't touch.** Retraining on a new commit
-never changes an earlier result. Every commit's `dvc.lock` pins the exact
-data, code, config and checkpoint, and its `metrics.json` holds the scores, so
-a tagged result stays reproducible: `git checkout <tag> && dvc pull` restores
-that exact model and its scores, and `dvc repro -f` on that commit retrains it
-from that commit's code to check them (equal up to GPU float noise, hence the
-rounding). Retraining on `main` serves a different purpose: keeping the
-committed model consistent with the committed code. Retrain deliberately, not
-on every commit -- in the PR whose change is *meant* to alter the model (a
-fix, new data, a newly selected parameter), so its `metrics.json` diff shows
-by how much next to the code that caused it; or as a regression check after a
-risky change that *shouldn't* alter it, where an unchanged `metrics.json`
-confirms it didn't. A stage left stale by an unrelated change can wait for
-the next deliberate retrain.
+**When to re-run, and what it doesn't touch.** Re-running on a new commit
+never changes an earlier result: every commit's `dvc.lock` pins the exact
+data, code, config and checkpoint, and its `metrics.json` holds the scores.
+Re-run in the PR whose change touches a stage's deps (the lock test insists),
+so its `metrics.json` diff sits next to the code that caused it.
 
 **Division of labor with MLflow.** MLflow is the experiment record: every
-run, sweep and model, with its metric histories and (later) the registry --
-exploration happens there, through Hydra multiruns. DVC answers a different
-question for the few canonical artifacts: exactly what produced this, and is
-it still up to date? `dvc exp run` is deliberately not used for sweeps, so
-there aren't two experiment systems to look in. The final evaluation (refit
-the finalists on train + val, score them on test, see "How validation and
-test are used") will become stages too, added only once the finalists are
-frozen and marked `frozen: true`, so `dvc repro` can never re-read the test
-set by accident.
+run, sweep and model, with its metric histories -- exploration happens there,
+through Hydra multiruns and Ray Tune. DVC answers a different question for
+the few canonical artifacts: exactly what produced this, and is it still up
+to date? `dvc exp run` is deliberately not used for sweeps, so there aren't
+two experiment systems to look in. The final evaluation (refit the finalists
+on train + val, score them on test, see "How validation and test are used")
+will become stages too, added only once the finalists are frozen and marked
+`frozen: true`, so `dvc repro` can never re-read the test set by accident.
+
+### Reproducibility
+
+"Reproducing our results" means three different things, and the pipeline is
+built to deliver each to the extent it can be delivered:
+
+1. **Our numbers, from our model.** `git checkout <commit> && uv run dvc
+   pull` restores that commit's exact data, stats and checkpoint; `uv.lock`
+   (or the Docker image) the environment; `uv run dvc repro evaluate`
+   re-scores the checkpoint. On our GPU that gives `metrics.json` bit for
+   bit. On another GPU the kernels differ, so the bits do too, but scoring
+   a fixed checkpoint is numerically tame: across four differently compiled
+   runs of the noise-0.1 U-Net, RMSE at lead 10 varied in the 4th digit
+   (0.4154-0.4170), and the skill horizon and stable steps not at all.
+2. **Our model, from our recipe.** Re-running `train` elsewhere gives a new
+   draw, not our checkpoint: a different GPU (or cuDNN, or jax version)
+   rounds differently, and an autoregressive network trained on a chaotic
+   flow amplifies that into a different model, the way another seed would.
+   No deep-learning framework promises more; this one doesn't either.
+3. **Our conclusions, from our recipe.** What has to hold for any such draw
+   is the claim the decisions rest on -- e.g. "input noise 0.1 makes the
+   U-Net stable" -- and that is a statistical statement: it is backed by
+   several seeds (3 of 3 stable, see "Input noise"), not by one checkpoint's
+   score, and a retrain elsewhere should land within that seed-to-seed
+   spread.
+
+Bit-for-bit reproduction on our own machine (point 1 and the deterministic
+stages) is what makes `dvc repro` a regression test and `metrics.json` diffs
+meaningful; points 2 and 3 are what someone else can check, and the
+committed checkpoint is the artifact that makes point 1 possible for them at
+all.
 
 ## Train / val / test split
 

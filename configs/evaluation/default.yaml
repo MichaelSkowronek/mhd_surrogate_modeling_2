@@ -1,5 +1,11 @@
 # Scoring after training (src/mhd_surrogate/evaluation/evaluate.py): the
 # validation dataset, plus `train_datasets` as a sanity check.
+#
+# final: score the model in full at the end of a training run. The DVC
+#   `train` stage turns it off: its `evaluate` stage scores the stored
+#   checkpoint instead (scripts/evaluation/evaluate_checkpoint.py), so a
+#   change to the evaluation code re-scores the model instead of retraining
+#   it.
 # The context length is part of the data protocol: data.context_steps.
 #
 # skill_threshold: RMSE in units of the training std; the skill horizon is how
@@ -36,6 +42,7 @@
 #   `train.<name>.*` -- a sanity check of the fit and the train/val gap, not
 #   a basis for decisions. One by default (~35 s each); must be a subset of
 #   data.train_datasets.
+final: true
 skill_threshold: 0.5
 report_leads: [1, 10, 40, 100]
 stability:

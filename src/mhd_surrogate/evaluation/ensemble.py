@@ -29,7 +29,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from mhd_surrogate.evaluation.diagnostics import DEFAULT_CHUNK_T
+from mhd_surrogate.evaluation.quantities import DEFAULT_CHUNK_T
 
 
 @dataclass(frozen=True)

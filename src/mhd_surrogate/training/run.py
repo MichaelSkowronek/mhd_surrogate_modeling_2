@@ -9,6 +9,7 @@ only differ in where the output directory, run name and tags come from.
 
 from __future__ import annotations
 
+import importlib
 import logging
 import os
 import time
@@ -25,12 +26,11 @@ import mlflow
 from mhd_surrogate.data.grid import grid_spacing
 from mhd_surrogate.data.normalization import NormalizationStats
 from mhd_surrogate.data.versioning import data_provenance
-from mhd_surrogate.evaluation.evaluate import evaluate, selection_scores, train_eval_datasets
+from mhd_surrogate.evaluation.selection import selection_scores
 from mhd_surrogate.models.base import FitHooks, fit_model
 from mhd_surrogate.models.registry import build_model
-from mhd_surrogate.training.export import write_metrics
+from mhd_surrogate.training.export import checkpoint_digest, write_metrics
 from mhd_surrogate.training.mlflow_model import log_surrogate
-from mhd_surrogate.training.mlflow_utils import finite_metrics, log_metric_series
 from mhd_surrogate.training.tracking import resumed_run_id, save_run_record, tracked_run
 from mhd_surrogate.utils.jax_cache import enable_compilation_cache
 from mhd_surrogate.utils.jax_determinism import enable_deterministic_ops
@@ -52,7 +52,8 @@ def run_training(
     on_validation: OnValidation | None = None,
 ) -> dict[str, dict[str, float]]:
     """Fit and score `cfg.model` in an MLflow run; returns the scores by
-    prefix (`val`, `train.<dataset>`).
+    prefix (`val`, `train.<dataset>`), none with `evaluation.final=false`
+    (the DVC `train` stage, whose `evaluate` stage scores the checkpoint).
 
     `output_dir` gets the checkpoint (unless `cfg.export.dir` is set) and,
     for an iterative model, `training_state/`; with `cfg.resume` set, the run
@@ -144,24 +145,22 @@ def run_training(
         model.save(checkpoint)
         frame_shape = tuple(next(iter(train.values())).shape[1:])
         model_info = log_surrogate(model, checkpoint, frame_shape, params=resolved["model"])
+        # The checkpoint's content hash ties a later evaluation of it (the DVC
+        # `evaluate` stage) back to this run's logged model.
+        digest = checkpoint_digest(checkpoint)
+        mlflow.set_tag("checkpoint_sha256", digest)
+        mlflow.set_logged_model_tags(model_info.model_id, {"checkpoint_sha256": digest})
         log.info("checkpoint saved to %s, logged as model %s", checkpoint, model_info.model_id)
 
-        # Validation is what decisions are made on; the training dataset(s)
-        # are scored the same way as a sanity check (can the model fit at all,
-        # and how big is the train/val gap).
-        targets = [(cfg.data.val_dataset, "val")] + [
-            (name, f"train.{name}")
-            for name in train_eval_datasets(
-                list(cfg.evaluation.train_datasets), list(cfg.data.train_datasets)
-            )
-        ]
-        scores = {
-            prefix: _score_and_log(model, root[name], name, prefix, scale, cfg, model_info.model_id)
-            for name, prefix in targets
-        }
-        if export_dir is not None:
+        scores: dict[str, dict[str, float]] = {}
+        if cfg.evaluation.final:
+            # By name: see training/scoring.py for why.
+            scoring = importlib.import_module("mhd_surrogate.training.scoring")
+            scores = scoring.score_and_log(model, root, cfg, scale, model_info.model_id)
+        if export_dir is not None and scores:
             write_metrics(export_dir / "metrics.json", scores)
-            log.info("exported checkpoint and metrics to %s", export_dir)
+        if export_dir is not None:
+            log.info("exported to %s", export_dir)
         return scores
 
 
@@ -204,56 +203,3 @@ class ValidationMonitor:
             self.stability.block_steps,
             self.stability.max_ratio,
         )
-
-
-def _score_and_log(
-    model, series, name: str, prefix: str, scale: np.ndarray, cfg, model_id: str
-) -> dict[str, float]:
-    """Score `model` on one dataset under the forecast protocol and log the
-    scalar scores as `<prefix>.*` metrics and the RMSE curve as `<prefix>.rmse`,
-    on the run and linked to the logged model `model_id`. Returns the scores."""
-    dx, dy = grid_spacing(series.shape[2], series.shape[3])
-    start = time.perf_counter()
-    result = evaluate(
-        model,
-        series,
-        cfg.data.context_steps,
-        dx,
-        dy,
-        scale=scale,
-        skill_threshold=cfg.evaluation.skill_threshold,
-        report_leads=list(cfg.evaluation.report_leads),
-        block_steps=cfg.evaluation.stability.block_steps,
-        max_ratio=cfg.evaluation.stability.max_ratio,
-        n_members=cfg.evaluation.ensemble_size,
-        member_batch=cfg.evaluation.member_batch,
-    )
-    eval_seconds = time.perf_counter() - start
-    log.info("evaluated on %s in %.1f s", name, eval_seconds)
-
-    finite, undefined = finite_metrics(result.scores)
-    mlflow.log_metrics({f"{prefix}.{k}": v for k, v in finite.items()}, model_id=model_id)
-    # Timings are logged to MLflow only, not returned with the scores: the
-    # scores go to the DVC-tracked metrics.json, which must not change from
-    # one `dvc repro` to the next.
-    mlflow.log_metrics(
-        {
-            f"{prefix}.eval_seconds": eval_seconds,
-            f"{prefix}.forecast_seconds_per_frame": result.seconds_per_frame,
-        },
-        model_id=model_id,
-    )
-    if undefined:
-        log.info("%s: undefined for this model, not logged: %s", prefix, ", ".join(undefined))
-    log_metric_series(f"{prefix}.rmse", result.rmse, start_step=1, model_id=model_id)
-    log_metric_series(f"{prefix}.crps", result.ensemble.crps, start_step=1, model_id=model_id)
-    if result.ensemble.size > 1:
-        for name in ("spread", "ensemble_mean_rmse"):
-            curve = getattr(result.ensemble, name)
-            log_metric_series(f"{prefix}.{name}", curve, start_step=1, model_id=model_id)
-    log.info(
-        "%s scores:\n%s",
-        prefix,
-        "\n".join(f"  {k}: {v:.4g}" for k, v in sorted(result.scores.items())),
-    )
-    return result.scores

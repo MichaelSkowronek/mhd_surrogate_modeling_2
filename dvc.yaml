@@ -34,18 +34,24 @@ stages:
       - data/processed/normalization_stats.json
 
   # The canonical model (see README "Data versioning (DVC)" -> "Training
-  # stage"): Hankel DMD at the delays and rank its validation sweep selected
-  # (until then, plain DMD at rank 750). Exploration (sweeps, other models)
-  # stays in Hydra/MLflow; this stage pins what produced the selected model.
-  # It still logs to MLflow like any run.
+  # stage"), in two stages: `train` fits it and stores the checkpoint,
+  # `evaluate` scores the stored checkpoint into metrics.json. A change to
+  # the evaluation code then re-scores the model instead of retraining it.
+  # Exploration (sweeps, other models) stays in Hydra/MLflow; these stages
+  # pin what produced the selected model, and still log to MLflow like any
+  # run. Both run with deterministic GPU kernels (jax.deterministic_ops), so
+  # a re-run reproduces their outputs bit for bit on the same GPU and stack.
   train:
-    cmd: uv run scripts/training/train.py model=hankel_dmd export.dir=models/hankel_dmd
+    cmd: >-
+      uv run scripts/training/train.py model=hankel_dmd export.dir=models/hankel_dmd
+      evaluation.final=false jax.deterministic_ops=true
     # Code deps are exactly what train.py imports, transitively (checked by
     # tests/training/test_dvc_train_stage.py), not the whole package: editing
-    # an unrelated module (e.g. analysis/pod.py) shouldn't force a ~2-minute
-    # retrain and a new ~880 MB cache entry. The registry imports models
-    # lazily, so only the trained model's modules are deps, not every model's
-    # (nor the neural models' training loop, training/trainer.py).
+    # an unrelated module (e.g. analysis/pod.py) shouldn't force a retrain.
+    # The registry imports models lazily, so only the trained model's modules
+    # are deps, not every model's; the final scoring (training/scoring.py) is
+    # imported by name only when a run scores itself, which this one doesn't,
+    # so of the evaluation code only what early stopping uses is a dep.
     deps:
       - data/processed/re16k_t400.zarr
       - data/processed/normalization_stats.json
@@ -57,7 +63,12 @@ stages:
       - src/mhd_surrogate/models/registry.py
       - src/mhd_surrogate/models/dmd.py
       - src/mhd_surrogate/models/hankel_dmd.py
-      - src/mhd_surrogate/evaluation
+      - src/mhd_surrogate/evaluation/__init__.py
+      - src/mhd_surrogate/evaluation/metrics.py
+      - src/mhd_surrogate/evaluation/protocol.py
+      - src/mhd_surrogate/evaluation/quantities.py
+      - src/mhd_surrogate/evaluation/selection.py
+      - src/mhd_surrogate/evaluation/stability.py
       - src/mhd_surrogate/training/__init__.py
       - src/mhd_surrogate/training/export.py
       - src/mhd_surrogate/training/mlflow_model.py
@@ -70,13 +81,14 @@ stages:
       - src/mhd_surrogate/data/versioning.py
       - src/mhd_surrogate/analysis/__init__.py
       - src/mhd_surrogate/analysis/fields.py
-      - src/mhd_surrogate/analysis/spectral.py
       - src/mhd_surrogate/utils/__init__.py
       - src/mhd_surrogate/utils/parallel.py
       - src/mhd_surrogate/utils/jax_cache.py
       - src/mhd_surrogate/utils/jax_determinism.py
       - src/mhd_surrogate/utils/hydra_resolvers.py
-    # The keys that change the fitted model or its scores; performance knobs
+    # The keys that change the fitted model: its own, the data it's fitted
+    # on, and what early stopping scores on (the validation dataset and the
+    # selection rule) for a model trained iteratively. Performance knobs
     # (chunk sizes) are left out so tuning them doesn't retrain.
     params:
       - configs/model/hankel_dmd.yaml:
@@ -93,11 +105,63 @@ stages:
           - std_mode
       - configs/evaluation/default.yaml:
           - skill_threshold
+          - tie_break_lead
+          - stability
+    outs:
+      - models/hankel_dmd/model
+
+  evaluate:
+    cmd: >-
+      uv run scripts/evaluation/evaluate_checkpoint.py checkpoint=models/hankel_dmd/model
+      export.dir=models/hankel_dmd jax.deterministic_ops=true
+    # Code deps: what evaluate_checkpoint.py imports, transitively, plus the
+    # scored model's modules (checked by tests/training/test_dvc_train_stage.py).
+    deps:
+      - models/hankel_dmd/model
+      - data/processed/re16k_t400.zarr
+      - data/processed/normalization_stats.json
+      - configs/analysis/grid.yaml
+      - scripts/evaluation/evaluate_checkpoint.py
+      - src/mhd_surrogate/__init__.py
+      - src/mhd_surrogate/models/__init__.py
+      - src/mhd_surrogate/models/base.py
+      - src/mhd_surrogate/models/registry.py
+      - src/mhd_surrogate/models/dmd.py
+      - src/mhd_surrogate/models/hankel_dmd.py
+      - src/mhd_surrogate/evaluation
+      - src/mhd_surrogate/training/__init__.py
+      - src/mhd_surrogate/training/export.py
+      - src/mhd_surrogate/training/mlflow_utils.py
+      - src/mhd_surrogate/training/scoring.py
+      - src/mhd_surrogate/training/tracking.py
+      - src/mhd_surrogate/data/__init__.py
+      - src/mhd_surrogate/data/grid.py
+      - src/mhd_surrogate/data/normalization.py
+      - src/mhd_surrogate/data/versioning.py
+      - src/mhd_surrogate/analysis/__init__.py
+      - src/mhd_surrogate/analysis/fields.py
+      - src/mhd_surrogate/analysis/spectral.py
+      - src/mhd_surrogate/utils/__init__.py
+      - src/mhd_surrogate/utils/parallel.py
+      - src/mhd_surrogate/utils/jax_cache.py
+      - src/mhd_surrogate/utils/jax_determinism.py
+      - src/mhd_surrogate/utils/hydra_resolvers.py
+    # The keys that change the scores. ensemble_size and member_batch are
+    # left out while the canonical model is deterministic (they can't change
+    # its scores), chunk sizes because they're performance knobs.
+    params:
+      - configs/data/re16k.yaml:
+          - zarr_store
+          - train_datasets
+          - val_dataset
+          - context_steps
+      - configs/normalization/per_channel.yaml:
+          - std_mode
+      - configs/evaluation/default.yaml:
+          - skill_threshold
           - report_leads
           - stability
           - train_datasets
-    outs:
-      - models/hankel_dmd/model
     metrics:
       - models/hankel_dmd/metrics.json:
           cache: false

@@ -22,8 +22,8 @@ from collections.abc import Mapping
 
 import numpy as np
 
-from mhd_surrogate.evaluation.diagnostics import DEFAULT_CHUNK_T, enstrophy, kinetic_energy
 from mhd_surrogate.evaluation.protocol import ForecastModel, predict_member
+from mhd_surrogate.evaluation.quantities import DEFAULT_CHUNK_T, enstrophy, kinetic_energy
 
 QUANTITIES = ("energy", "enstrophy")
 

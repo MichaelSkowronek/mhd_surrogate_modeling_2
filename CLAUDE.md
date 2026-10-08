@@ -74,7 +74,9 @@ conventions below; it shifts which tools are worth reaching for at all.
 
 - The raw `.npy` files are versioned with DVC (`data/raw.dvc`); the
   pipeline is `dvc.yaml` (raw -> zarr -> normalization stats -> the
-  canonical model's `train` stage), run with `uv run dvc repro`. Don't
+  canonical model's `train` stage, which stores the checkpoint -> its
+  `evaluate` stage, which scores it into `metrics.json`), run with
+  `uv run dvc repro`. Don't
   rebuild the zarr, the stats or the canonical model by running the scripts
   by hand and leave `dvc.lock` out of date: a new pipeline step or
   dependency goes in `dvc.yaml`, and `dvc.lock` is committed with the change
@@ -157,7 +159,13 @@ conventions below; it shifts which tools are worth reaching for at all.
   (`training/trainer.py`, `training/tuning.py`, the neural models) stays
   out of the DVC `train` stage's deps while a non-neural model is
   canonical: the deps list exactly what `train.py` imports (checked by
-  `tests/training/test_dvc_train_stage.py`).
+  `tests/training/test_dvc_train_stage.py`, which does the same for the
+  `evaluate` stage and `scripts/evaluation/evaluate_checkpoint.py`). Code
+  early stopping needs goes in `evaluation/selection.py` (and what it
+  imports); evaluation-only code (diagnostics, ensemble scores) must stay
+  out of `train.py`'s imports -- `run.py` reaches the final scoring
+  (`training/scoring.py`) only by name -- so changing it re-scores the
+  stored checkpoint instead of retraining.
 - JAX entry points call `utils/jax_cache.py`'s `enable_compilation_cache`
   before anything is jitted (JAX ignores cache config changes after its
   first compile). The cache is a performance knob, not a DVC param. But a

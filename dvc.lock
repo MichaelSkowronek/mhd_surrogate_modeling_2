@@ -56,7 +56,8 @@ stages:
       size: 377
   train:
     cmd: uv run scripts/training/train.py model=hankel_dmd 
-      export.dir=models/hankel_dmd
+      export.dir=models/hankel_dmd evaluation.final=false 
+      jax.deterministic_ops=true
     deps:
     - path: configs/analysis/grid.yaml
       hash: md5
@@ -75,6 +76,181 @@ stages:
       hash: md5
       md5: 4cb0061c793acdea1ce994d1dffe6a22
       size: 4077
+    - path: src/mhd_surrogate/__init__.py
+      hash: md5
+      md5: d41d8cd98f00b204e9800998ecf8427e
+      size: 0
+    - path: src/mhd_surrogate/analysis/__init__.py
+      hash: md5
+      md5: d41d8cd98f00b204e9800998ecf8427e
+      size: 0
+    - path: src/mhd_surrogate/analysis/fields.py
+      hash: md5
+      md5: c95da48a655a249b4f5d46fc53f89879
+      size: 1627
+    - path: src/mhd_surrogate/data/__init__.py
+      hash: md5
+      md5: d41d8cd98f00b204e9800998ecf8427e
+      size: 0
+    - path: src/mhd_surrogate/data/grid.py
+      hash: md5
+      md5: 838dd3ea41d2816c0b63e6b6187b0729
+      size: 503
+    - path: src/mhd_surrogate/data/normalization.py
+      hash: md5
+      md5: ec64ef70263faa54e3fbd7d1d5b620f2
+      size: 9420
+    - path: src/mhd_surrogate/data/versioning.py
+      hash: md5
+      md5: ad83b714550bb0aa49d430d32ee0fff6
+      size: 1480
+    - path: src/mhd_surrogate/evaluation/__init__.py
+      hash: md5
+      md5: d41d8cd98f00b204e9800998ecf8427e
+      size: 0
+    - path: src/mhd_surrogate/evaluation/metrics.py
+      hash: md5
+      md5: 870f966e65d1dc8fdbff20f8b2aa737a
+      size: 2728
+    - path: src/mhd_surrogate/evaluation/protocol.py
+      hash: md5
+      md5: bcd0af22015e2e49ca36cd084a56b380
+      size: 6903
+    - path: src/mhd_surrogate/evaluation/quantities.py
+      hash: md5
+      md5: e44a26ac69dca46aacf80c5552d84ca5
+      size: 981
+    - path: src/mhd_surrogate/evaluation/selection.py
+      hash: md5
+      md5: c513aaf6e8eff37d2f3bc74392b11b4d
+      size: 2599
+    - path: src/mhd_surrogate/evaluation/stability.py
+      hash: md5
+      md5: 2e44647083b1cdc7daba352fbb0f6e61
+      size: 6092
+    - path: src/mhd_surrogate/models/__init__.py
+      hash: md5
+      md5: d41d8cd98f00b204e9800998ecf8427e
+      size: 0
+    - path: src/mhd_surrogate/models/base.py
+      hash: md5
+      md5: 963a0132332e9b36582dfb54d63328bc
+      size: 3752
+    - path: src/mhd_surrogate/models/dmd.py
+      hash: md5
+      md5: 74c770078a008df7d31a5f40bf30e112
+      size: 12819
+    - path: src/mhd_surrogate/models/hankel_dmd.py
+      hash: md5
+      md5: a354860cf4c5e8a0f89500cd35c2f824
+      size: 10166
+    - path: src/mhd_surrogate/models/registry.py
+      hash: md5
+      md5: 18e4e51ebb8490c1569ad1610063cdb1
+      size: 1741
+    - path: src/mhd_surrogate/training/__init__.py
+      hash: md5
+      md5: d41d8cd98f00b204e9800998ecf8427e
+      size: 0
+    - path: src/mhd_surrogate/training/export.py
+      hash: md5
+      md5: 92d5723c2643e117d0ff24db07112d71
+      size: 1929
+    - path: src/mhd_surrogate/training/mlflow_model.py
+      hash: md5
+      md5: 4bc767b7caaee3bb9a64fe072b7467d4
+      size: 4176
+    - path: src/mhd_surrogate/training/mlflow_utils.py
+      hash: md5
+      md5: 42e538766a9f73593cd6ed9c2c030328
+      size: 2199
+    - path: src/mhd_surrogate/training/run.py
+      hash: md5
+      md5: 277f57e2bd0e910df39c79cc02cecf40
+      size: 9022
+    - path: src/mhd_surrogate/training/tracking.py
+      hash: md5
+      md5: f7ac0ed45b5a5cb13688f36dcdbd59d1
+      size: 5213
+    - path: src/mhd_surrogate/utils/__init__.py
+      hash: md5
+      md5: d41d8cd98f00b204e9800998ecf8427e
+      size: 0
+    - path: src/mhd_surrogate/utils/hydra_resolvers.py
+      hash: md5
+      md5: ed74e5be1ec98086305dcdbd3ec15aa2
+      size: 746
+    - path: src/mhd_surrogate/utils/jax_cache.py
+      hash: md5
+      md5: addd4bccd9b3a3c155ce933c0a3dd798
+      size: 2166
+    - path: src/mhd_surrogate/utils/jax_determinism.py
+      hash: md5
+      md5: bc4518fb1a024b36fa0f7c48a14de4bc
+      size: 2182
+    - path: src/mhd_surrogate/utils/parallel.py
+      hash: md5
+      md5: 12780c8a2ef5c2334e0873254eb1eac2
+      size: 8491
+    params:
+      configs/data/re16k.yaml:
+        context_steps: 80
+        train_datasets:
+        - re16k_t400_0
+        - re16k_t400_1
+        - re16k_t400_2
+        - re16k_t400_3
+        - re16k_t400_4
+        - re16k_t400_9
+        - re16k_t400_10
+        val_dataset: re16k_t400_6
+        zarr_store: data/processed/re16k_t400.zarr
+      configs/evaluation/default.yaml:
+        skill_threshold: 0.5
+        stability:
+          block_steps: 100
+          max_ratio: 2.0
+        tie_break_lead: 10
+      configs/model/hankel_dmd.yaml:
+        delays: 4
+        rank: 1000
+        spatial_rank: 750
+        stabilize: true
+      configs/normalization/per_channel.yaml:
+        std_mode: per_channel
+    outs:
+    - path: models/hankel_dmd/model
+      hash: md5
+      md5: e175d98a7035bdf06e9c7f7c38b7fc0c.dir
+      size: 906249481
+      nfiles: 2
+  evaluate:
+    cmd: uv run scripts/evaluation/evaluate_checkpoint.py 
+      checkpoint=models/hankel_dmd/model export.dir=models/hankel_dmd 
+      jax.deterministic_ops=true
+    deps:
+    - path: configs/analysis/grid.yaml
+      hash: md5
+      md5: 3d0556d5c7871f432d7b16ae2700c3ad
+      size: 825
+    - path: data/processed/normalization_stats.json
+      hash: md5
+      md5: 603bc434b437b41486a9ecc5639b0df7
+      size: 377
+    - path: data/processed/re16k_t400.zarr
+      hash: md5
+      md5: 2dc98618c845bdf17445bc3b15f59ca7.dir
+      size: 9441145296
+      nfiles: 293
+    - path: models/hankel_dmd/model
+      hash: md5
+      md5: e175d98a7035bdf06e9c7f7c38b7fc0c.dir
+      size: 906249481
+      nfiles: 2
+    - path: scripts/evaluation/evaluate_checkpoint.py
+      hash: md5
+      md5: 79ab8ca1e7506513fd4ee8217483f61d
+      size: 1667
     - path: src/mhd_surrogate/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -109,9 +285,9 @@ stages:
       size: 1480
     - path: src/mhd_surrogate/evaluation
       hash: md5
-      md5: 3d0a72485e2f0a28f48480071dcc656c.dir
-      size: 35887
-      nfiles: 7
+      md5: dcb84548b86dae736ed77a305da56a35.dir
+      size: 37510
+      nfiles: 9
     - path: src/mhd_surrogate/models/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -138,20 +314,16 @@ stages:
       size: 0
     - path: src/mhd_surrogate/training/export.py
       hash: md5
-      md5: 610f25a51d6365bde2aa6b0e18851f05
-      size: 1313
-    - path: src/mhd_surrogate/training/mlflow_model.py
-      hash: md5
-      md5: 4bc767b7caaee3bb9a64fe072b7467d4
-      size: 4176
+      md5: 92d5723c2643e117d0ff24db07112d71
+      size: 1929
     - path: src/mhd_surrogate/training/mlflow_utils.py
       hash: md5
       md5: 42e538766a9f73593cd6ed9c2c030328
       size: 2199
-    - path: src/mhd_surrogate/training/run.py
+    - path: src/mhd_surrogate/training/scoring.py
       hash: md5
-      md5: 8df0982cfc5944b17a8c0ff3db98781a
-      size: 11195
+      md5: 7b1593f95e40d988046de1c18389e52a
+      size: 8043
     - path: src/mhd_surrogate/training/tracking.py
       hash: md5
       md5: f7ac0ed45b5a5cb13688f36dcdbd59d1
@@ -201,11 +373,6 @@ stages:
           max_ratio: 2.0
         train_datasets:
         - re16k_t400_0
-      configs/model/hankel_dmd.yaml:
-        delays: 4
-        rank: 1000
-        spatial_rank: 750
-        stabilize: true
       configs/normalization/per_channel.yaml:
         std_mode: per_channel
     outs:
@@ -213,8 +380,3 @@ stages:
       hash: md5
       md5: 39db6c45931a6d304947c74c8a0fd9d5
       size: 1550
-    - path: models/hankel_dmd/model
-      hash: md5
-      md5: e175d98a7035bdf06e9c7f7c38b7fc0c.dir
-      size: 906249481
-      nfiles: 2
