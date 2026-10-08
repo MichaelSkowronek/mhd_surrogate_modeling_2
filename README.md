@@ -592,7 +592,10 @@ and from there pointwise error favors whatever sits closest to the mean -- in
 the DMD rank sweep it ranks the smoothest, lowest-rank model first. The
 physics scores are **guardrails**, not objectives (optimizing one directly
 invites gaming it): a candidate replaces the incumbent only if it is stable
-over the whole validation forecast, its energy and
+over the whole validation forecast and over a 3000-step rollout from the
+validation context (`check_rollout_stability.py`: no 100-step block over 2x
+the truth's largest energy or enstrophy block mean; a stable validation
+forecast alone can be luck, see "Input noise"), its energy and
 enstrophy errors are no more than 0.03 worse and its x/y spectrum distances
 no more than 0.05 worse. Those tolerances are about the spread a different
 realization of the flow scores (energy <1%, enstrophy <3%, spectrum
@@ -2254,7 +2257,10 @@ physics guardrails. With noise 0.1 it is stable over 3000-step rollouts
 (3 seeds of 3) and passes every guardrail with skill horizon 10-12; Hankel
 DMD stays canonical until that switch is decided (see "Input noise"). The
 defaults in `configs/model/unet.yaml` are the hand-picked starting point
-plus input noise 0.1. The
+plus input noise 0.1 and the full 30-epoch schedule for every run (patience
+30, so early stopping never ends a run: stable steps flip between epochs,
+and an early stop keeps an early lucky epoch and misses the annealed ones;
+the best epoch is still the one kept). The
 U-Net isn't a DVC stage: only the canonical model is, and the U-Net becomes
 canonical only if it beats Hankel DMD on validation. `training/trainer.py` and
 `training/tuning.py` aren't dependencies of the current `train` stage, so
@@ -2336,10 +2342,10 @@ Tune. Its root config, `configs/tune.yaml`, is `config.yaml` plus a
   which regions of the space score well, from the trials so far, and samples
   the next configuration there instead of uniformly at random. ASHA
   (asynchronous successive halving) compares trials at rungs of 4, 12 and 36
-  validations (`grace_period` x `reduction_factor`^k) and stops those below
-  the top third of what reached the rung. Most of the budget goes to
-  promising configurations; a bad learning rate is dropped after 4 epochs,
-  not 60. Both are needed: ASHA alone samples blindly, Optuna alone trains
+  validations (`grace_period` x `reduction_factor`^k; with the default 30
+  epochs, 4 and 12) and stops those below the top third of what reached the
+  rung. Most of the budget goes to promising configurations; a bad learning
+  rate is dropped after 4 epochs, not 30. Both are needed: ASHA alone samples blindly, Optuna alone trains
   every trial to the end. (Not HyperOpt: Optuna is its maintained TPE
   successor and integrates with Tune the same way.)
 - **The defaults are the first trial.** With `search.evaluate_defaults`

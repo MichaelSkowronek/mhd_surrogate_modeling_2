@@ -57,9 +57,11 @@ conventions below; it shifts which tools are worth reaching for at all.
   by RMSE at lead 10. Mean RMSE over all leads is not a selection metric: it
   rewards forecasts that smooth toward the mean. The physics scores are
   guardrails, not objectives: a candidate replaces the incumbent only if it
-  is stable over the whole validation forecast, its energy and enstrophy
-  errors are no more than 0.03 worse and its spectrum distances no more than
-  0.05 worse (about the spread a different realization scores).
+  is stable over the whole validation forecast and over a 3000-step rollout
+  from the validation context (`scripts/evaluation/check_rollout_stability.py`,
+  no 100-step block over 2x the truth's energy or enstrophy), its energy and
+  enstrophy errors are no more than 0.03 worse and its spectrum distances no
+  more than 0.05 worse (about the spread a different realization scores).
 - `scripts/analysis/*.py` scripts read `configs/analysis/split.yaml` (via
   `--config`) and analyze each configured dataset's full recorded length
   (`arr.shape[0]`): datasets are held out whole, so no region within a
@@ -141,6 +143,12 @@ conventions below; it shifts which tools are worth reaching for at all.
   register in `models/registry.py` with a `configs/model/` file, and take and
   return raw fields (normalizing internally), so every model is scored in the
   same units.
+- A generative model sets `stochastic = True` and takes
+  `predict(context, n_steps, seed=...)` (optionally `predict_members` for
+  batches, the same sample per seed whatever the batch); code that
+  forecasts goes through `evaluation/protocol.py` (`predict_member`,
+  `forecast`, `forecast_members`) rather than calling `model.predict`, so
+  the seed reaches a stochastic model and a deterministic one gets none.
 - Register a model by import path (`"module:Class"` in `MODELS`), not by
   importing it in the registry: the registry imports a model only when it's
   built or loaded, so the DVC `train` stage depends only on the canonical
