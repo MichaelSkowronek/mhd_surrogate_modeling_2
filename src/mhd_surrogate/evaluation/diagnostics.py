@@ -23,10 +23,11 @@ from __future__ import annotations
 
 import numpy as np
 
-from mhd_surrogate.analysis.fields import divergence, vorticity
+from mhd_surrogate.analysis.fields import divergence
 from mhd_surrogate.analysis.spectral import interpolated_peak, spectrum_sum, welch_spectrum
+from mhd_surrogate.evaluation.quantities import DEFAULT_CHUNK_T, enstrophy, kinetic_energy
 
-DEFAULT_CHUNK_T = 32
+__all__ = ["DEFAULT_CHUNK_T", "enstrophy", "kinetic_energy"]  # re-exported
 # Welch segment length in steps, as in the EDA's temporal spectra
 # (scripts/analysis/check_spatial_mean_spectrum.py); overlap defaults to half.
 NPERSEG = 200
@@ -37,16 +38,6 @@ U_Y = 1
 # power is ~0 everywhere, scores a bounded "several decades off" rather than a
 # number set by an arbitrary constant.
 SPECTRUM_FLOOR_RATIO = 1e-10
-
-
-def kinetic_energy(block: np.ndarray) -> np.ndarray:
-    """Spatial mean of 0.5 |u|^2 per step, shape (t,)."""
-    return 0.5 * (block**2).sum(axis=1).mean(axis=(1, 2))
-
-
-def enstrophy(block: np.ndarray, dx: float, dy: float) -> np.ndarray:
-    """Spatial mean of 0.5 w^2 per step, shape (t,)."""
-    return 0.5 * (vorticity(block, dx, dy) ** 2).mean(axis=(1, 2))
 
 
 def rms_divergence(block: np.ndarray, dx: float, dy: float) -> np.ndarray:

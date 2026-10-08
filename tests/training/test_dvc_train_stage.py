@@ -1,19 +1,25 @@
-"""The DVC `train` stage's code deps must cover everything train.py imports.
+"""The DVC `train` and `evaluate` stages' code deps must cover everything
+their entry points import.
 
 They're listed module by module (not the whole package) so unrelated edits
-don't force a retrain; a module train.py starts importing without being
-added to dvc.yaml would let `dvc repro` call a stale model up to date. This
-test computes train.py's transitive imports of this package and fails if any
-of their files isn't covered by a dep.
+don't force a re-run; a module an entry point starts importing without being
+added to dvc.yaml would let `dvc repro` call a stale model or stale scores up
+to date. These tests compute each entry point's transitive imports of this
+package and fail if any of their files isn't covered by a dep.
 
 The model registry imports models lazily, by import path, so the import
-graph doesn't reach the model the stage trains: the closure adds that
-model's module, looked up from the stage's `model=` override.
+graph doesn't reach the model the stages train and score: the closure adds
+that model's module, looked up from the `train` stage's `model=` override.
+Likewise `run.py` imports the final scoring (`training/scoring.py`) by name,
+only when a run scores itself; the `train` stage doesn't
+(`evaluation.final=false`), which is what keeps the evaluation-only code out
+of its deps -- checked here too.
 """
 
 import ast
 from pathlib import Path
 
+import pytest
 import yaml
 
 from mhd_surrogate.models.registry import MODELS
@@ -42,8 +48,16 @@ def module_files(module: str) -> list[Path]:
     return files
 
 
+TRAIN = ROOT / "scripts" / "training" / "train.py"
+EVALUATE = ROOT / "scripts" / "evaluation" / "evaluate_checkpoint.py"
+
+
+def stage(name: str) -> dict:
+    return yaml.safe_load((ROOT / "dvc.yaml").read_text())["stages"][name]
+
+
 def train_stage() -> dict:
-    return yaml.safe_load((ROOT / "dvc.yaml").read_text())["stages"]["train"]
+    return stage("train")
 
 
 def trained_model_module(cmd: str) -> str:
@@ -54,9 +68,11 @@ def trained_model_module(cmd: str) -> str:
     return MODELS[config["name"]].partition(":")[0]
 
 
-def train_import_closure() -> set[Path]:
+def import_closure(entry_point: Path) -> set[Path]:
+    """The files of every module of this package `entry_point` imports,
+    transitively, plus the trained model's."""
     files: set[Path] = set()
-    todo = list(imported_modules(ROOT / "scripts" / "training" / "train.py"))
+    todo = list(imported_modules(entry_point))
     todo.append(trained_model_module(train_stage()["cmd"]))
     seen: set[str] = set()
     while todo:
@@ -74,14 +90,42 @@ def covered(path: Path, deps: list[Path]) -> bool:
     return any(path == dep or dep in path.parents for dep in deps)
 
 
-def test_train_stage_deps_cover_everything_train_py_imports():
-    deps = [ROOT / dep for dep in train_stage()["deps"]]
+def train_import_closure() -> set[Path]:
+    return import_closure(TRAIN)
 
-    assert ROOT / "scripts" / "training" / "train.py" in deps
+
+@pytest.mark.parametrize("name, entry_point", [("train", TRAIN), ("evaluate", EVALUATE)])
+def test_stage_deps_cover_everything_its_entry_point_imports(name, entry_point):
+    deps = [ROOT / dep for dep in stage(name)["deps"]]
+
+    assert entry_point in deps
     missing = sorted(
-        str(p.relative_to(ROOT)) for p in train_import_closure() if not covered(p, deps)
+        str(p.relative_to(ROOT)) for p in import_closure(entry_point) if not covered(p, deps)
     )
-    assert not missing, f"add to the train stage's deps in dvc.yaml: {missing}"
+    assert not missing, f"add to the {name} stage's deps in dvc.yaml: {missing}"
+
+
+def test_the_train_stage_leaves_scoring_to_the_evaluate_stage():
+    """The train stage doesn't score its model, so the by-name import of the
+    final scoring never runs in it and the evaluation-only code (diagnostics,
+    ensemble scores) isn't among what it depends on."""
+    train, evaluate = train_stage(), stage("evaluate")
+    closure = train_import_closure()
+
+    assert "evaluation.final=false" in train["cmd"].split()
+    assert ROOT / "src" / PACKAGE / "training" / "scoring.py" not in closure
+    assert ROOT / "src" / PACKAGE / "evaluation" / "diagnostics.py" not in closure
+    assert ROOT / "src" / PACKAGE / "evaluation" / "selection.py" in closure
+    # evaluate scores what train stored, and writes the metrics.
+    (checkpoint,) = train["outs"]
+    assert checkpoint in evaluate["deps"]
+    assert f"checkpoint={checkpoint}" in evaluate["cmd"].split()
+    assert "metrics" in evaluate and "metrics" not in train
+
+
+def test_both_stages_use_deterministic_kernels():
+    for name in ("train", "evaluate"):
+        assert "jax.deterministic_ops=true" in stage(name)["cmd"].split()
 
 
 def test_closure_finds_transitive_imports():

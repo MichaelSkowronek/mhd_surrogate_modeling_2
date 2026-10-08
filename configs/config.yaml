@@ -41,11 +41,15 @@ jax:
 # run; the console log is appended to the run's log file.
 resume: null
 
-# Fixed output location, set by the DVC `train` stage (dvc.yaml): the
-# checkpoint goes to <dir>/model and the scores to <dir>/metrics.json.
+# Fixed output location, set by the DVC stages (dvc.yaml): `train` writes
+# the checkpoint to <dir>/model, `evaluate` the scores to <dir>/metrics.json.
 # Unset (the default), both stay in the run's Hydra output directory.
 export:
   dir: null
+
+# The checkpoint directory scripts/evaluation/evaluate_checkpoint.py scores
+# (the DVC `evaluate` stage: the `train` stage's <export.dir>/model).
+checkpoint: null
 
 hydra:
   # Keep the working directory as the repo root: every script in this project

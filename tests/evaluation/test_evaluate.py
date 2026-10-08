@@ -3,8 +3,9 @@ import time
 import numpy as np
 import pytest
 
-from mhd_surrogate.evaluation.evaluate import evaluate, selection_scores, train_eval_datasets
+from mhd_surrogate.evaluation.evaluate import evaluate, train_eval_datasets
 from mhd_surrogate.evaluation.metrics import selection_score
+from mhd_surrogate.evaluation.selection import selection_scores
 from mhd_surrogate.models.baselines import Persistence
 
 DX, DY = 0.5, 0.25

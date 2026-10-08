@@ -1,6 +1,6 @@
 """Write a run's scores as a DVC metrics file.
 
-The DVC `train` stage (dvc.yaml) declares this file as its metrics, so
+The DVC `evaluate` stage (dvc.yaml) declares this file as its metrics, so
 `dvc metrics show` / `dvc metrics diff` compare the canonical model's
 scores across commits. Scores are rounded to `SIGNIFICANT_DIGITS` and written with sorted keys:
 retraining the same model on the GPU changes the scores around the 8th
@@ -10,6 +10,7 @@ without rounding every rerun would rewrite the git-tracked file with noise.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from collections.abc import Mapping
@@ -33,3 +34,16 @@ def write_metrics(path: Path | str, scores: Mapping[str, Mapping[str, float]]) -
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(finite, indent=2, sort_keys=True) + "\n")
+
+
+def checkpoint_digest(directory: Path | str) -> str:
+    """SHA-256 over a checkpoint directory's files (relative paths and
+    contents, in sorted order): identifies the checkpoint by content, so an
+    evaluation of a copy (e.g. one `dvc pull`ed) finds the run that trained
+    it."""
+    directory = Path(directory)
+    digest = hashlib.sha256()
+    for path in sorted(p for p in directory.rglob("*") if p.is_file()):
+        digest.update(path.relative_to(directory).as_posix().encode() + b"\0")
+        digest.update(hashlib.sha256(path.read_bytes()).digest())
+    return digest.hexdigest()
