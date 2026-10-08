@@ -286,3 +286,25 @@ def test_a_stochastic_model_is_scored_on_its_ensemble_and_its_seed_0_member():
     assert result.ensemble.spread == pytest.approx(np.full(20, 0.3), rel=0.25)
     assert "spread_skill_lead_5" in result.scores
     assert result.scores["crps_lead_1"] < result.scores["rmse_lead_1"]
+
+
+class BatchedNoisyOracle(NoisyOracle):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.batches = []
+
+    def predict_members(self, context, n_steps, seeds):
+        self.batches.append(list(seeds))
+        return np.stack([NoisyOracle.predict(self, context, n_steps, seed=s) for s in seeds])
+
+
+def test_batching_members_changes_how_they_are_sampled_not_the_scores():
+    series = make_series()
+    model = BatchedNoisyOracle(series, 10, 0.3)
+
+    batched = run(model, series, n_members=6, member_batch=4)
+    alone = run(NoisyOracle(series, 10, 0.3), series, n_members=6)
+
+    assert model.batches == [[1, 2, 3, 4], [5]]  # seed 0 is the single `forecast`
+    assert batched.scores == pytest.approx(alone.scores)
+    np.testing.assert_allclose(batched.ensemble.crps, alone.ensemble.crps)

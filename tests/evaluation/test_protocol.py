@@ -166,6 +166,65 @@ def test_forecast_members_yields_one_member_per_seed_reading_only_the_context():
     assert series.reads == [slice(2, 3)]
 
 
+class BatchSampler(Sampler):
+    """A stochastic model that can batch: each member's noise comes from its
+    own seed, so a member is the same alone or in any batch."""
+
+    def __init__(self):
+        super().__init__()
+        self.batches = []
+
+    def predict(self, context, n_steps, seed=0):
+        self.seeds.append(seed)
+        rng = np.random.default_rng(seed)
+        return context[-1] + rng.normal(size=(n_steps, *context.shape[1:]))
+
+    def predict_members(self, context, n_steps, seeds):
+        self.batches.append(list(seeds))
+        return np.stack(
+            [
+                context[-1] + np.random.default_rng(s).normal(size=(n_steps, *context.shape[1:]))
+                for s in seeds
+            ]
+        )
+
+
+@pytest.mark.parametrize("batch_size, calls", [(2, [[1, 2], [3, 4], [5]]), (8, [[1, 2, 3, 4, 5]])])
+def test_forecast_members_batches_a_model_that_can_and_gets_the_same_members(batch_size, calls):
+    series = np.zeros((6, 2, 3, 3))
+    one_by_one = list(forecast_members(BatchSampler(), series, 3, range(1, 6)))
+    model = BatchSampler()
+
+    batched = list(forecast_members(model, series, 3, range(1, 6), batch_size=batch_size))
+
+    assert model.batches == calls
+    assert model.seeds == []  # predict was never called
+    assert len(batched) == 5
+    for alone, in_batch in zip(one_by_one, batched):
+        np.testing.assert_array_equal(alone, in_batch)
+
+
+def test_forecast_members_falls_back_to_one_call_per_member_without_predict_members():
+    sampler = Sampler()
+
+    members = list(forecast_members(sampler, np.zeros((6, 2, 3, 3)), 3, [1, 2, 3], batch_size=4))
+
+    assert sampler.seeds == [1, 2, 3]
+    assert len(members) == 3
+
+
+def test_forecast_members_checks_a_batch_and_its_size():
+    class Short(BatchSampler):
+        def predict_members(self, context, n_steps, seeds):
+            return super().predict_members(context, n_steps, seeds)[:-1]
+
+    series = np.zeros((6, 2, 3, 3))
+    with pytest.raises(ValueError, match="shape"):
+        list(forecast_members(Short(), series, 3, [1, 2], batch_size=2))
+    with pytest.raises(ValueError, match="batch_size"):
+        list(forecast_members(BatchSampler(), series, 3, [1], batch_size=0))
+
+
 def test_forecast_members_rejects_a_series_without_scored_steps():
     with pytest.raises(ValueError, match="context_steps"):
         list(forecast_members(Sampler(), np.zeros((3, 2, 3, 3)), 3, [0]))

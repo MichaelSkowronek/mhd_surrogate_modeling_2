@@ -21,6 +21,11 @@
 #   src/mhd_surrogate/evaluation/ensemble.py). A deterministic model has a
 #   single member whatever this says, so it doesn't change their scores.
 #   Every other score is the seed-0 member's.
+# member_batch: members sampled per call by a model that can batch them
+#   (`predict_members`): throughput on a GPU with room to spare, 1 = one
+#   member per call. Batching can change float rounding, so it is part of
+#   what reproduces an ensemble's scores (a DVC param once a stochastic model
+#   is canonical; it can't change a deterministic model's).
 #
 # tie_break_lead: candidates are ranked by stable steps, then by skill
 #   horizon, ties broken by the RMSE at this lead (CLAUDE.md, "Data
@@ -37,5 +42,6 @@ stability:
   block_steps: 100
   max_ratio: 2.0
 ensemble_size: 8
+member_batch: 1
 tie_break_lead: 10
 train_datasets: [re16k_t400_0]

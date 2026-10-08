@@ -1706,6 +1706,15 @@ physics), and the ensemble adds:
   ~1 for a calibrated ensemble of M members (Fortin et al. 2014), below 1
   for an overconfident one.
 
+A model can also sample several members per call (`predict_members`;
+`evaluation.member_batch`, 1 by default), for a GPU with room to spare --
+a bigger cloud GPU, or a small model that leaves this one idle. Member k of
+a batch must be the sample for its own seed whatever else is in the batch
+(randomness drawn per seed, not split from a shared key), so batching only
+changes throughput -- up to float rounding, which GPU kernels can vary with
+the batch shape, so the batch size is part of what reproduces an
+ensemble's scores. A model without it gets one call per member.
+
 Members are streamed one at a time (an 837-step member is ~1 GB): the
 pairwise terms use consecutive members only, each an independent pair, so
 they're unbiased like all M (M - 1) / 2 pairs, with some more variance.
