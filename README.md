@@ -1714,7 +1714,14 @@ neither achievable nor the only thing worth measuring.
   the oscillation is damped). Welch uses the EDA's 200-step segments, so a
   held-out series gives ~7 of them: noisy, coarse estimates. A forecast with no
   oscillation at all (e.g. persistence, or the mean field) has an undefined
-  period (`nan`) and a peak ratio of 0. SPOD would give mode shapes rather than
+  period (`nan`) and a peak ratio of 0; so does one whose spectrum peaks in
+  the lowest bin where the truth's doesn't -- a slow drift, not a period
+  (every U-Net's used to read 200 / 25.6 - 1 = 6.806, see "Input noise").
+  That drift is measured directly: `u_y_mean_offset` is how far the time
+  mean of the forecast's domain-mean `u_y` lies from the truth's, and
+  `u_y_mean_std_ratio` how much it varies, both in units of the truth's own
+  variability over time (~0 and ~1 for a forecast on the truth's statistics).
+  Like the other oscillation scores they're reported, not decisive. SPOD would give mode shapes rather than
   a score (it needs mode matching between prediction and truth and an
   eigendecomposition per frequency), so it stays a plotting diagnostic.
 
@@ -2561,7 +2568,9 @@ peak in the lowest-frequency bin, which `interpolated_peak` returns
 unrefined (period 200, the segment length; 200 / 25.6 - 1 = 6.806). It is a
 spurious net cross-stream flow, not an oscillation, and neither the
 stability check nor the guardrails see it. (The fully trained models below
-drift far less; see there.)
+drift far less; see there. Since then the period error is `nan` for a drift
+and `u_y_mean_offset` / `u_y_mean_std_ratio` measure it, see "Forecast
+evaluation".)
 
 **Seeds and the full schedule** (sweep `13-40-27`). Two questions the
 first sweep left open: is noise 0.1's stability luck of one seed, and is it

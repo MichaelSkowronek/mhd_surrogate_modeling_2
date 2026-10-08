@@ -285,8 +285,8 @@ stages:
       size: 1480
     - path: src/mhd_surrogate/evaluation
       hash: md5
-      md5: dcb84548b86dae736ed77a305da56a35.dir
-      size: 37510
+      md5: bd4bd3845d1398ba2405a8d4623180ea.dir
+      size: 39041
       nfiles: 9
     - path: src/mhd_surrogate/models/__init__.py
       hash: md5
@@ -378,5 +378,5 @@ stages:
     outs:
     - path: models/hankel_dmd/metrics.json
       hash: md5
-      md5: 39db6c45931a6d304947c74c8a0fd9d5
-      size: 1550
+      md5: adba5a76d0f3453d637dc64e4e4fb1cf
+      size: 1690

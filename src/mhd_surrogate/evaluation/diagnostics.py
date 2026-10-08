@@ -93,9 +93,19 @@ def temporal_scores(
     - `temporal_u_x_lsd`, `temporal_u_y_lsd`: log-spectral distance per channel.
     - `u_y_period_error`: relative error of the dominant period of u_y (the
       EDA's coherent oscillation), peak refined between bins; nan if the
-      forecast has no oscillation (zero power).
+      forecast has no oscillation (zero power) or its spectrum peaks at the
+      lowest nonzero frequency (the longest period a segment resolves) where
+      the truth's doesn't: that is a slow drift, not a period (it used to
+      read as 200 / 25.6 - 1 = 6.806 for every drifting U-Net).
     - `u_y_peak_power_ratio`: predicted over true power at that peak, below 1
       when the oscillation is damped.
+    - `u_y_mean_offset`: |time mean of the predicted domain-mean u_y minus
+      the truth's|, in units of the truth's own std over time -- how far the
+      forecast's net cross-stream flow has drifted (~0 for a forecast on the
+      truth's mean; the truth's coherent oscillation is 1 std).
+    - `u_y_mean_std_ratio`: the predicted domain-mean u_y's std over time
+      over the truth's: above 1 when it wanders more than the truth
+      oscillates, below 1 when the oscillation is damped.
     """
     noverlap = nperseg // 2 if noverlap is None else noverlap
     omega, pred_power = None, []
@@ -108,8 +118,12 @@ def temporal_scores(
 
     pred_omega, pred_peak = interpolated_peak(omega, pred_power[U_Y])
     true_omega, true_peak = interpolated_peak(omega, true_power[U_Y])
-    if pred_peak <= SPECTRUM_FLOOR_RATIO * true_peak:
-        period_error = float("nan")  # no oscillation at all: its period is undefined
+    # A forecast peaking in the lowest nonzero bin where the truth doesn't is
+    # drifting rather than oscillating.
+    drifting = int(np.argmax(pred_power[U_Y][1:])) == 0 < int(np.argmax(true_power[U_Y][1:]))
+    if pred_peak <= SPECTRUM_FLOOR_RATIO * true_peak or drifting:
+        # No oscillation at all, or only a drift: the period is undefined.
+        period_error = float("nan")
     else:
         # period = 2 pi / omega, so the relative period error is |true/pred - 1|.
         period_error = float(abs(true_omega / pred_omega - 1.0))
@@ -118,6 +132,19 @@ def temporal_scores(
         "temporal_u_y_lsd": log_spectral_distance(pred_power[U_Y:], true_power[U_Y:]),
         "u_y_period_error": period_error,
         "u_y_peak_power_ratio": float(pred_peak / true_peak),
+        **mean_drift_scores(predicted[:, U_Y], true[:, U_Y]),
+    }
+
+
+def mean_drift_scores(predicted: np.ndarray, true: np.ndarray) -> dict[str, float]:
+    """`u_y_mean_offset` and `u_y_mean_std_ratio` (see `temporal_scores`) of
+    two (T,) domain-mean series."""
+    predicted = np.asarray(predicted, dtype=np.float64)
+    true = np.asarray(true, dtype=np.float64)
+    scale = true.std()
+    return {
+        "u_y_mean_offset": float(abs(predicted.mean() - true.mean()) / scale),
+        "u_y_mean_std_ratio": float(predicted.std() / scale),
     }
 
 
