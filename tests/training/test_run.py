@@ -105,6 +105,21 @@ def test_a_closed_form_model_is_fitted_scored_and_tracked(workspace):
     assert (workspace / "out" / "model" / "model.json").exists()
 
 
+def test_deterministic_ops_are_enabled_before_the_run_when_configured(workspace, monkeypatch):
+    calls = []
+    monkeypatch.setattr(run_module, "enable_deterministic_ops", lambda: calls.append(1))
+
+    run_training(config(workspace, "model=persistence"), workspace / "a", None, "p")
+    assert calls == []
+    run_training(
+        config(workspace, "model=persistence", "jax.deterministic_ops=true"),
+        workspace / "b",
+        None,
+        "p",
+    )
+    assert calls == [1]
+
+
 def test_an_iterative_model_reports_every_validation_and_records_its_run(workspace):
     reported = []
 

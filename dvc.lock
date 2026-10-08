@@ -150,8 +150,8 @@ stages:
       size: 2199
     - path: src/mhd_surrogate/training/run.py
       hash: md5
-      md5: e62b421403ebec3caee78f800c7d57de
-      size: 10980
+      md5: 8df0982cfc5944b17a8c0ff3db98781a
+      size: 11195
     - path: src/mhd_surrogate/training/tracking.py
       hash: md5
       md5: f7ac0ed45b5a5cb13688f36dcdbd59d1
@@ -166,8 +166,12 @@ stages:
       size: 746
     - path: src/mhd_surrogate/utils/jax_cache.py
       hash: md5
-      md5: 24c3f1cb19b02ea556ba1b10a8484313
-      size: 1991
+      md5: addd4bccd9b3a3c155ce933c0a3dd798
+      size: 2166
+    - path: src/mhd_surrogate/utils/jax_determinism.py
+      hash: md5
+      md5: bc4518fb1a024b36fa0f7c48a14de4bc
+      size: 2182
     - path: src/mhd_surrogate/utils/parallel.py
       hash: md5
       md5: 12780c8a2ef5c2334e0873254eb1eac2

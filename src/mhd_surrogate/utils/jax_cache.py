@@ -8,8 +8,11 @@ processes that compile the same program: same function, shapes, dtypes,
 device, compile flags and jax/jaxlib version, all part of the cache key, so
 a stale or foreign entry is never used, only missed.
 
-A cache hit reuses the executable a cold compile produced, so it doesn't
-change results; the cache is a performance knob, not a DVC dependency.
+A cache hit reuses the executable an earlier cold compile produced, so it's
+a performance knob, not a DVC dependency. That doesn't make cold compiles
+agree with each other: on the GPU they autotune kernels that round
+differently, so results that must reproduce also need deterministic ops
+(`utils/jax_determinism.py`).
 
 JAX initializes the cache on its first compile and ignores later changes to
 its config, so call `enable_compilation_cache` before anything is jitted.

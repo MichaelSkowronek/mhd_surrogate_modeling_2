@@ -20,11 +20,19 @@ seed: 42
 
 # Persistent XLA compilation cache (src/mhd_surrogate/utils/jax_cache.py):
 # compiled programs are reused across runs instead of recompiled (and
-# re-autotuned) in every process. Doesn't change results; set
-# compilation_cache_dir=null to disable.
+# re-autotuned) in every process; set compilation_cache_dir=null to disable.
+#
+# deterministic_ops: deterministic GPU kernels
+#   (src/mhd_surrogate/utils/jax_determinism.py). A cold GPU compile
+#   autotunes kernels that round differently, so without it results can
+#   change from compile to compile (U-Net scores in the 3rd digit); with it,
+#   every compile on the same GPU and stack gives the same bits, for ~50%
+#   more training time. On for the DVC stages (reproducible outputs), off
+#   for exploration.
 jax:
   compilation_cache_dir: .jax_cache
   compilation_cache_max_gb: 2
+  deterministic_ops: false
 
 # Resume an interrupted run of an iteratively trained model (e.g. model=unet):
 # the run's output directory, e.g. resume=outputs/2026-10-06/14-03-12, with the
