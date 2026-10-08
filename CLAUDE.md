@@ -160,8 +160,13 @@ conventions below; it shifts which tools are worth reaching for at all.
   `tests/training/test_dvc_train_stage.py`).
 - JAX entry points call `utils/jax_cache.py`'s `enable_compilation_cache`
   before anything is jitted (JAX ignores cache config changes after its
-  first compile). The cache is a performance knob, not a DVC param: a warm
-  and a cold cache reproduce byte-identical outputs.
+  first compile). The cache is a performance knob, not a DVC param. But a
+  cold GPU compile autotunes kernels and doesn't reproduce bits across
+  compiles (for the U-Net it changes scores in the 3rd digit), so anything
+  that must reproduce -- the DVC stages that produce the canonical model and
+  its scores -- runs with `jax.deterministic_ops=true`
+  (`utils/jax_determinism.py`, also set before the backend starts);
+  exploration leaves it off for speed.
 
 ## Parallelism
 

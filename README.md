@@ -84,7 +84,7 @@ src/mhd_surrogate/   importable package, split by pipeline stage
   training/          mlflow_utils, tracking, export, mlflow_model, run, trainer, tuning
   evaluation/        protocol, metrics, diagnostics, evaluate
   models/            base (interface), baselines, dmd, hankel_dmd, neural, unet, registry
-  utils/             logging_config, parallel, jax_cache, hydra_resolvers
+  utils/             logging_config, parallel, jax_cache, jax_determinism, hydra_resolvers
 scripts/             CLI entry points, same split (plus viz/)
   data/              explore_data, convert_to_zarr, compute_stats
   analysis/          check_*.py, run_all_checks, benchmark_backends
@@ -1431,13 +1431,39 @@ the canonical Hankel DMD fit takes 93 s instead of 141 s, the whole
 its shapes, the device, the compile flags and the jax version, so an
 upgrade or a different GPU misses rather than reuses a stale entry.
 
-The cache is a performance knob, not a DVC dependency: a hit reuses exactly
-the executable a cold compile built, and the canonical `train` stage
-reproduces byte-identical outputs (checkpoint and `metrics.json`) with a
-cold and a warm cache. So `jax.*` isn't in the stage's `params`, and
-deleting `.jax_cache/` is always safe. JAX reads the cache config on its
-first compile and ignores later changes, so entry points enable it before
-anything is jitted; `jax.compilation_cache_dir=null` turns it off.
+A cache hit reuses exactly the executable some earlier cold compile built
+-- which is not the same as saying every cold compile builds the same one.
+For Hankel DMD it does (its `train` stage reproduces byte-identical outputs
+with a cold and a warm cache), but on the GPU XLA *autotunes* convolutions
+and matmuls at compile time, timing candidate kernels that don't all round
+the same way, and which one wins varies from compile to compile. For the
+U-Net that's visible from the first forecast step: four cold compiles of
+one checkpoint gave RMSE at lead 10 of 0.4154, 0.4168, 0.4168 and 0.4170,
+while every process reusing one warm cache entry reproduced 0.4164 bit for
+bit, and two cold-compiled 2-epoch trainings of the same config already
+disagreed on the validation skill horizon (8 vs 9). A warm cache hides
+that on one machine but not across machines, cache evictions or jax
+upgrades.
+
+**Deterministic GPU kernels** (`jax.deterministic_ops`,
+`utils/jax_determinism.py`): `--xla_gpu_deterministic_ops=true` restricts
+XLA to deterministic kernels, so every compile on a given GPU and software
+stack produces the same bits -- measured: identical checkpoints and
+forecasts across cold compiles, for ~50% more time per U-Net training
+epoch (47 -> 71 s) and ~8% per forecast (5.1 -> 5.5 s). Turning autotuning
+off instead (`--xla_gpu_autotune_level=0`) falls back to kernels so slow an
+837-step forecast hadn't finished after 17 minutes. Off by default, which
+keeps exploration (sweeps, searches) fast; on for whatever must reproduce
+(the DVC stages that produce the canonical model and its scores). It is
+part of the cache key, so the two kinds of compile never share an entry.
+Bit-identical results across *different* GPU models are out of reach
+either way.
+
+So the cache stays a performance knob: deleting `.jax_cache/` is always
+safe, and with deterministic ops on, a cold and a warm cache give the same
+outputs. JAX reads the cache config on its first compile and XLA its flags
+when the backend starts, so entry points set both before anything is
+jitted; `jax.compilation_cache_dir=null` turns the cache off.
 
 `configs/dataset/` holds sample-windowing config (`window`/`horizon`/
 `stride`), selected via the `dataset` default.
