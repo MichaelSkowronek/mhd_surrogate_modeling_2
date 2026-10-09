@@ -50,9 +50,11 @@
 #   2.623, 2.097). The domain-mean u_y drift limits are absolute instead,
 #   the same for every model: the forecast's domain-mean u_y within one
 #   truth std of the truth's mean and varying at most 2x as much (a
-#   different realization scores <= 0.15 and 0.98-1.02; the truth's
-#   domain-mean u_y is nearly conserved, std 0.0055 against a per-pixel
-#   0.44).
+#   different realization scores <= 0.15 and 0.98-1.02). The truth's
+#   domain-mean u_y stays at 0 +- 0.0055 (a per-pixel std is 0.44): an
+#   empirical property of this flow, not a conservation law, whose
+#   fluctuation is the EDA's ~25-step oscillation; a drift beyond that
+#   band swamps it.
 #
 # train_datasets: train datasets also scored the same way, logged as
 #   `train.<name>.*` -- a sanity check of the fit and the train/val gap, not

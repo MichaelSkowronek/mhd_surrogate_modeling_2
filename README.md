@@ -644,16 +644,23 @@ realization of the flow scores (energy <1%, enstrophy <3%, spectrum
 0.01-0.03, see "Forecast evaluation"), so a candidate isn't rejected for a
 difference that is noise. Finally, its domain-mean `u_y` stays in the
 truth's band: `u_y_mean_offset` at most 1 and `u_y_mean_std_ratio` at most
-2. Those two limits are absolute, not relative to the incumbent: the
-truth's domain-mean `u_y` is nearly constant (std 0.0055 against a
-per-pixel std of 0.44 -- the net cross-stream momentum is close to
-conserved), a different realization scores at most 0.15 and 0.98-1.02,
-and a limit relative to an incumbent that damps it (Hankel DMD: 0.07 and
-0.41) would fail a model with the truth's own variability. Outside the
-band a forecast carries a spurious net cross-stream flow (see "Input
-noise"); one-sided like the stability check, since a still mean is
-harmless. The other
-oscillation scores are reported but not used to decide: on a single validation realization their noise (period error
+2. Those two limits are absolute, not relative to the incumbent: a
+limit relative to an incumbent that damps it (Hankel DMD: 0.07 and 0.41)
+would fail a model with the truth's own variability. They are in units of
+the truth's own variability over time, which is small: its domain-mean
+`u_y` stays at 0 +- 0.0055 (against a per-pixel std of 0.44), an
+empirical property of this flow -- the domain has an inlet and walls and
+is a slice of a 3D run, so no conservation law pins it -- whose
+fluctuation is the ~25-step oscillation the EDA found. A different
+realization scores at most 0.15 and 0.98-1.02, so the limits sit 7x and
+2x above that noise floor. On the scale of the field they are strict (1
+truth std is ~1.2% of a point's typical velocity, where the energy error
+tolerates tens of percent); the truth's band is the scale chosen because
+a drift beyond it swamps that oscillation, the one coherent temporal
+signal established in this flow. Outside the band a forecast carries a
+spurious net cross-stream flow (see "Input noise"); the limits are
+one-sided like the stability check, since a still mean is harmless. The
+other oscillation scores are reported but not used to decide: on a single validation realization their noise (period error
 0.15-0.19 for perfect dynamics) is as large as the differences between
 models so far.
 
