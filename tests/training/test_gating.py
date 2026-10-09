@@ -23,6 +23,8 @@ VAL_SCORES = {
     "enstrophy_rel_error": 0.1,
     "spectrum_x_lsd": 0.1,
     "spectrum_y_lsd": 0.1,
+    "u_y_mean_offset": 0.1,
+    "u_y_mean_std_ratio": 1.0,
 }
 
 

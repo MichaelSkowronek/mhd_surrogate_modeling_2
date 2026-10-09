@@ -14,7 +14,8 @@ stage (`scripts/evaluation/gate_checkpoint.py`, after `evaluate`) fails
 
 The limits are frozen when a model becomes canonical: its validation scores
 then plus the margins a replacement may be worse by (0.03 on the energy and
-enstrophy errors, 0.05 on the spectrum distances). Not the latest
+enstrophy errors, 0.05 on the spectrum distances), and the absolute limits
+on the domain-mean `u_y` drift. Not the latest
 `metrics.json`: limits that followed every retrain would let each one get a
 margin worse than the last. Replacing the canonical model stays a human
 decision; this checks that a retrain of it still meets the bar that decision
