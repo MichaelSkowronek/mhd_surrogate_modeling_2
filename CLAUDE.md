@@ -90,7 +90,9 @@ conventions below; it shifts which tools are worth reaching for at all.
   by hand and leave `dvc.lock` out of date: a new pipeline step or
   dependency goes in `dvc.yaml`, and `dvc.lock` is committed with the change
   that produced it (`tests/data/test_dvc_lock.py` fails CI when a stage's
-  code or params changed without the re-run). Exploration (sweeps, other models) stays in Hydra/MLflow,
+  code or params changed without the re-run, when a stage ran on another
+  version of an upstream output -- e.g. a failed `gate` after `train` and
+  `evaluate` relocked -- or when the committed gate verdict isn't a pass). Exploration (sweeps, other models) stays in Hydra/MLflow,
   not `dvc exp`.
 - The zarr store stays `cache: false` (a regenerable ~9 GB derivative, not
   stored in DVC's cache or the remote). The raw data, small outputs like the
