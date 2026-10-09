@@ -38,6 +38,17 @@
 #   analysis"); early stopping and the hyperparameter search maximize the
 #   three combined (`selection_score`).
 #
+# gate: the bar the canonical model must still meet when the DVC pipeline
+#   retrains it (src/mhd_surrogate/evaluation/gate.py, the `gate` stage):
+#   stable over the whole validation forecast and over a `rollout_steps`
+#   rollout from the validation context (the `stability` blocks and
+#   threshold), and every `max_scores` validation score at or below its
+#   limit. The limits are frozen when a model becomes canonical -- its
+#   validation scores then plus the margins a replacement may be worse by
+#   (0.03 energy/enstrophy errors, 0.05 spectrum distances) -- and change
+#   only with the next switch. Current: Hankel DMD's (0.2635, 0.7276,
+#   2.623, 2.097).
+#
 # train_datasets: train datasets also scored the same way, logged as
 #   `train.<name>.*` -- a sanity check of the fit and the train/val gap, not
 #   a basis for decisions. One by default (~35 s each); must be a subset of
@@ -51,4 +62,11 @@ stability:
 ensemble_size: 8
 member_batch: 1
 tie_break_lead: 10
+gate:
+  rollout_steps: 3000
+  max_scores:
+    energy_rel_error: 0.294
+    enstrophy_rel_error: 0.758
+    spectrum_x_lsd: 2.673
+    spectrum_y_lsd: 2.147
 train_datasets: [re16k_t400_0]

@@ -81,8 +81,8 @@ uv run pre-commit run --all-files
 src/mhd_surrogate/   importable package, split by pipeline stage
   data/              dataset, grid, normalization, versioning, conversion
   analysis/          fields, summary, spectral
-  training/          mlflow_utils, tracking, export, mlflow_model, run, scoring, trainer, tuning
-  evaluation/        protocol, metrics, quantities, stability, selection, diagnostics, ensemble, evaluate
+  training/          mlflow_utils, tracking, export, mlflow_model, run, scoring, gating, trainer, tuning
+  evaluation/        protocol, metrics, quantities, stability, selection, rollout, gate, diagnostics, ensemble, evaluate
   models/            base (interface), baselines, dmd, hankel_dmd, neural, unet, registry
   utils/             logging_config, parallel, jax_cache, jax_determinism, hydra_resolvers
 scripts/             CLI entry points, same split (plus viz/)
@@ -90,7 +90,7 @@ scripts/             CLI entry points, same split (plus viz/)
   analysis/          check_*.py, run_all_checks, benchmark_backends
   viz/               make_video, make_all_videos, make_forecast_video
   training/          train, tune
-  evaluation/        check_rollout_stability, evaluate_checkpoint
+  evaluation/        check_rollout_stability, evaluate_checkpoint, gate_checkpoint
 tests/               mirrors src/ and scripts/ (data/, analysis/, training/, evaluation/, models/, utils/, viz/)
 dvc.yaml, dvc.lock  data pipeline (raw -> zarr -> stats) and its pinned hashes
 data/raw.dvc         DVC pointer to the raw .npy files (.dvc/ holds the remote config)
@@ -420,8 +420,8 @@ uv run dvc metrics diff     # ... compared with the last commit
 ```
 
 DVC is more than data versioning: `dvc.yaml` is a pipeline of stages with
-declared dependencies, parameters and outputs, and two stages extend it from
-the data to the **canonical model** -- currently Hankel DMD at the delays and
+declared dependencies, parameters and outputs, and three stages extend it
+from the data to the **canonical model** -- currently Hankel DMD at the delays and
 rank its validation sweep selected (see "Delay sweep"):
 
 - **`train`** fits the model (`train.py ... evaluation.final=false`) and
@@ -436,6 +436,11 @@ rank its validation sweep selected (see "Delay sweep"):
   declared as DVC metrics and kept in git, so `dvc metrics diff` shows how a
   change moved the scores between commits. Its deps are the checkpoint, the
   data, the evaluation code and the evaluation config.
+- **`gate`** checks that the stored checkpoint still meets the bar that made
+  it canonical (`scripts/evaluation/gate_checkpoint.py`), and fails
+  `dvc repro` if it doesn't. It writes its verdict to `models/<model>/gate.json`
+  (also DVC metrics, kept in git): the 3000-step rollout's stable steps and
+  peak ratios, and `passed`.
 
 The split is about what a change costs. A new score or a fix in the
 diagnostics re-runs `evaluate` on the stored checkpoint (about a minute)
@@ -450,6 +455,32 @@ is a `train` dep; the rest (diagnostics, ensemble scores, the full
 `train` run tags itself and its logged model with the checkpoint's content
 hash (`checkpoint_sha256`), and the `evaluate` run finds that logged model by
 it and links its scores to it.
+
+**A retrain has to pass the gate.** A retrain is a new draw of its recipe:
+a deterministic retrain of the noise-0.1 U-Net (2026-10-08) came out
+stable for only 400 of the 837 validation steps, where three earlier draws of
+the same recipe had been stable throughout (see "Input noise"), and nothing
+in `train` or `evaluate` would have noticed -- whatever the retrain produced
+would have become the canonical model, `metrics.json` and all. The `gate`
+stage applies the selection rule's guardrails to the canonical model itself
+(`evaluation/gate.py`): it must be stable over the whole validation forecast
+and over a 3000-step rollout from the validation context (the same 100-step
+blocks and 2x threshold), and its energy and enstrophy errors and spectrum
+distances must stay within limits (`configs/evaluation/default.yaml`,
+`gate`). When it fails, the command exits non-zero: `dvc repro` stops, the
+stage stays stale in `dvc status`, `dvc.lock` gets no entry for it to commit
+and the lock test fails CI, while `gate.json` and the printed failures say
+what went wrong. The limits are **frozen when a model becomes canonical**:
+its validation scores then plus the margins a replacement may be worse by
+(0.03 on the errors, 0.05 on the spectra), currently Hankel DMD's. They are
+not the last `metrics.json`: limits that followed each retrain would let
+every retrain get a margin worse than the one before and the bar drift down.
+Replacing the canonical model stays a decision made on validation runs;
+the gate only checks that a retrain of it still meets the bar that decision
+set. It checks, it doesn't fix: for a recipe that passes on some draws only,
+the remedy is several seeds selected on validation, not retrying until the
+gate is green. (Hankel DMD's fit is deterministic, so for it the gate guards
+against code changes; its rollout takes 20 s.)
 
 **Deps are exactly what's imported.** Each stage's code deps are the modules
 its entry point imports, transitively -- not the whole package -- so editing
@@ -467,7 +498,7 @@ changed since `dvc.lock` was written, so a PR can't merge with a stale lock.
 otherwise change. When only the dep *list* changes, not the code, `uv run dvc
 commit -f <stage>` records the new deps without re-running.
 
-**Re-runs reproduce their outputs.** Both stages run with deterministic GPU
+**Re-runs reproduce their outputs.** The model stages run with deterministic GPU
 kernels (`jax.deterministic_ops=true`, see "Training config (Hydra)"), so on
 the same GPU and software stack a re-run produces the same checkpoint and
 the same `metrics.json`, bit for bit, and a re-run after a change that

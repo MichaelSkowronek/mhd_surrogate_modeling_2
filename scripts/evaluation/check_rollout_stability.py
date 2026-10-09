@@ -35,13 +35,8 @@ import zarr
 
 from mhd_surrogate.data.grid import grid_spacing
 from mhd_surrogate.evaluation.protocol import check_readable, check_window, split_context
-from mhd_surrogate.evaluation.stability import (
-    QUANTITIES,
-    block_means,
-    energy_and_enstrophy,
-    first_failing_step,
-    rollout_block_means,
-)
+from mhd_surrogate.evaluation.rollout import rollout_stability
+from mhd_surrogate.evaluation.stability import QUANTITIES
 from mhd_surrogate.models.registry import load_model
 from mhd_surrogate.utils.jax_cache import DEFAULT_CACHE_DIR, enable_compilation_cache
 from mhd_surrogate.utils.logging_config import add_log_level_arg, setup_logging
@@ -114,21 +109,21 @@ def main() -> None:
     context_steps = data_config["context_steps"]
     check_window(model.window, context_steps)
     context, targets = split_context(series, context_steps)
-    truth = energy_and_enstrophy(targets, dx, dy)
-    reference = {q: block_means(truth[q], args.block_steps) for q in QUANTITIES}
 
     log.info("rolling %s out for %d steps on %s", model.name, args.steps, dataset)
     start = time.perf_counter()
-    blocks = rollout_block_means(model, np.asarray(context), args.steps, args.block_steps, dx, dy)
+    rollout = rollout_stability(
+        model, np.asarray(context), targets, args.steps, args.block_steps, args.max_ratio, dx, dy
+    )
     log.info("rollout took %.1f s", time.perf_counter() - start)
-    ratios = {q: blocks[q] / reference[q].max() for q in QUANTITIES}
-    stable = first_failing_step(ratios, args.block_steps, args.max_ratio, args.steps)
+    blocks, reference, ratios = rollout.blocks, rollout.reference, rollout.ratios
+    stable = rollout.stable_steps
 
     print(f"{model.name} on {dataset}: {args.steps}-step rollout from the context")
     for q in QUANTITIES:
         print(
             f"  true {q}, {args.block_steps}-step block means over the scored "
-            f"{len(truth[q])} steps: {reference[q].min():.4g} - {reference[q].max():.4g}"
+            f"{targets.shape[0]} steps: {reference[q].min():.4g} - {reference[q].max():.4g}"
         )
     print(f"{'steps':>12} {'energy':>10} {'ratio':>8} {'enstrophy':>10} {'ratio':>8}")
     for i, first in enumerate(range(0, args.steps, args.block_steps)):

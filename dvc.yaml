@@ -165,3 +165,58 @@ stages:
     metrics:
       - models/hankel_dmd/metrics.json:
           cache: false
+
+  # The canonical model's gate (src/mhd_surrogate/evaluation/gate.py): fails
+  # `dvc repro` unless the stored checkpoint is stable over the whole
+  # validation forecast and a 3000-step rollout, and its validation scores
+  # stay within limits frozen when it became canonical
+  # (configs/evaluation/default.yaml, `gate`). A retrain is a new draw of
+  # its recipe; this keeps one that came out worse from becoming the
+  # canonical model unnoticed: the stage stays stale and dvc.lock has
+  # nothing fresh to commit.
+  gate:
+    cmd: >-
+      uv run scripts/evaluation/gate_checkpoint.py checkpoint=models/hankel_dmd/model
+      export.dir=models/hankel_dmd jax.deterministic_ops=true
+    # Code deps: what gate_checkpoint.py imports, transitively, plus the
+    # gated model's modules (checked by tests/training/test_dvc_train_stage.py).
+    deps:
+      - models/hankel_dmd/model
+      - models/hankel_dmd/metrics.json
+      - data/processed/re16k_t400.zarr
+      - configs/analysis/grid.yaml
+      - scripts/evaluation/gate_checkpoint.py
+      - src/mhd_surrogate/__init__.py
+      - src/mhd_surrogate/models/__init__.py
+      - src/mhd_surrogate/models/base.py
+      - src/mhd_surrogate/models/registry.py
+      - src/mhd_surrogate/models/dmd.py
+      - src/mhd_surrogate/models/hankel_dmd.py
+      - src/mhd_surrogate/evaluation/__init__.py
+      - src/mhd_surrogate/evaluation/gate.py
+      - src/mhd_surrogate/evaluation/protocol.py
+      - src/mhd_surrogate/evaluation/quantities.py
+      - src/mhd_surrogate/evaluation/rollout.py
+      - src/mhd_surrogate/evaluation/stability.py
+      - src/mhd_surrogate/training/__init__.py
+      - src/mhd_surrogate/training/export.py
+      - src/mhd_surrogate/training/gating.py
+      - src/mhd_surrogate/data/__init__.py
+      - src/mhd_surrogate/data/grid.py
+      - src/mhd_surrogate/analysis/__init__.py
+      - src/mhd_surrogate/analysis/fields.py
+      - src/mhd_surrogate/utils/__init__.py
+      - src/mhd_surrogate/utils/jax_cache.py
+      - src/mhd_surrogate/utils/jax_determinism.py
+      - src/mhd_surrogate/utils/hydra_resolvers.py
+    params:
+      - configs/data/re16k.yaml:
+          - zarr_store
+          - val_dataset
+          - context_steps
+      - configs/evaluation/default.yaml:
+          - stability
+          - gate
+    metrics:
+      - models/hankel_dmd/gate.json:
+          cache: false
