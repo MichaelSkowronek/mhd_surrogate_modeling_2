@@ -364,7 +364,9 @@ and fails if any changed since `dvc.lock` was written, so a PR that edits,
 say, the evaluation code without re-running the `evaluate` stage fails CI
 instead of leaving the canonical model's `metrics.json` claiming code that
 no longer exists (#52 slipped through exactly that way; #54 refreshed the
-lock).
+lock). The deps that come from other stages (the checkpoint, `metrics.json`)
+it checks within the lock instead, plus the metrics files against git (see
+"A retrain has to pass the gate" below).
 
 Design choices:
 
@@ -467,10 +469,17 @@ stage applies the selection rule's guardrails to the canonical model itself
 and over a 3000-step rollout from the validation context (the same 100-step
 blocks and 2x threshold), and its energy and enstrophy errors and spectrum
 distances must stay within limits (`configs/evaluation/default.yaml`,
-`gate`). When it fails, the command exits non-zero: `dvc repro` stops, the
-stage stays stale in `dvc status`, `dvc.lock` gets no entry for it to commit
-and the lock test fails CI, while `gate.json` and the printed failures say
-what went wrong. The limits are **frozen when a model becomes canonical**:
+`gate`). When it fails, the command exits non-zero: `dvc repro` stops and
+the stage stays stale in `dvc status`, while `gate.json` and the printed
+failures say what went wrong. That alone doesn't keep the failed model out
+of a commit: DVC locks each stage as it finishes, so `train` and `evaluate`
+are already locked with the new checkpoint and `metrics.json`, both on disk.
+CI closes that gap from `dvc.lock` and git alone, no data needed
+(`tests/data/test_dvc_lock.py`): every stage must have run on the version of
+an upstream output its producer locked (the failed `gate` still records the
+old checkpoint and scores), the committed metrics files must be the ones the
+lock records, and `gate.json` must say `passed`. So a commit is green only if
+the gate passed on exactly the committed model and scores. The limits are **frozen when a model becomes canonical**:
 its validation scores then plus the margins a replacement may be worse by
 (0.03 on the errors, 0.05 on the spectra), currently Hankel DMD's. They are
 not the last `metrics.json`: limits that followed each retrain would let
