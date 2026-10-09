@@ -1,5 +1,5 @@
-"""The DVC `train` and `evaluate` stages' code deps must cover everything
-their entry points import.
+"""The DVC `train`, `evaluate` and `gate` stages' code deps must cover
+everything their entry points import.
 
 They're listed module by module (not the whole package) so unrelated edits
 don't force a re-run; a module an entry point starts importing without being
@@ -50,6 +50,7 @@ def module_files(module: str) -> list[Path]:
 
 TRAIN = ROOT / "scripts" / "training" / "train.py"
 EVALUATE = ROOT / "scripts" / "evaluation" / "evaluate_checkpoint.py"
+GATE = ROOT / "scripts" / "evaluation" / "gate_checkpoint.py"
 
 
 def stage(name: str) -> dict:
@@ -94,7 +95,9 @@ def train_import_closure() -> set[Path]:
     return import_closure(TRAIN)
 
 
-@pytest.mark.parametrize("name, entry_point", [("train", TRAIN), ("evaluate", EVALUATE)])
+@pytest.mark.parametrize(
+    "name, entry_point", [("train", TRAIN), ("evaluate", EVALUATE), ("gate", GATE)]
+)
 def test_stage_deps_cover_everything_its_entry_point_imports(name, entry_point):
     deps = [ROOT / dep for dep in stage(name)["deps"]]
 
@@ -123,9 +126,19 @@ def test_the_train_stage_leaves_scoring_to_the_evaluate_stage():
     assert "metrics" in evaluate and "metrics" not in train
 
 
-def test_both_stages_use_deterministic_kernels():
-    for name in ("train", "evaluate"):
+def test_the_model_stages_use_deterministic_kernels():
+    for name in ("train", "evaluate", "gate"):
         assert "jax.deterministic_ops=true" in stage(name)["cmd"].split()
+
+
+def test_the_gate_checks_what_train_stored_against_what_evaluate_scored():
+    train, evaluate, gate = stage("train"), stage("evaluate"), stage("gate")
+    (checkpoint,) = train["outs"]
+    ((metrics, _),) = (item for entry in evaluate["metrics"] for item in entry.items())
+
+    assert checkpoint in gate["deps"] and metrics in gate["deps"]
+    assert f"checkpoint={checkpoint}" in gate["cmd"].split()
+    assert f"export.dir={Path(metrics).parent}" in gate["cmd"].split()
 
 
 def test_closure_finds_transitive_imports():

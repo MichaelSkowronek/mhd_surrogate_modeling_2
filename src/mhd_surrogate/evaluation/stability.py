@@ -22,7 +22,6 @@ from collections.abc import Mapping
 
 import numpy as np
 
-from mhd_surrogate.evaluation.protocol import ForecastModel, predict_member
 from mhd_surrogate.evaluation.quantities import DEFAULT_CHUNK_T, enstrophy, kinetic_energy
 
 QUANTITIES = ("energy", "enstrophy")
@@ -95,37 +94,3 @@ def stability_scores(
         "stable_steps": float(stable),
         **{f"{q}_peak_ratio": float(ratio.max()) for q, ratio in ratios.items()},
     }
-
-
-def rollout_block_means(
-    model: ForecastModel,
-    context: np.ndarray,
-    n_steps: int,
-    block_steps: int,
-    dx: float,
-    dy: float,
-    chunk_t: int = DEFAULT_CHUNK_T,
-) -> dict[str, np.ndarray]:
-    """Block means of the energy and enstrophy of an `n_steps` rollout from
-    `context`, one value per `block_steps`-step block (the last may be
-    shorter), for rollouts longer than a dataset.
-
-    The model predicts one block at a time from the last `window` frames so
-    far (its context, then its own predictions), so only one block is ever
-    held in memory. For a model whose state is its last `window` frames (the
-    autoregressive networks) that's the same rollout as one long `predict`
-    up to float rounding at the block boundaries (amplified by a rollout
-    that is blowing up: ~1% by step 200 for the first U-Nets); a model that
-    projects its input (DMD) restarts from the projection of its own last
-    frames at every block. A stochastic model samples block i with seed i.
-    """
-    window = np.asarray(context[len(context) - model.window :])
-    means = {q: [] for q in QUANTITIES}
-    for start in range(0, n_steps, block_steps):
-        n = min(block_steps, n_steps - start)
-        block = np.asarray(predict_member(model, window, n, seed=start // block_steps))
-        for quantity, values in energy_and_enstrophy(block, dx, dy, chunk_t).items():
-            means[quantity].append(values.mean())
-        if model.window:
-            window = np.concatenate([window, block])[-model.window :]
-    return {q: np.array(values) for q, values in means.items()}

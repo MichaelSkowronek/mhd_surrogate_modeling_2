@@ -62,6 +62,12 @@ conventions below; it shifts which tools are worth reaching for at all.
   no 100-step block over 2x the truth's energy or enstrophy), its energy and
   enstrophy errors are no more than 0.03 worse and its spectrum distances no
   more than 0.05 worse (about the spread a different realization scores).
+- When a model becomes canonical, freeze its validation scores plus those
+  margins as the DVC `gate` stage's limits (`configs/evaluation/default.yaml`,
+  `gate.max_scores`). They change only with the next switch, never to match
+  a retrain: a retrain that fails the gate is a bad draw to investigate (or
+  answer with several seeds selected on validation), not a reason to loosen
+  the limits or to retry until it passes.
 - `scripts/analysis/*.py` scripts read `configs/analysis/split.yaml` (via
   `--config`) and analyze each configured dataset's full recorded length
   (`arr.shape[0]`): datasets are held out whole, so no region within a
@@ -77,8 +83,9 @@ conventions below; it shifts which tools are worth reaching for at all.
 - The raw `.npy` files are versioned with DVC (`data/raw.dvc`); the
   pipeline is `dvc.yaml` (raw -> zarr -> normalization stats -> the
   canonical model's `train` stage, which stores the checkpoint -> its
-  `evaluate` stage, which scores it into `metrics.json`), run with
-  `uv run dvc repro`. Don't
+  `evaluate` stage, which scores it into `metrics.json` -> its `gate`
+  stage, which fails `dvc repro` unless the checkpoint still meets the bar
+  that made it canonical), run with `uv run dvc repro`. Don't
   rebuild the zarr, the stats or the canonical model by running the scripts
   by hand and leave `dvc.lock` out of date: a new pipeline step or
   dependency goes in `dvc.yaml`, and `dvc.lock` is committed with the change

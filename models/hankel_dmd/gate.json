@@ -1,0 +1,9 @@
+{
+  "val": {
+    "passed": 1.0,
+    "rollout_energy_peak_ratio": 0.808688,
+    "rollout_enstrophy_peak_ratio": 0.378341,
+    "rollout_stable_steps": 3000.0,
+    "rollout_steps": 3000.0
+  }
+}
