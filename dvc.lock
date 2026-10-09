@@ -285,8 +285,8 @@ stages:
       size: 1480
     - path: src/mhd_surrogate/evaluation
       hash: md5
-      md5: 8581dce0717a07386c40acaad0b7fb12.dir
-      size: 44274
+      md5: bf4ce77cf5a7fc3095be10f7a25d079d.dir
+      size: 44330
       nfiles: 11
     - path: src/mhd_surrogate/models/__init__.py
       hash: md5
@@ -433,8 +433,8 @@ stages:
       size: 0
     - path: src/mhd_surrogate/evaluation/gate.py
       hash: md5
-      md5: 440106fa3fe7864e99912fb2833eff99
-      size: 2300
+      md5: ebcef57620877e1b0a4df10f71f76206
+      size: 2356
     - path: src/mhd_surrogate/evaluation/protocol.py
       hash: md5
       md5: bcd0af22015e2e49ca36cd084a56b380
@@ -512,6 +512,8 @@ stages:
             enstrophy_rel_error: 0.758
             spectrum_x_lsd: 2.673
             spectrum_y_lsd: 2.147
+            u_y_mean_offset: 1.0
+            u_y_mean_std_ratio: 2.0
         stability:
           block_steps: 100
           max_ratio: 2.0

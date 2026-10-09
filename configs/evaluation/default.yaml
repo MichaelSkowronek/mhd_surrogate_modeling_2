@@ -47,7 +47,12 @@
 #   validation scores then plus the margins a replacement may be worse by
 #   (0.03 energy/enstrophy errors, 0.05 spectrum distances) -- and change
 #   only with the next switch. Current: Hankel DMD's (0.2635, 0.7276,
-#   2.623, 2.097).
+#   2.623, 2.097). The domain-mean u_y drift limits are absolute instead,
+#   the same for every model: the forecast's domain-mean u_y within one
+#   truth std of the truth's mean and varying at most 2x as much (a
+#   different realization scores <= 0.15 and 0.98-1.02; the truth's
+#   domain-mean u_y is nearly conserved, std 0.0055 against a per-pixel
+#   0.44).
 #
 # train_datasets: train datasets also scored the same way, logged as
 #   `train.<name>.*` -- a sanity check of the fit and the train/val gap, not
@@ -69,4 +74,6 @@ gate:
     enstrophy_rel_error: 0.758
     spectrum_x_lsd: 2.673
     spectrum_y_lsd: 2.147
+    u_y_mean_offset: 1.0
+    u_y_mean_std_ratio: 2.0
 train_datasets: [re16k_t400_0]

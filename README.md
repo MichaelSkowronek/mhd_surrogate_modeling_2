@@ -468,8 +468,8 @@ stage applies the selection rule's guardrails to the canonical model itself
 (`evaluation/gate.py`): it must be stable over the whole validation forecast
 and over a 3000-step rollout from the validation context (the same 100-step
 blocks and 2x threshold), and its energy and enstrophy errors and spectrum
-distances must stay within limits (`configs/evaluation/default.yaml`,
-`gate`). When it fails, the command exits non-zero: `dvc repro` stops and
+distances must stay within limits and its domain-mean `u_y` within the
+truth's band (`configs/evaluation/default.yaml`, `gate`). When it fails, the command exits non-zero: `dvc repro` stops and
 the stage stays stale in `dvc status`, while `gate.json` and the printed
 failures say what went wrong. That alone doesn't keep the failed model out
 of a commit: DVC locks each stage as it finishes, so `train` and `evaluate`
@@ -481,7 +481,8 @@ old checkpoint and scores), the committed metrics files must be the ones the
 lock records, and `gate.json` must say `passed`. So a commit is green only if
 the gate passed on exactly the committed model and scores. The limits are **frozen when a model becomes canonical**:
 its validation scores then plus the margins a replacement may be worse by
-(0.03 on the errors, 0.05 on the spectra), currently Hankel DMD's. They are
+(0.03 on the errors, 0.05 on the spectra), currently Hankel DMD's; the
+drift limits are absolute and the same for every model. They are
 not the last `metrics.json`: limits that followed each retrain would let
 every retrain get a margin worse than the one before and the bar drift down.
 Replacing the canonical model stays a decision made on validation runs;
@@ -640,8 +641,18 @@ enstrophy errors are no more than 0.03 worse and its x/y spectrum distances
 no more than 0.05 worse. Those tolerances are about the spread a different
 realization of the flow scores (energy <1%, enstrophy <3%, spectrum
 0.01-0.03, see "Forecast evaluation"), so a candidate isn't rejected for a
-difference that is noise. The oscillation scores are reported but not used to
-decide: on a single validation realization their noise (period error
+difference that is noise. Finally, its domain-mean `u_y` stays in the
+truth's band: `u_y_mean_offset` at most 1 and `u_y_mean_std_ratio` at most
+2. Those two limits are absolute, not relative to the incumbent: the
+truth's domain-mean `u_y` is nearly constant (std 0.0055 against a
+per-pixel std of 0.44 -- the net cross-stream momentum is close to
+conserved), a different realization scores at most 0.15 and 0.98-1.02,
+and a limit relative to an incumbent that damps it (Hankel DMD: 0.07 and
+0.41) would fail a model with the truth's own variability. Outside the
+band a forecast carries a spurious net cross-stream flow (see "Input
+noise"); one-sided like the stability check, since a still mean is
+harmless. The other
+oscillation scores are reported but not used to decide: on a single validation realization their noise (period error
 0.15-0.19 for perfect dynamics) is as large as the differences between
 models so far.
 
@@ -1761,7 +1772,8 @@ neither achievable nor the only thing worth measuring.
   mean of the forecast's domain-mean `u_y` lies from the truth's, and
   `u_y_mean_std_ratio` how much it varies, both in units of the truth's own
   variability over time (~0 and ~1 for a forecast on the truth's statistics).
-  Like the other oscillation scores they're reported, not decisive. SPOD would give mode shapes rather than
+  Unlike the other oscillation scores they are guardrails (at most 1 and 2,
+  see "How candidates are ranked"). SPOD would give mode shapes rather than
   a score (it needs mode matching between prediction and truth and an
   eigendecomposition per frequency), so it stays a plotting diagnostic.
 
