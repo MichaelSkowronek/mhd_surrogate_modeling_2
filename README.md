@@ -559,9 +559,10 @@ built to deliver each to the extent it can be delivered:
 3. **Our conclusions, from our recipe.** What has to hold for any such draw
    is the claim the decisions rest on -- e.g. "input noise 0.1 makes the
    U-Net stable" -- and that is a statistical statement: it is backed by
-   several seeds (3 of 3 stable, see "Input noise"), not by one checkpoint's
-   score, and a retrain elsewhere should land within that seed-to-seed
-   spread.
+   several seeds, not by one checkpoint's score, and a retrain elsewhere
+   should land within that seed-to-seed spread. Which is also why the
+   number of seeds matters: 3 of 3 stable turned into 4 of 5 with two more
+   seeds and one deterministic retrain (see "Robustness across seeds").
 
 Bit-for-bit reproduction on our own machine (point 1 and the deterministic
 stages) is what makes `dvc repro` a regression test and `metrics.json` diffs
@@ -2700,8 +2701,82 @@ needs one: an 837-step U-Net forecast on the CPU hadn't finished after 45
 minutes).
 
 The losing checkpoints of both sweeps were pruned (CLAUDE.md's sweep
-rules); the kept ones are noise 0.1 at seeds 42, 0 and 1 and noise 0.03 at
-seed 0 (the stable candidates).
+rules); the kept ones were noise 0.1 at seeds 42, 0 and 1 and noise 0.03 at
+seed 0 (the stable candidates). Since the robustness sweep below, only noise
+0.1, seed 0 is kept.
+
+#### Robustness across seeds (2026-10-08)
+
+"3 of 3" was a small sample, and the next draw broke it: a retrain of noise
+0.1, seed 0 with deterministic GPU kernels (the way the DVC stage would
+train it, a different trajectory from the same seed) came out stable for
+only 400 of the 837 validation steps, at every epoch. So the switch to the
+U-Net was dropped, and two candidate fixes for the recipe's robustness were
+tried against more seeds of the default, all with the full 30-epoch
+schedule and every selected checkpoint rolled out for 3000 steps (sweeps
+`14-45-17`, `16-50-42`, `18-55-12`):
+
+- **Weight averaging** (EMA of the weights, decay 0.999, validated and kept
+  instead of the raw weights; `model.training.ema_decay`, added for this):
+  averaging over the late epochs' flips in and out of stability might
+  land in between.
+- **More noise** (0.2): a wider margin from the edge of stability.
+
+| setting | seed | selected epoch | stable steps (val) | skill horizon | RMSE lead 10 | energy / enstrophy error | spectrum distance (x / y) | `u_y` mean offset / std ratio | stable steps (train dataset) | 3000-step rollout |
+|---|---|---|---|---|---|---|---|---|---|---|
+| noise 0.1 + EMA | 0 | 24 | 837 | 12 | 0.449 | 0.127 / 0.627 | 0.78 / 0.78 | 12.0 / 5.9 | 300 | unstable from 400 (energy 250x) |
+| noise 0.1 + EMA | 1 | 11 | 837 | 12 | 0.431 | 0.189 / 0.336 | 0.96 / 0.95 | 0.30 / 2.2 | 1168 | over 2x from 1700 (enstrophy up to 9.3x) |
+| noise 0.1 + EMA | 2 | 18 | 837 | 12 | 0.449 | 0.173 / 0.547 | 0.78 / 0.78 | 9.0 / 8.1 | 800 | over 2x from 400 (enstrophy up to 3.3x) |
+| noise 0.1 + EMA | 3 | 11 | 837 | 11 | 0.451 | 0.228 / 0.114 | 0.99 / 0.96 | 2.5 / 6.9 | 1168 | unstable from 900 (energy 78x) |
+| noise 0.2 | 0 | 23 | 837 | 8 | 0.566 | 0.390 / 0.267 | 0.80 / 0.65 | 11.7 / 6.3 | 1168 | stable (energy <= 0.82x, enstrophy <= 1.81x) |
+| noise 0.2 | 1 | 30 | 837 | 9 | 0.533 | 0.276 / 0.040 | 0.69 / 0.63 | 4.1 / 5.8 | 1168 | stable (<= 0.99x, <= 1.14x) |
+| noise 0.2 | 2 | 15 | 300 | 7 | 0.661 | 2.59 / 7.21 | 0.57 / 0.57 | 85 / 52 | 300 | unstable from 300 (energy 548x) |
+| noise 0.2 | 3 | 22 | 500 | 10 | 0.470 | 0.149 / 0.560 | 0.81 / 0.58 | 12.4 / 5.6 | 200 | unstable from 1200 (energy 15x) |
+| noise 0.1 | 2 | 25 | 837 | 12 | 0.435 | 0.041 / 0.207 | 0.63 / 0.61 | 5.6 / 7.4 | 1168 | stable (<= 1.08x, <= 1.92x) |
+| noise 0.1 | 3 | 9 | 837 | 9 | 0.554 | 0.364 / 0.380 | 0.86 / 0.68 | 1.7 / 2.7 | 1168 | stable (<= 0.76x, <= 0.71x) |
+| noise 0.1, deterministic kernels | 0 | 30 | 400 | 12 | 0.439 | 0.829 / 3.62 | 0.56 / 0.66 | -- | 300 | -- (fails validation) |
+
+Counting a draw as robust when its selected checkpoint is stable over the
+validation forecast *and* the 3000-step rollout, with the full-schedule
+runs of the previous sweep included:
+
+- **Noise 0.1 (the default): 4 of 5** (seeds 0-3; the deterministic-kernel
+  retrain fails). Through the other guardrails as well (against Hankel
+  DMD's scores): **3 of 5** -- seed 3's best stable epoch is an early one
+  (9), which damps the flow and misses the energy guardrail (0.364 against
+  0.294).
+- **Noise 0.2: 2 of 4**, at a lower skill horizon (8-9 instead of 11-12);
+  1 of 4 through every guardrail.
+- **EMA: 0 of 4.** Every averaged checkpoint is stable over the validation
+  forecast and every one blows up in the long rollout. EMA doesn't change
+  the training trajectory -- the raw weights train identically, the
+  training losses of seeds 2 and 3 are bit for bit the plain noise-0.1
+  runs' over all 30 epochs -- so
+  this is a clean comparison: the raw weights of seeds 2 and 3 survive 3000
+  steps, their averages don't. An average of weights that move in and out
+  of stability passes the 837-step check and fails the long one.
+
+Neither fix makes the recipe more robust; both make it worse, and noise
+0.1 stays the default. And the domain-mean `u_y` drift, measured since
+#61, is far outside the truth's band for every U-Net (offset 0.3-85 truth
+stds, std ratio 2.2-8; a different realization scores <= 0.15 and
+0.98-1.02, Hankel DMD 0.07 and 0.41): a spurious net cross-stream flow,
+now a guardrail (see "How candidates are ranked") that no U-Net passes.
+
+**Decision: Hankel DMD stays canonical**, and the U-Net stays the neural
+baseline (noise 0.1, seed 0, run `2cbc89f9`; every other checkpoint of
+these sweeps was pruned). A recipe that passes on 3 of 5 draws isn't
+reproducible as a single training run; if a U-Net were to become
+canonical, robustness would have to come from the procedure -- train
+several seeds and select on validation, guardrails included (at 3 in 5 per
+draw, three seeds give at least one passing draw ~94% of the time) --
+which would make the DVC `train` stage a multi-seed one. With the drift
+failing for every U-Net, that's not worth building for this architecture;
+the next candidates are generative (flow matching), where seeds and
+ensembles are part of the model anyway. The DVC pipeline's `gate` stage
+(see "Training and evaluation stages") is what this episode added to the
+pipeline: a retrain that comes out like the deterministic one now fails
+`dvc repro` instead of becoming the canonical model.
 
 ## Docker
 
