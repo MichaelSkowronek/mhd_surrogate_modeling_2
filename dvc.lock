@@ -134,8 +134,8 @@ stages:
       size: 0
     - path: src/mhd_surrogate/models/base.py
       hash: md5
-      md5: f275e4b38a91b30461c698e5992d47e2
-      size: 4555
+      md5: eb559baa18061af67b76c710d2589585
+      size: 5257
     - path: src/mhd_surrogate/models/dmd.py
       hash: md5
       md5: 660c4889f0933d78b68c5d6c9a2d26bc
@@ -285,8 +285,8 @@ stages:
       size: 1480
     - path: src/mhd_surrogate/evaluation
       hash: md5
-      md5: bf4ce77cf5a7fc3095be10f7a25d079d.dir
-      size: 44330
+      md5: c5c0dc614e313fbabc5bdbee7012e35d.dir
+      size: 46257
       nfiles: 11
     - path: src/mhd_surrogate/models/__init__.py
       hash: md5
@@ -294,8 +294,8 @@ stages:
       size: 0
     - path: src/mhd_surrogate/models/base.py
       hash: md5
-      md5: f275e4b38a91b30461c698e5992d47e2
-      size: 4555
+      md5: eb559baa18061af67b76c710d2589585
+      size: 5257
     - path: src/mhd_surrogate/models/dmd.py
       hash: md5
       md5: 660c4889f0933d78b68c5d6c9a2d26bc
@@ -445,8 +445,8 @@ stages:
       size: 981
     - path: src/mhd_surrogate/evaluation/rollout.py
       hash: md5
-      md5: 0a8833e4b66ef7f42c619ce6d0457bdc
-      size: 4610
+      md5: d016be2fa106fe4ae98caa6a513dab5d
+      size: 6537
     - path: src/mhd_surrogate/evaluation/stability.py
       hash: md5
       md5: 6e1ff7f6cb92b1c673ca0807a25a0387
@@ -457,8 +457,8 @@ stages:
       size: 0
     - path: src/mhd_surrogate/models/base.py
       hash: md5
-      md5: f275e4b38a91b30461c698e5992d47e2
-      size: 4555
+      md5: eb559baa18061af67b76c710d2589585
+      size: 5257
     - path: src/mhd_surrogate/models/dmd.py
       hash: md5
       md5: 660c4889f0933d78b68c5d6c9a2d26bc

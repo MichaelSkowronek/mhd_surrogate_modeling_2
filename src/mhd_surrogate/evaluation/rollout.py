@@ -1,22 +1,26 @@
-"""Long rollouts: does a model stay bounded far past a dataset's length?
+"""Long rollouts: a forecast streamed in blocks, and whether it stays bounded.
 
-The selection rule's stability check (`stability.py`) only sees the scored
-forecast, 837 steps of the validation dataset. A surrogate is meant to be
-rolled out for as long as one likes, so these roll a model out for any
-number of steps from a dataset's context, one block at a time, and rate each
-block against the truth with the same blocks and threshold. Used by the
-canonical model's gate (`gate.py`) and
-`scripts/evaluation/check_rollout_stability.py`; kept out of `stability.py`,
-which early stopping imports, so the DVC `train` stage doesn't depend on it.
+A surrogate is meant to be rolled out for as long as one likes, longer than
+a forecast that fits in memory (an 837-step one is ~1 GB), so a long
+forecast is streamed a block at a time (`rollout_blocks`): for the rollout
+checks here, and for a served forecast. The selection rule's stability check
+(`stability.py`) only sees the scored forecast, 837 steps of the validation
+dataset; `rollout_stability` rolls a model out for any number of steps from
+a dataset's context and rates each block against the truth with the same
+blocks and threshold. Used by the canonical model's gate (`gate.py`) and
+`scripts/evaluation/check_rollout_stability.py`; kept out of
+`stability.py`, which early stopping imports, so the DVC `train` stage
+doesn't depend on it.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 import numpy as np
 
-from mhd_surrogate.evaluation.protocol import ForecastModel, predict_member
+from mhd_surrogate.evaluation.protocol import ForecastModel, is_stochastic, predict_member
 from mhd_surrogate.evaluation.quantities import DEFAULT_CHUNK_T
 from mhd_surrogate.evaluation.stability import (
     QUANTITIES,
@@ -24,6 +28,59 @@ from mhd_surrogate.evaluation.stability import (
     energy_and_enstrophy,
     first_failing_step,
 )
+
+
+def rollout_blocks(
+    model: ForecastModel, context: np.ndarray, n_steps: int, block_steps: int, seed: int = 0
+) -> Iterator[np.ndarray]:
+    """An `n_steps` forecast from the last `window` frames of `context`,
+    yielded `block_steps` frames at a time (the last block may be shorter),
+    so only one block is held at once; a stochastic model's is its sample
+    for `seed`.
+
+    A model with `predict_blocks` streams the forecast its one `predict`
+    call would make (see `models/base.py`). Any other is restarted at every
+    block from the last `window` frames of the forecast so far. For a model
+    whose state is just those frames that's the same forecast, up to float
+    rounding at the block boundaries; a model that projects its input (DMD)
+    restarts from the projection of its own last frames. Restarted, a
+    stochastic model samples each block with its own seed (`block_seed`).
+    """
+    if block_steps < 1:
+        raise ValueError(f"block_steps must be >= 1, got {block_steps}")
+    window = np.asarray(context[len(context) - model.window :])
+    sizes = [min(block_steps, n_steps - start) for start in range(0, n_steps, block_steps)]
+    if hasattr(model, "predict_blocks"):
+        seeded = {"seed": seed} if is_stochastic(model) else {}
+        blocks = model.predict_blocks(window, n_steps, block_steps, **seeded)
+    else:
+        blocks = _restarted(model, window, sizes, seed)
+    for n, block in zip(sizes, blocks, strict=True):
+        block = np.asarray(block)
+        expected = (n, *window.shape[1:])
+        if block.shape != expected:
+            raise ValueError(f"model yielded a block of shape {block.shape}, expected {expected}")
+        yield block
+
+
+def block_seed(seed: int, block: int) -> int:
+    """The seed a restarted rollout samples block `block` of member `seed`
+    with: `seed` itself for the first block, so it starts as the member's
+    `predict` does, then one drawn from both (`SeedSequence`), so no two
+    blocks of any members share a seed but by a ~2**-32 chance."""
+    if block == 0:
+        return seed
+    return int(np.random.SeedSequence([seed, block]).generate_state(1)[0])
+
+
+def _restarted(
+    model: ForecastModel, window: np.ndarray, sizes: list[int], seed: int
+) -> Iterator[np.ndarray]:
+    for k, n in enumerate(sizes):
+        block = np.asarray(predict_member(model, window, n, block_seed(seed, k)))
+        if model.window:
+            window = np.concatenate([window, block])[-model.window :]
+        yield block
 
 
 def rollout_block_means(
@@ -36,27 +93,13 @@ def rollout_block_means(
     chunk_t: int = DEFAULT_CHUNK_T,
 ) -> dict[str, np.ndarray]:
     """Block means of the energy and enstrophy of an `n_steps` rollout from
-    `context`, one value per `block_steps`-step block (the last may be
-    shorter), for rollouts longer than a dataset.
-
-    The model predicts one block at a time from the last `window` frames so
-    far (its context, then its own predictions), so only one block is ever
-    held in memory. For a model whose state is its last `window` frames (the
-    autoregressive networks) that's the same rollout as one long `predict`
-    up to float rounding at the block boundaries (amplified by a rollout
-    that is blowing up: ~1% by step 200 for the first U-Nets); a model that
-    projects its input (DMD) restarts from the projection of its own last
-    frames at every block. A stochastic model samples block i with seed i.
-    """
-    window = np.asarray(context[len(context) - model.window :])
+    `context` (`rollout_blocks`; a stochastic model's sample for seed 0),
+    one value per `block_steps`-step block (the last may be shorter), for
+    rollouts longer than a dataset."""
     means = {q: [] for q in QUANTITIES}
-    for start in range(0, n_steps, block_steps):
-        n = min(block_steps, n_steps - start)
-        block = np.asarray(predict_member(model, window, n, seed=start // block_steps))
+    for block in rollout_blocks(model, context, n_steps, block_steps):
         for quantity, values in energy_and_enstrophy(block, dx, dy, chunk_t).items():
             means[quantity].append(values.mean())
-        if model.window:
-            window = np.concatenate([window, block])[-model.window :]
     return {q: np.array(values) for q, values in means.items()}
 
 

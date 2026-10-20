@@ -278,6 +278,18 @@ def test_save_and_load_reproduce_the_forecast(tmp_path):
     np.testing.assert_array_equal(loaded.predict(context, 4), model.predict(context, 4))
 
 
+def test_predict_blocks_stream_the_forecast_of_one_predict():
+    datasets = wave_datasets()
+    model = small_model()
+    model.fit(datasets)
+    context = datasets["d1"][:3]
+
+    blocks = list(model.predict_blocks(context, 7, 3))
+
+    assert [len(b) for b in blocks] == [3, 3, 1]
+    np.testing.assert_allclose(np.concatenate(blocks), model.predict(context, 7), rtol=1e-6)
+
+
 class OneConv(AutoregressiveSurrogate):
     name = "one_conv"
 

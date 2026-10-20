@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any, Self
 
@@ -360,15 +360,38 @@ class AutoregressiveSurrogate:
     # -- forecasting -------------------------------------------------------------
 
     def predict(self, context: np.ndarray, n_steps: int) -> np.ndarray:
-        if self.network is None:
-            raise RuntimeError(f"{self.name} is not fitted")
-        window = pad_to_multiple(
-            self.normalize(jnp.asarray(context[-self.window :], dtype=jnp.float32)),
-            self.pad_multiple(),
-        )
+        window = self._input_window(context)
         predictions = _forecast(
             self.network, self.frame, window, n_steps, DTYPES[self.compute_dtype]
         )
+        return self._output(predictions)
+
+    def predict_blocks(
+        self, context: np.ndarray, n_steps: int, block_steps: int
+    ) -> Iterator[np.ndarray]:
+        """`predict`'s forecast, `block_steps` frames at a time. The window is
+        carried from block to block as the network sees it (normalized and
+        padded, on the device), so the blocks are one rollout: restarting
+        from the output would normalize it again, off by rounding that a
+        long rollout amplifies."""
+        window = self._input_window(context)
+        dtype = DTYPES[self.compute_dtype]
+        for start in range(0, n_steps, block_steps):
+            n = min(block_steps, n_steps - start)
+            predictions = _forecast(self.network, self.frame, window, n, dtype)
+            window = jnp.concatenate([window, predictions])[-self.window :]
+            yield self._output(predictions)
+
+    def _input_window(self, context: np.ndarray) -> jax.Array:
+        """The last `window` context frames as the network sees them."""
+        if self.network is None:
+            raise RuntimeError(f"{self.name} is not fitted")
+        return pad_to_multiple(
+            self.normalize(jnp.asarray(context[-self.window :], dtype=jnp.float32)),
+            self.pad_multiple(),
+        )
+
+    def _output(self, predictions: jax.Array) -> np.ndarray:
         # Cropped, denormalized and the constant pixels set to exactly their
         # training value (normalizing and back is off by rounding) on the
         # device, so only the result (~1 GB for a whole validation forecast)

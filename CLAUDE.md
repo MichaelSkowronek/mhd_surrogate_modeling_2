@@ -163,6 +163,10 @@ conventions below; it shifts which tools are worth reaching for at all.
   forecasts goes through `evaluation/protocol.py` (`predict_member`,
   `forecast`, `forecast_members`) rather than calling `model.predict`, so
   the seed reaches a stochastic model and a deterministic one gets none.
+- A forecast streamed in blocks goes through `evaluation/rollout.py`'s
+  `rollout_blocks`; a model whose state is more than its last `window`
+  frames implements `predict_blocks`, or its streamed forecast differs
+  from its scored one.
 - Register a model by import path (`"module:Class"` in `MODELS`), not by
   importing it in the registry: the registry imports a model only when it's
   built or loaded, so the DVC `train` stage depends only on the canonical
