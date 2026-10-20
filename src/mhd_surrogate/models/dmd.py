@@ -43,7 +43,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from mhd_surrogate.models.base import CHECKPOINT_META
+from mhd_surrogate.models.base import CHECKPOINT_META, real_size
 
 log = logging.getLogger(__name__)
 
@@ -241,6 +241,14 @@ class DMD:
         reduced = ((powers * amplitudes[None, :]) @ self.eigenvectors.T).real.astype(np.float32)
         frames = (reduced @ self.basis.T).reshape(n_steps, *frame_shape)
         return frames * self.scale[None, :, None, None] + self.mean[None]
+
+    def parameter_count(self) -> int:
+        """The POD modes and the reduced operator's eigenvalues and
+        eigenvectors (complex: two numbers each); the mean field and the
+        channel scales are normalization."""
+        if self.basis is None:
+            raise RuntimeError("DMD is not fitted")
+        return sum(real_size(a) for a in (self.basis, self.eigenvalues, self.eigenvectors))
 
     # -- checkpoint ----------------------------------------------------------
 

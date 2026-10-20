@@ -108,6 +108,15 @@ def test_ranks_are_capped_at_the_usable_singular_values():
     assert model.fit_info["n_pairs"] == 3 * (24 - 3)
 
 
+def test_parameter_count_adds_the_delay_basis_to_dmds():
+    model = HankelDMD(rank=4, delays=3, spatial_rank=6)
+    model.fit(noisy_datasets())
+
+    assert (model.fit_info["spatial_rank"], model.fit_info["rank"]) == (6, 4)
+    # 48 x 6 spatial modes, 3 x 6 x 4 delay modes, 4 + 4 x 4 complex dynamics.
+    assert model.parameter_count() == 48 * 6 + 3 * 6 * 4 + 2 * (4 + 4 * 4)
+
+
 def test_checkpoint_round_trips_through_the_registry(tmp_path):
     model = build_model({"name": "hankel_dmd", "rank": 4, "delays": 3, "spatial_rank": 6})
     model.fit(noisy_datasets())
@@ -128,6 +137,8 @@ def test_bad_arguments_and_use_before_fit_are_rejected():
         HankelDMD().predict(np.zeros((8, *FRAME)), 3)
     with pytest.raises(RuntimeError):
         HankelDMD().save("unused")
+    with pytest.raises(RuntimeError):
+        HankelDMD().parameter_count()
     with pytest.raises(ValueError, match="at least 4 frames"):
         HankelDMD(delays=3).fit({"a": np.zeros((3, *FRAME))})
 

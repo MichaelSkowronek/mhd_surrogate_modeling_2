@@ -132,11 +132,15 @@ def run_training(
         fit_model(model, train, hooks)
         fit_seconds = time.perf_counter() - start
         mlflow.log_metric("fit_seconds", fit_seconds)
+        # A metric, so the runs table sorts by it; the logged model also has
+        # it as a param, next to the architecture (`log_surrogate`).
+        n_parameters = model.parameter_count()
+        mlflow.log_metric("n_parameters", n_parameters)
         # Model-specific fit diagnostics (e.g. DMD's explained variance), if any.
         fit_info = getattr(model, "fit_info", {})
         if fit_info:
             mlflow.log_metrics({f"fit.{k}": v for k, v in fit_info.items()})
-        log.info("fitted %s in %.1f s", model.name, fit_seconds)
+        log.info("fitted %s (%d parameters) in %.1f s", model.name, n_parameters, fit_seconds)
 
         # The DVC `train` stage sets export.dir so the checkpoint and metrics
         # land at a fixed path (dvc.yaml outs); otherwise the run's directory.

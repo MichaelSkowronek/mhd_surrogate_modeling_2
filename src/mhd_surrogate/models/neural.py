@@ -328,8 +328,7 @@ class AutoregressiveSurrogate:
         frames = self._load_normalized(datasets)
         n_channels = self.frame_shape[0]
         self.network = self._new_network(n_channels)
-        n_parameters = sum(x.size for x in jax.tree.leaves(eqx.filter(self.network, eqx.is_array)))
-        log.info("%s: %d parameters", self.name, n_parameters)
+        log.info("%s: %d parameters", self.name, self.parameter_count())
 
         multiple, window, dtype = self.pad_multiple(), self.window, DTYPES[self.compute_dtype]
         frame, noise_std = self.frame, self.input_noise_std
@@ -356,7 +355,7 @@ class AutoregressiveSurrogate:
         )
         self.network = result.network
         self.datasets = list(datasets)
-        self.fit_info = {**result.info, "parameters": float(n_parameters)}
+        self.fit_info = result.info
 
     # -- forecasting -------------------------------------------------------------
 
@@ -376,6 +375,12 @@ class AutoregressiveSurrogate:
         # is copied to the host.
         frames = self.denormalize(crop(predictions, self.frame_shape[1:]))
         return np.asarray(jnp.where(self.constant, self.constant_values, frames))
+
+    def parameter_count(self) -> int:
+        """The network's weights."""
+        if self.network is None:
+            raise RuntimeError(f"{self.name} is not fitted")
+        return sum(x.size for x in jax.tree.leaves(eqx.filter(self.network, eqx.is_array)))
 
     # -- checkpoint --------------------------------------------------------------
 

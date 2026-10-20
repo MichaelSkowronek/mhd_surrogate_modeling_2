@@ -185,6 +185,12 @@ class HankelDMD(DMD):
         frames = (newest @ self.basis.T).reshape(n_steps, *frame_shape)
         return frames * self.scale[None, :, None, None] + self.mean[None]
 
+    def parameter_count(self) -> int:
+        """DMD's (with the spatial basis as its modes) plus the delay basis."""
+        if self.hankel_basis is None:
+            raise RuntimeError("HankelDMD is not fitted")
+        return super().parameter_count() + self.hankel_basis.size
+
     # -- checkpoint ----------------------------------------------------------
 
     def save(self, directory: Path) -> None:

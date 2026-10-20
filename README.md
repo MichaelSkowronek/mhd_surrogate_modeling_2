@@ -568,7 +568,11 @@ Bit-for-bit reproduction on our own machine (point 1 and the deterministic
 stages) is what makes `dvc repro` a regression test and `metrics.json` diffs
 meaningful; points 2 and 3 are what someone else can check, and the
 committed checkpoint is the artifact that makes point 1 possible for them at
-all.
+all. "Our own machine" means its whole software stack, GPU driver included:
+after a driver update (to 595.99.02, 2026-10-19) the deterministic `train`
+stage gave a new Hankel DMD checkpoint, its scores moved in the 6th digit
+and it still passed the gate, while cold compiles under the new driver again
+agreed with each other bit for bit.
 
 ## Train / val / test split
 
@@ -1666,8 +1670,9 @@ MLflow's random names; the scores are described under "Baselines" below.
 **Logged models.** The fitted model is logged as an MLflow *model*, not just
 as files: `src/mhd_surrogate/training/mlflow_model.py` wraps the checkpoint in
 a `pyfunc` model named after the model, so it shows in the runs table's
-Models column and gets its own page in the UI, with the model config as its
-params and every `val.*`/`train.*` score linked to it (the Models tab compares
+Models column and gets its own page in the UI, with the model config and its
+parameter count (`n_parameters`, see "Baselines") as its params and every
+`val.*`/`train.*` score linked to it (the Models tab compares
 models directly). The logged model is self-contained -- the checkpoint as an
 artifact, this package's source as `code_paths`, pinned `numpy`/`jax`/`mlflow`
 requirements, and a signature (a stack of `(C, Nx, Ny)` float32 frames in and
@@ -1864,6 +1869,14 @@ model, plus its arrays), so `models/registry.py` can build a model from its
 raw velocity fields; one that wants normalized inputs normalizes internally,
 so every model is scored in the same units.
 
+`parameter_count()` answers "how many parameters does it have": the numbers
+the model learned from the training data and forecasts with -- a network's
+weights, DMD's modes and dynamics (complex entries count twice), the mean
+field's field. Normalization statistics don't count, as a network's input
+normalization usually doesn't. Every run logs it as `n_parameters`, both as a
+metric (a sortable column in the runs table) and as a param of the logged
+model, next to the model config it follows from.
+
 The two baselines bracket what a real model has to do:
 
 - **Persistence** (`model=persistence`) repeats the last context frame. It is
@@ -1877,10 +1890,10 @@ The two baselines bracket what a real model has to do:
   device (the GPU with the `gpu` extra): 13 s, almost all of it zarr reads.
 
 `train.py` logs, per run: the checkpoint as a logged MLflow model (see
-"Experiment tracking (MLflow)"), `fit_seconds`, every scalar score as a
-`val.*` metric (and `train.<dataset>.*`, below), and the RMSE curve as the
-`val.rmse` history with step = lead time (one batched request rather than
-837). Scores that are undefined for a model (the oscillation period of a
+"Experiment tracking (MLflow)"), `fit_seconds`, `n_parameters`, every scalar
+score as a `val.*` metric (and `train.<dataset>.*`, below), and the RMSE
+curve as the `val.rmse` history with step = lead time (one batched request
+rather than 837). Scores that are undefined for a model (the oscillation period of a
 forecast with no oscillation) are left out and named in the log. Each scored
 dataset also gets two timings: `<prefix>.eval_seconds`, the whole evaluation
 (reading the targets, forecasting, scoring), and
@@ -2191,7 +2204,11 @@ guardrails of the incumbent, plain DMD rank 750 (energy -0.002, enstrophy
 -0.004, spectra slightly better). As with the rank sweep, the margin over 2
 delays is realization noise; the rule, not the margin, decides. It replaces
 plain DMD as the canonical model (the DVC `train` stage); the checkpoint is
-~890 MB, the rank-750 spatial basis plus a 12 MB delay basis.
+~890 MB, the rank-750 spatial basis plus a 12 MB delay basis. That makes it
+the largest model here by parameter count: 224M, 98% of them the spatial
+basis (292k entries x 750 modes), against the default U-Net's 7.8M. A
+linear model of a 292k-entry state pays for its modes in full resolution;
+the network shares its 3x3 kernels across the grid.
 
 ## U-Net
 
@@ -2299,8 +2316,9 @@ the step: `loss`, `grad_norm`, `lr` and `samples_per_second` every
 `val_monitor.{skill_horizon,rmse_lead_10,stable_steps,energy_peak_ratio,enstrophy_peak_ratio,selection_score}`
 every epoch. After
 training, the model is checkpointed, logged and scored like every model
-(`val.*`, `train.<dataset>.*`, `fit.*`, where `fit.best_epoch`,
-`fit.stopped_early` and `fit.parameters` come from training).
+(`val.*`, `train.<dataset>.*`, `fit.*`, where `fit.best_epoch` and
+`fit.stopped_early` come from training), and `n_parameters` is the
+network's weights (runs before #68 logged it as `fit.parameters`).
 
 **Resuming.** Training state is saved after every epoch into the run's
 output directory, `training_state/`. It holds the network, the optimizer

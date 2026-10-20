@@ -231,7 +231,6 @@ def test_fit_trains_validates_logs_and_keeps_the_boundary_exact(tmp_path):
 
     assert len(validated) == 3
     assert model.fit_info["best_epoch"] == 1
-    assert model.fit_info["parameters"] > 0
     assert any("loss" in m for m in logged)
     assert (tmp_path / "state.json").exists()
     forecast = model.predict(datasets["d1"][:2], 5)
@@ -279,6 +278,22 @@ def test_save_and_load_reproduce_the_forecast(tmp_path):
     np.testing.assert_array_equal(loaded.predict(context, 4), model.predict(context, 4))
 
 
+class OneConv(AutoregressiveSurrogate):
+    name = "one_conv"
+
+    def build_network(self, in_channels, out_channels, key):
+        return eqx.nn.Conv2d(in_channels, out_channels, 3, padding=1, key=key)
+
+
+def test_parameter_count_is_the_network_weights_not_the_normalization():
+    model = OneConv(window=2, training=TRAINING)
+    model.fit(wave_datasets())
+
+    # (2 frames x 2 channels + 2 coordinates) -> 2 channels: a 3 x 3 kernel
+    # per pair, plus a bias per output channel.
+    assert model.parameter_count() == 6 * 2 * 9 + 2
+
+
 def test_registry_builds_it_from_a_config():
     model = build_model({"name": "unet", "window": 3, "depth": 2, "training": {"batch_size": 4}})
 
@@ -318,6 +333,8 @@ def test_predict_and_save_need_a_fitted_model(tmp_path):
         small_model().predict(np.zeros((2, 2, 10, 6)), 1)
     with pytest.raises(RuntimeError, match="not fitted"):
         small_model().save(tmp_path)
+    with pytest.raises(RuntimeError, match="not fitted"):
+        small_model().parameter_count()
 
 
 def test_the_base_class_needs_a_network():
