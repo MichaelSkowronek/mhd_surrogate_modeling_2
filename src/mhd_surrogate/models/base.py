@@ -25,6 +25,14 @@ takes `fit(datasets, hooks)`: the `FitHooks` give it what a closed-form fit
 doesn't need -- a validation score to early-stop on, somewhere to log its
 training curves, and a directory for resumable training state. `fit_model`
 calls either kind the right way.
+
+`parameter_count()` answers "how many parameters does the model have": the
+real numbers it learned from the training data and forecasts with -- a
+network's weights, DMD's modes and dynamics, the mean field's field --
+complex entries counting twice (`real_size`). Normalization statistics (the
+mean and scale a model normalizes its input with, the neural models'
+constant-pixel values) don't count, as a network's input normalization
+usually doesn't. `training/run.py` logs it with every fitted model.
 """
 
 from __future__ import annotations
@@ -51,12 +59,20 @@ class SurrogateModel(Protocol):
         """`n_steps` forecast frames from the last `window` context frames
         (a stochastic model also takes `seed=`, see the module docstring)."""
 
+    def parameter_count(self) -> int:
+        """How many numbers the fitted model learned (see the module docstring)."""
+
     def save(self, directory: Path) -> None:
         """Write the checkpoint into `directory` (created if missing)."""
 
     @classmethod
     def load(cls, directory: Path) -> Self:
         """Rebuild the fitted model from a checkpoint written by `save`."""
+
+
+def real_size(array: np.ndarray) -> int:
+    """The entries of `array` as real numbers: a complex entry is two."""
+    return array.size * (2 if np.iscomplexobj(array) else 1)
 
 
 def _discard(metrics: dict[str, float], step: int) -> None:

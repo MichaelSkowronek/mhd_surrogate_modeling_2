@@ -22,6 +22,7 @@ def test_mean_field_is_the_pooled_per_pixel_mean_for_any_chunk_size(chunk_t):
 
     assert model.mean.shape == (2, 5, 4)
     assert model.mean == pytest.approx(expected, abs=1e-5)
+    assert model.parameter_count() == 2 * 5 * 4
     assert model.n_steps == 11
     assert model.datasets == ["a", "b"]
 
@@ -50,6 +51,8 @@ def test_mean_field_rejects_use_before_fit_and_empty_data():
         MeanField().predict(np.empty((0, 2, 5, 4)), 3)
     with pytest.raises(RuntimeError):
         MeanField().save("unused")
+    with pytest.raises(RuntimeError):
+        MeanField().parameter_count()
     with pytest.raises(ValueError):
         MeanField().fit({})
 
@@ -74,6 +77,7 @@ def test_persistence_repeats_the_last_context_frame(tmp_path):
 
     assert prediction.shape == (4, 2, 3, 2)
     assert (prediction == context[-1]).all()
+    assert model.parameter_count() == 0
 
     model.save(tmp_path / "ckpt")
     assert isinstance(Persistence.load(tmp_path / "ckpt"), Persistence)

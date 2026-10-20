@@ -105,6 +105,7 @@ def test_a_closed_form_model_is_fitted_scored_and_tracked(workspace):
     assert run.info.run_name == "persistence"
     assert run.data.params["data_version.raw"] == "stub"
     assert "val.skill_horizon" in run.data.metrics
+    assert run.data.metrics["n_parameters"] == 0
     assert not (workspace / "out" / "training_state").exists()
     assert (workspace / "out" / "model" / "model.json").exists()
 

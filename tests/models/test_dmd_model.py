@@ -81,6 +81,15 @@ def test_rank_is_capped_at_the_number_of_usable_singular_values():
     assert model.basis.shape == (int(np.prod(FRAME)), 4)
 
 
+def test_parameter_count_is_the_modes_and_the_complex_eigendecomposition():
+    model = DMD(rank=4)
+    model.fit(linear_datasets())
+
+    # 48 x 4 POD modes; 4 eigenvalues and 4 x 4 eigenvectors, two numbers
+    # each. The mean field and channel scales are normalization.
+    assert model.parameter_count() == 48 * 4 + 2 * (4 + 4 * 4)
+
+
 def test_result_does_not_depend_on_the_device_block_size():
     datasets = linear_datasets()
     small, large = DMD(rank=4, column_block=5, chunk_t=3), DMD(rank=4)
@@ -108,5 +117,7 @@ def test_use_before_fit_and_too_short_datasets_are_rejected():
         DMD().predict(np.zeros((1, *FRAME)), 3)
     with pytest.raises(RuntimeError):
         DMD().save("unused")
+    with pytest.raises(RuntimeError):
+        DMD().parameter_count()
     with pytest.raises(ValueError):
         DMD().fit({"a": np.zeros((1, *FRAME))})

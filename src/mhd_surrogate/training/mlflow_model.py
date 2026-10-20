@@ -81,7 +81,9 @@ def log_surrogate(
 ) -> ModelInfo:
     """Log `checkpoint` (written by `model.save`) as an MLflow model named
     after the model, in the active run; `params` (e.g. the model config) are
-    attached to the logged model."""
+    attached to the logged model, with its `n_parameters`
+    (`model.parameter_count()`) beside them."""
+    params = {**(params or {}), "n_parameters": model.parameter_count()}
     return mlflow.pyfunc.log_model(
         name=model.name,
         python_model=SurrogatePyfunc(),
@@ -89,7 +91,7 @@ def log_surrogate(
         code_paths=[str(PACKAGE_DIR)],
         signature=signature(frame_shape),
         pip_requirements=pinned_requirements(getattr(model, "requirements", ())),
-        params={k: str(v) for k, v in (params or {}).items()},
+        params={k: str(v) for k, v in params.items()},
     )
 
 

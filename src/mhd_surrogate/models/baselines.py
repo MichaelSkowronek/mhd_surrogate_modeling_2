@@ -74,6 +74,12 @@ class MeanField:
             raise RuntimeError("MeanField is not fitted")
         return np.broadcast_to(self.mean, (n_steps, *self.mean.shape))
 
+    def parameter_count(self) -> int:
+        """The mean field: the forecast itself, not a normalization."""
+        if self.mean is None:
+            raise RuntimeError("MeanField is not fitted")
+        return self.mean.size
+
     def save(self, directory: Path) -> None:
         if self.mean is None:
             raise RuntimeError("MeanField is not fitted")
@@ -110,6 +116,9 @@ class Persistence:
 
     def predict(self, context: np.ndarray, n_steps: int) -> np.ndarray:
         return np.broadcast_to(context[-1], (n_steps, *context.shape[1:]))
+
+    def parameter_count(self) -> int:
+        return 0
 
     def save(self, directory: Path) -> None:
         directory = Path(directory)

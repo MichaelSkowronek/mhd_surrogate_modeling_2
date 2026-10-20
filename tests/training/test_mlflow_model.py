@@ -37,7 +37,7 @@ def test_logged_model_is_named_after_the_model_and_predicts_like_it(tracking, tm
     assert info.name == "mean_field"
     logged = mlflow.get_logged_model(info.model_id)
     assert logged.name == "mean_field"
-    assert logged.params == {"chunk_t": "64"}
+    assert logged.params == {"chunk_t": "64", "n_parameters": "40"}
 
     loaded = mlflow.pyfunc.load_model(info.model_uri)
     prediction = loaded.predict(np.empty((0, *FRAME), dtype=np.float32), params={"n_steps": 3})

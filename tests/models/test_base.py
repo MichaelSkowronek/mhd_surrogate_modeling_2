@@ -1,4 +1,6 @@
-from mhd_surrogate.models.base import FitHooks, fit_model
+import numpy as np
+
+from mhd_surrogate.models.base import FitHooks, fit_model, real_size
 
 
 class ClosedForm:
@@ -29,3 +31,8 @@ def test_default_hooks_discard_metrics_and_neither_validate_nor_save():
 
     assert hooks.validate is None and hooks.state_dir is None
     assert hooks.log_metrics({"loss": 1.0}, 3) is None
+
+
+def test_real_size_counts_a_complex_entry_as_two_numbers():
+    assert real_size(np.zeros((3, 4), dtype=np.float32)) == 12
+    assert real_size(np.zeros((3, 4), dtype=np.complex64)) == 24
