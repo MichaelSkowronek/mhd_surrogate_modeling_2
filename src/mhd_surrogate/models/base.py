@@ -20,6 +20,17 @@ whatever else is in the batch (see `evaluation.protocol.ForecastModel`). A
 deterministic model has one answer: it takes no seed and is scored as a
 one-member ensemble.
 
+A forecast too long to hold at once (a long rollout, a served forecast) is
+streamed in blocks by `evaluation.rollout.rollout_blocks`, which restarts
+the model at every block from the last `window` frames of the forecast so
+far. That's the same forecast only if those frames are all of the model's
+state. A model with more -- a hidden state, a reduced state it projects its
+input onto, a random key that advances with the rollout -- implements
+`predict_blocks(context, n_steps, block_steps)` (a stochastic one with
+`seed=`): the frames its `predict` call would return, yielded `block_steps`
+at a time (the last block may be shorter), up to float rounding (a GPU
+compiles each block length separately).
+
 A model trained iteratively (a neural network) sets `iterative = True` and
 takes `fit(datasets, hooks)`: the `FitHooks` give it what a closed-form fit
 doesn't need -- a validation score to early-stop on, somewhere to log its
