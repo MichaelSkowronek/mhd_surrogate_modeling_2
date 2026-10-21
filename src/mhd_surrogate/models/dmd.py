@@ -28,14 +28,16 @@ Forecast. The last context frame is projected onto U, evolved with the
 eigendecomposition A~ = W diag(lambda) W^-1, and mapped back. With
 `stabilize`, eigenvalues outside the unit circle are moved onto it (same
 frequency, no growth): a single growing mode would otherwise blow the
-forecast up over hundreds of steps.
+forecast up over hundreds of steps. Streamed in blocks (`predict_blocks`),
+every block evolves the same amplitudes, so a long forecast is one
+trajectory.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any, Self
 
@@ -232,14 +234,33 @@ class DMD:
     # -- forecasting ---------------------------------------------------------
 
     def predict(self, context: np.ndarray, n_steps: int) -> np.ndarray:
+        return self._frames(self._amplitudes(context), 1, n_steps)
+
+    def predict_blocks(
+        self, context: np.ndarray, n_steps: int, block_steps: int
+    ) -> Iterator[np.ndarray]:
+        """`predict`'s forecast, `block_steps` frames at a time: every block
+        evolves the context's mode amplitudes, so the blocks are one
+        trajectory. Restarted from its own last frames instead, the model
+        would project them again, which for Hankel DMD isn't the state it
+        evolved (see `hankel_dmd.py`)."""
+        amplitudes = self._amplitudes(context)
+        for start in range(0, n_steps, block_steps):
+            yield self._frames(amplitudes, start + 1, min(start + block_steps, n_steps))
+
+    def _amplitudes(self, context: np.ndarray) -> np.ndarray:
+        """The mode amplitudes of the state the forecast starts from: the
+        newest context frame projected onto the POD basis."""
         if self.basis is None:
             raise RuntimeError("DMD is not fitted")
-        frame_shape = self.mean.shape
         z0 = ((context[-1] - self.mean) / self.scale[:, None, None]).reshape(-1)
-        amplitudes = np.linalg.solve(self.eigenvectors, self.basis.T @ z0)
-        powers = self.eigenvalues[None, :] ** np.arange(1, n_steps + 1)[:, None]
+        return np.linalg.solve(self.eigenvectors, self.basis.T @ z0)
+
+    def _frames(self, amplitudes: np.ndarray, first: int, last: int) -> np.ndarray:
+        """Forecast steps `first` to `last` (1: the step after the context)."""
+        powers = self.eigenvalues[None, :] ** np.arange(first, last + 1)[:, None]
         reduced = ((powers * amplitudes[None, :]) @ self.eigenvectors.T).real.astype(np.float32)
-        frames = (reduced @ self.basis.T).reshape(n_steps, *frame_shape)
+        frames = (reduced @ self.basis.T).reshape(-1, *self.mean.shape)
         return frames * self.scale[None, :, None, None] + self.mean[None]
 
     def parameter_count(self) -> int:

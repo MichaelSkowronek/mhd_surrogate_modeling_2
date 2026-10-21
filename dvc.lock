@@ -138,12 +138,12 @@ stages:
       size: 5257
     - path: src/mhd_surrogate/models/dmd.py
       hash: md5
-      md5: 660c4889f0933d78b68c5d6c9a2d26bc
-      size: 13230
+      md5: 8d158383c81e3dd7f4c15b6715a18642
+      size: 14392
     - path: src/mhd_surrogate/models/hankel_dmd.py
       hash: md5
-      md5: 3104397933acdcd0f57b6f8110b7510e
-      size: 10447
+      md5: 286503028df76c9a60e6d54e74dedcea
+      size: 11180
     - path: src/mhd_surrogate/models/registry.py
       hash: md5
       md5: 18e4e51ebb8490c1569ad1610063cdb1
@@ -285,8 +285,8 @@ stages:
       size: 1480
     - path: src/mhd_surrogate/evaluation
       hash: md5
-      md5: c5c0dc614e313fbabc5bdbee7012e35d.dir
-      size: 46257
+      md5: 0a3fff5a98c1ec06c19ead567a708c81.dir
+      size: 46174
       nfiles: 11
     - path: src/mhd_surrogate/models/__init__.py
       hash: md5
@@ -298,12 +298,12 @@ stages:
       size: 5257
     - path: src/mhd_surrogate/models/dmd.py
       hash: md5
-      md5: 660c4889f0933d78b68c5d6c9a2d26bc
-      size: 13230
+      md5: 8d158383c81e3dd7f4c15b6715a18642
+      size: 14392
     - path: src/mhd_surrogate/models/hankel_dmd.py
       hash: md5
-      md5: 3104397933acdcd0f57b6f8110b7510e
-      size: 10447
+      md5: 286503028df76c9a60e6d54e74dedcea
+      size: 11180
     - path: src/mhd_surrogate/models/registry.py
       hash: md5
       md5: 18e4e51ebb8490c1569ad1610063cdb1
@@ -445,8 +445,8 @@ stages:
       size: 981
     - path: src/mhd_surrogate/evaluation/rollout.py
       hash: md5
-      md5: d016be2fa106fe4ae98caa6a513dab5d
-      size: 6537
+      md5: 0b4383c114fb07a5000cf31d752427a0
+      size: 6454
     - path: src/mhd_surrogate/evaluation/stability.py
       hash: md5
       md5: 6e1ff7f6cb92b1c673ca0807a25a0387
@@ -461,12 +461,12 @@ stages:
       size: 5257
     - path: src/mhd_surrogate/models/dmd.py
       hash: md5
-      md5: 660c4889f0933d78b68c5d6c9a2d26bc
-      size: 13230
+      md5: 8d158383c81e3dd7f4c15b6715a18642
+      size: 14392
     - path: src/mhd_surrogate/models/hankel_dmd.py
       hash: md5
-      md5: 3104397933acdcd0f57b6f8110b7510e
-      size: 10447
+      md5: 286503028df76c9a60e6d54e74dedcea
+      size: 11180
     - path: src/mhd_surrogate/models/registry.py
       hash: md5
       md5: 18e4e51ebb8490c1569ad1610063cdb1

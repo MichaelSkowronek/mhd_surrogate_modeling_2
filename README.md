@@ -1807,19 +1807,23 @@ uv run --extra gpu scripts/evaluation/check_rollout_stability.py --model-id m-..
 
 The blocks come from `rollout.py`'s `rollout_blocks`, which streams any
 forecast too long to hold at once (a served one too). A model with
-`predict_blocks` streams the forecast its one `predict` call would make:
-the neural networks carry their window from block to block as they see it,
-normalized and padded, so their long rollouts are exactly the forecast
-they're scored on. Any other model is restarted at every block from the last
-`window` frames of the forecast so far, which is the same forecast only if
-those frames are all of its state: (Hankel) DMD restarts from the projection
-of its own last frames, and a stochastic model samples each block with its
-own seed (the member's for the first, then one derived from it and the
-block). A model whose state is more than its last frames -- a recurrent or
-reservoir network's hidden state, a generative model's random key --
-implements `predict_blocks`, or its long rollouts would quietly be a
-different forecast from the one it's scored on. The test dataset is
-refused, like in the forecast videos.
+`predict_blocks` streams the forecast its one `predict` call would make,
+so its long rollouts are exactly the forecast it's scored on. The neural
+networks carry their window from block to block as they see it, normalized
+and padded; (Hankel) DMD carries its mode amplitudes. Any other model is
+restarted at every block from the last `window` frames of the forecast so
+far, which is the same forecast only if those frames are all of its state; a
+restarted stochastic model samples each block with its own seed (the
+member's for the first, then one derived from it and the block). Hankel DMD
+shows how far off a restart can be: its forecast frames are the newest
+blocks of its delay states, whose older blocks needn't be the frames before
+(the operator isn't constrained to shift them), so restarting from its own
+last frames starts from another state, ~1e-4 of the field's RMS off on the
+validation dataset (a rounding error would be ~1e-7). A model whose state is
+more than its last frames -- a recurrent or reservoir network's hidden
+state, a generative model's random key -- implements `predict_blocks`, or
+its long rollouts would quietly be a different forecast from the one it's
+scored on. The test dataset is refused, like in the forecast videos.
 
 **Ensembles** (`protocol.py`, `ensemble.py`). The deterministic models
 so far have one answer per context; a generative surrogate (flow matching,
