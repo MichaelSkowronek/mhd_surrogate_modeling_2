@@ -55,13 +55,12 @@ from typing import Any, Self
 import numpy as np
 
 from mhd_surrogate.models.base import CHECKPOINT_META
-from mhd_surrogate.models.dmd import (
+from mhd_surrogate.models.dmd import DEFAULT_RANK, DMD, eigendynamics, pair_indices
+from mhd_surrogate.models.snapshots import (
     DEFAULT_CHUNK_T,
     DEFAULT_COLUMN_BLOCK,
-    DEFAULT_RANK,
-    DMD,
-    eigendynamics,
-    pair_indices,
+    gram_matrix,
+    project_basis,
     truncated_pod,
 )
 
@@ -125,14 +124,13 @@ class HankelDMD(DMD):
                 f"{self.delays + 1} frames each"
             )
         frames, lengths = self._load(datasets)
-        self._normalize_in_place(frames)
         before, _ = pair_indices(lengths)
 
-        gram = self._gram(frames)
+        gram = gram_matrix(frames, self.column_block)
         s2, s, v = truncated_pod(
             gram[np.ix_(before, before)], self.spatial_rank, f"{self.name} spatial"
         )
-        self.basis = self._basis(frames, before, v / s)
+        self.basis = project_basis(frames, before, v / s, self.column_block)
         del frames
         # Every frame's POD coefficients, a = Z U = Z X^T V S^-1, from the Gram matrix.
         coefficients = gram[:, before] @ (v / s)

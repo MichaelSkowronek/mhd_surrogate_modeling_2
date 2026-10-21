@@ -138,16 +138,20 @@ stages:
       size: 5257
     - path: src/mhd_surrogate/models/dmd.py
       hash: md5
-      md5: 8d158383c81e3dd7f4c15b6715a18642
-      size: 14392
+      md5: 9264ddb4fa9088b140d3dad6b523a6a9
+      size: 9780
     - path: src/mhd_surrogate/models/hankel_dmd.py
       hash: md5
-      md5: 286503028df76c9a60e6d54e74dedcea
-      size: 11180
+      md5: 35f475ed04a3ca0c80ca865544ce3c9d
+      size: 11242
     - path: src/mhd_surrogate/models/registry.py
       hash: md5
       md5: 18e4e51ebb8490c1569ad1610063cdb1
       size: 1741
+    - path: src/mhd_surrogate/models/snapshots.py
+      hash: md5
+      md5: 0b19e9edf92226833567732874b732b0
+      size: 6419
     - path: src/mhd_surrogate/training/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -298,16 +302,20 @@ stages:
       size: 5257
     - path: src/mhd_surrogate/models/dmd.py
       hash: md5
-      md5: 8d158383c81e3dd7f4c15b6715a18642
-      size: 14392
+      md5: 9264ddb4fa9088b140d3dad6b523a6a9
+      size: 9780
     - path: src/mhd_surrogate/models/hankel_dmd.py
       hash: md5
-      md5: 286503028df76c9a60e6d54e74dedcea
-      size: 11180
+      md5: 35f475ed04a3ca0c80ca865544ce3c9d
+      size: 11242
     - path: src/mhd_surrogate/models/registry.py
       hash: md5
       md5: 18e4e51ebb8490c1569ad1610063cdb1
       size: 1741
+    - path: src/mhd_surrogate/models/snapshots.py
+      hash: md5
+      md5: 0b19e9edf92226833567732874b732b0
+      size: 6419
     - path: src/mhd_surrogate/training/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -461,16 +469,20 @@ stages:
       size: 5257
     - path: src/mhd_surrogate/models/dmd.py
       hash: md5
-      md5: 8d158383c81e3dd7f4c15b6715a18642
-      size: 14392
+      md5: 9264ddb4fa9088b140d3dad6b523a6a9
+      size: 9780
     - path: src/mhd_surrogate/models/hankel_dmd.py
       hash: md5
-      md5: 286503028df76c9a60e6d54e74dedcea
-      size: 11180
+      md5: 35f475ed04a3ca0c80ca865544ce3c9d
+      size: 11242
     - path: src/mhd_surrogate/models/registry.py
       hash: md5
       md5: 18e4e51ebb8490c1569ad1610063cdb1
       size: 1741
+    - path: src/mhd_surrogate/models/snapshots.py
+      hash: md5
+      md5: 0b19e9edf92226833567732874b732b0
+      size: 6419
     - path: src/mhd_surrogate/training/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e

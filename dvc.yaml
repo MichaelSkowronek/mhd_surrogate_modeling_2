@@ -61,6 +61,7 @@ stages:
       - src/mhd_surrogate/models/__init__.py
       - src/mhd_surrogate/models/base.py
       - src/mhd_surrogate/models/registry.py
+      - src/mhd_surrogate/models/snapshots.py
       - src/mhd_surrogate/models/dmd.py
       - src/mhd_surrogate/models/hankel_dmd.py
       - src/mhd_surrogate/evaluation/__init__.py
@@ -126,6 +127,7 @@ stages:
       - src/mhd_surrogate/models/__init__.py
       - src/mhd_surrogate/models/base.py
       - src/mhd_surrogate/models/registry.py
+      - src/mhd_surrogate/models/snapshots.py
       - src/mhd_surrogate/models/dmd.py
       - src/mhd_surrogate/models/hankel_dmd.py
       - src/mhd_surrogate/evaluation
@@ -190,6 +192,7 @@ stages:
       - src/mhd_surrogate/models/__init__.py
       - src/mhd_surrogate/models/base.py
       - src/mhd_surrogate/models/registry.py
+      - src/mhd_surrogate/models/snapshots.py
       - src/mhd_surrogate/models/dmd.py
       - src/mhd_surrogate/models/hankel_dmd.py
       - src/mhd_surrogate/evaluation/__init__.py
