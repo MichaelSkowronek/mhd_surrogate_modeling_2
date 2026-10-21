@@ -97,6 +97,23 @@ def test_delays_forecast_an_oscillation_that_one_frame_cannot():
     assert np.abs(plain.predict(held_out[3:4], 20) - held_out[4:24]).max() > 0.1
 
 
+def test_streamed_blocks_continue_the_delay_state_a_restart_would_lose():
+    datasets = noisy_datasets()
+    model = HankelDMD(rank=6, delays=3, spatial_rank=8)
+    model.fit(datasets)
+    context = datasets["d0"][:3]
+    whole = model.predict(context, 12)
+
+    blocks = list(model.predict_blocks(context, 12, 5))
+
+    assert [len(b) for b in blocks] == [5, 5, 2]
+    np.testing.assert_allclose(np.concatenate(blocks), whole, rtol=1e-5, atol=1e-5)
+    # The newest blocks of the forecast states aren't a delay state: restarted
+    # from its own last 3 frames, the second block starts somewhere else.
+    restarted = model.predict(whole[2:5], 5)
+    assert np.abs(restarted - whole[5:10]).max() > 0.01
+
+
 def test_ranks_are_capped_at_the_usable_singular_values():
     model = HankelDMD(rank=10, delays=3, spatial_rank=10)
     model.fit(standing_wave_datasets())

@@ -36,7 +36,12 @@ V S, already orthogonal, and the delay POD just picks their leading columns.
 Forecast. The last `d` context frames are projected onto U, stacked newest
 first and projected onto U_H; the result is evolved with A~'s
 eigendecomposition (with `stabilize`, as in DMD), and each forecast state's
-newest block is mapped back through U to a frame.
+newest block is mapped back through U to a frame. The older blocks of a
+forecast state needn't be the frames forecast before it (the operator isn't
+constrained to shift them), so a forecast restarted from its own last
+frames starts from another state: ~1e-4 of the field's RMS off on the
+validation dataset. Streamed in blocks, it carries the amplitudes instead
+(`DMD.predict_blocks`).
 """
 
 from __future__ import annotations
@@ -167,22 +172,30 @@ class HankelDMD(DMD):
 
     # -- forecasting ---------------------------------------------------------
 
-    def predict(self, context: np.ndarray, n_steps: int) -> np.ndarray:
+    # `predict` and `predict_blocks` are DMD's, on these two.
+
+    def _amplitudes(self, context: np.ndarray) -> np.ndarray:
+        """The mode amplitudes of the delay state the forecast starts from:
+        the last `delays` context frames projected onto U, stacked newest
+        first and projected onto U_H."""
         if self.hankel_basis is None:
             raise RuntimeError("HankelDMD is not fitted")
         if len(context) < self.delays:
             raise ValueError(f"context has {len(context)} frames, need delays={self.delays}")
-        frame_shape = self.mean.shape
         recent = np.asarray(context[len(context) - self.delays :])
         z = ((recent - self.mean[None]) / self.scale[None, :, None, None]).reshape(self.delays, -1)
         # Delay block k holds the frame k steps before the newest one.
         coefficients = (z @ self.basis)[::-1]
         projected = np.einsum("kij,ki->j", self.hankel_basis, coefficients)
-        amplitudes = np.linalg.solve(self.eigenvectors, projected)
-        powers = self.eigenvalues[None, :] ** np.arange(1, n_steps + 1)[:, None]
+        return np.linalg.solve(self.eigenvectors, projected)
+
+    def _frames(self, amplitudes: np.ndarray, first: int, last: int) -> np.ndarray:
+        """Forecast steps `first` to `last`: each delay state's newest block,
+        mapped back through U."""
+        powers = self.eigenvalues[None, :] ** np.arange(first, last + 1)[:, None]
         reduced = (powers * amplitudes[None, :]) @ self.eigenvectors.T
         newest = (reduced @ self.hankel_basis[0].T).real.astype(np.float32)
-        frames = (newest @ self.basis.T).reshape(n_steps, *frame_shape)
+        frames = (newest @ self.basis.T).reshape(-1, *self.mean.shape)
         return frames * self.scale[None, :, None, None] + self.mean[None]
 
     def parameter_count(self) -> int:

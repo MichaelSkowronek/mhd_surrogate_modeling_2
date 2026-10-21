@@ -40,10 +40,9 @@ def rollout_blocks(
 
     A model with `predict_blocks` streams the forecast its one `predict`
     call would make (see `models/base.py`). Any other is restarted at every
-    block from the last `window` frames of the forecast so far. For a model
-    whose state is just those frames that's the same forecast, up to float
-    rounding at the block boundaries; a model that projects its input (DMD)
-    restarts from the projection of its own last frames. Restarted, a
+    block from the last `window` frames of the forecast so far: for a model
+    whose state is just those frames the same forecast, up to float
+    rounding at the block boundaries, for any other not. Restarted, a
     stochastic model samples each block with its own seed (`block_seed`).
     """
     if block_steps < 1:

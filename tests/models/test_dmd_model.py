@@ -73,6 +73,20 @@ def test_dmd_forecasts_a_known_linear_system_exactly_in_raw_units():
     assert prediction == pytest.approx(held_out[5:16], abs=1e-3)
 
 
+def test_streamed_blocks_are_the_one_forecast():
+    datasets = linear_datasets(n_datasets=3)
+    held_out = datasets.pop("d2")
+    model = DMD(rank=4)
+    model.fit(datasets)
+
+    blocks = list(model.predict_blocks(held_out[:5], 11, 4))
+
+    assert [len(b) for b in blocks] == [4, 4, 3]
+    np.testing.assert_allclose(
+        np.concatenate(blocks), model.predict(held_out[:5], 11), rtol=1e-5, atol=1e-5
+    )
+
+
 def test_rank_is_capped_at_the_number_of_usable_singular_values():
     model = DMD(rank=10)
     model.fit(linear_datasets())
