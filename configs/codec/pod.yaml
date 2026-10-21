@@ -1,0 +1,9 @@
+# POD as a codec: a frame's latent is its coefficients in the leading `rank`
+# POD modes of all training frames (src/mhd_surrogate/models/pod_codec.py).
+# Closed-form. The fit holds all training frames in RAM like DMD (~8.3 GB,
+# ~14 GB peak); the checkpoint is the basis, ~1.2 MB per mode (~880 MB at
+# rank 750).
+name: pod
+rank: 750          # POD modes kept = the latent size; plain DMD's selected rank
+chunk_t: 64        # frames per zarr read while loading and encoding
+column_block: 32768  # state entries per device block for the Gram matrix

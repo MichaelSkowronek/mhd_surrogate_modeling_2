@@ -1,0 +1,26 @@
+# Root config of codec training (scripts/training/train_codec.py): the
+# training config (config.yaml, as train.py sees it) with a codec from
+# codec/ to fit instead of a model (the model and windowed-dataset groups
+# are dropped). Only the keys a codec run uses are logged as its params
+# (training/codec_run.py's CODEC_CONFIG).
+#
+# Codec runs are tracked in an experiment of their own: they're scored on
+# their reconstruction, not under the forecast protocol, so they'd only add
+# rows of other metrics to the forecasting models' runs table. A latent model
+# references a codec by its logged model's id, whatever its experiment.
+defaults:
+  - config
+  - codec: pod
+  - override model: null
+  - override dataset: null
+  - _self_
+
+mlflow:
+  experiment_name: mhd-codecs
+
+hydra:
+  run:
+    dir: outputs/codec/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: outputs/codec/multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}
