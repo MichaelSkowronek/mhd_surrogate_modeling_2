@@ -86,7 +86,7 @@ src/mhd_surrogate/   importable package, split by pipeline stage
   evaluation/        protocol, metrics, quantities, stability, selection, rollout, gate, diagnostics, ensemble, evaluate,
                      reconstruction
   models/            base (interface), baselines, snapshots, dmd, hankel_dmd, neural, unet, registry,
-                     codec (codec interface + registry), pod_codec
+                     codec (codec interface + registry), pod_codec, latent, latent_linear
   utils/             logging_config, parallel, jax_cache, jax_determinism, hydra_resolvers
 scripts/             CLI entry points, same split (plus viz/)
   data/              explore_data, convert_to_zarr, compute_stats
@@ -2896,6 +2896,48 @@ projection of `x` onto the basis, so what it loses is the trailing modes'
 variance, the small scales, which no latent model on it can forecast. It is
 the first codec because it needs no GPU training and exercises the latent
 plumbing, and it makes a "POD + neural dynamics" baseline possible.
+
+### Latent models
+
+```bash
+uv run --extra gpu scripts/training/train.py model=latent_linear model.codec=models:/<codec model id>
+uv run --extra gpu scripts/training/train.py model=latent_linear model.codec=models:/<id> model.window=4
+```
+
+A latent model (`src/mhd_surrogate/models/latent.py`, `LatentSurrogate`)
+encodes its context with a codec, forecasts the next latents and decodes
+them: raw frames in and out, so it is trained by `train.py`, scored, gated,
+streamed and served like any model, and a new one supplies only its latent
+dynamics (`fit_latents`, `forecast_latents`).
+
+- **The codec by reference.** The config names the codec,
+  `codec: models:/<model id>` of a `train_codec.py` run (or a codec
+  checkpoint directory); being part of the model config, the reference is
+  logged as the run's `model.codec` param. `fit` loads the codec frozen and
+  encodes the training datasets with it; the latent model never changes it.
+- **The checkpoint carries the codec.** `save` writes a copy of the codec
+  into the checkpoint (`codec/`), so loading the model, its pyfunc model,
+  serving and the DVC stages need nothing but the checkpoint -- the
+  reference may since have been pruned. Its `parameter_count` includes the
+  codec's: the model forecasts with both.
+- **Streaming keeps the latent window.** `predict_blocks` carries the latent
+  window from block to block. Restarting from its own decoded frames, the
+  model would encode them again, which is the latent it forecast only for a
+  codec with `encode(decode(z)) == z` (POD, up to rounding; not an
+  autoencoder).
+
+**`latent_linear`** (`models/latent_linear.py`) is the reference latent
+model: a vector autoregression, the next latent a linear function of the
+last `window` ones (centered on the training latents' mean), fitted in
+closed form by least squares over pairs within each dataset, with an
+optional ridge penalty. On a POD codec with `window=1` it is DMD without the
+eigenvalue stabilization (a test checks it forecasts a known linear system
+like DMD), and with more it's the latent analog of Hankel DMD without the
+delay truncation; `fit.spectral_radius` and `fit.unstable_modes` show
+whether a long forecast can grow. It is there to exercise the latent path
+end to end, not as a contender; on the real data (a smoke run on the POD
+codec at rank 750) it trains in ~30 s, and its checkpoint, codec included,
+streams a stable 3000-step rollout.
 
 ## Docker
 

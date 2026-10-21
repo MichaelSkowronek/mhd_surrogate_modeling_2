@@ -1,5 +1,6 @@
 """run_codec_training end to end on a tiny synthetic zarr store: the code
-path of `scripts/training/train_codec.py`."""
+path of `scripts/training/train_codec.py`, and of a latent model trained
+on the codec it logged."""
 
 import shutil
 from pathlib import Path
@@ -12,10 +13,13 @@ from hydra import compose, initialize_config_dir
 import mhd_surrogate.utils.hydra_resolvers  # noqa: F401
 import mlflow
 from mhd_surrogate.data.normalization import compute_normalization_stats
+from mhd_surrogate.models.latent_linear import LatentLinear
 from mhd_surrogate.training import startup
 from mhd_surrogate.training.codec_run import run_codec_training
 from mhd_surrogate.training.export import checkpoint_digest
 from mhd_surrogate.training.mlflow_codec import load_logged_codec
+from mhd_surrogate.training.mlflow_model import load_logged_surrogate
+from mhd_surrogate.training.run import run_training
 from mlflow import MlflowClient
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -68,6 +72,29 @@ def config(workspace, *overrides):
         )
 
 
+def training_config(workspace, *overrides):
+    """train.py's config on the same workspace."""
+    with initialize_config_dir(config_dir=str(ROOT / "configs"), version_base=None):
+        return compose(
+            "config",
+            overrides=[
+                f"data.zarr_store={workspace / 'data.zarr'}",
+                f"data.train_datasets={TRAIN}",
+                "data.val_dataset=v",
+                "data.test_dataset=never_opened",
+                "data.context_steps=4",
+                f"normalization.stats_path={workspace / 'stats.json'}",
+                f"mlflow.tracking_uri=sqlite:///{workspace / 'mlruns.db'}",
+                "mlflow.experiment_name=test",
+                "evaluation.train_datasets=[a]",
+                "evaluation.report_leads=[1,2]",
+                "evaluation.tie_break_lead=2",
+                "jax.compilation_cache_dir=null",
+                *overrides,
+            ],
+        )
+
+
 def test_a_codec_is_fitted_scored_logged_and_loadable_by_its_model_id(workspace):
     """The waves' fluctuations span two modes, so one mode loses some."""
     scores = run_codec_training(
@@ -104,3 +131,38 @@ def test_scoring_a_dataset_that_isnt_a_training_dataset_as_train_is_refused(work
             None,
             "pod",
         )
+
+
+def test_a_latent_model_trains_on_a_codec_referenced_by_its_logged_model(workspace):
+    """The waves are a rotation in the plane of two POD modes, so linear
+    dynamics in that codec's latent space forecast them closely (not
+    exactly: the datasets aren't whole periods, so the pooled mean the codec
+    centers on is off the rotation's center)."""
+    run_codec_training(config(workspace, "codec.rank=2"), workspace / "codec_run", None, "pod")
+    experiment = mlflow.get_experiment_by_name("mhd-codecs").experiment_id
+    (codec,) = mlflow.search_logged_models(experiment_ids=[experiment], output_format="list")
+    uri = f"models:/{codec.model_id}"
+
+    scores = run_training(
+        training_config(workspace, "model=latent_linear", f"model.codec={uri}"),
+        workspace / "out",
+        None,
+        "latent_linear",
+    )
+
+    assert scores["val"]["rmse_lead_1"] < 0.05
+    client = MlflowClient(f"sqlite:///{workspace / 'mlruns.db'}")
+    (run,) = client.search_runs([mlflow.get_experiment_by_name("test").experiment_id])
+    assert run.data.params["model.codec"] == uri
+    assert (workspace / "out" / "model" / "codec" / "codec.json").exists()
+    (model,) = mlflow.search_logged_models(
+        experiment_ids=[run.info.experiment_id], output_format="list"
+    )
+    logged, _ = load_logged_surrogate(model.model_id)
+    assert logged.name == "latent_linear" and logged.codec.latent_shape == (2,)
+    # The same as a model fitted on the codec's checkpoint directly.
+    root = zarr.open_group(store=str(workspace / "data.zarr"), mode="r")
+    direct = LatentLinear(str(workspace / "codec_run" / "codec"))
+    direct.fit({name: root[name] for name in TRAIN})
+    context = np.asarray(root["v"][:4])
+    assert (logged.predict(context, 5) == direct.predict(context, 5)).all()

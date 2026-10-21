@@ -1,0 +1,7 @@
+# Linear dynamics (a vector autoregression) in a codec's latent space
+# (src/mhd_surrogate/models/latent_linear.py): the reference latent model,
+# exercising the latent-model path end to end rather than a contender.
+name: latent_linear
+codec: ???     # the codec: models:/<model id> of a train_codec.py run, or a codec checkpoint directory
+window: 1      # latents the next one depends on (<= context_steps)
+ridge: 0.0     # ridge penalty, relative to the features' mean square (0 = plain least squares)
