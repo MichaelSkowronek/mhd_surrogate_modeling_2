@@ -7,11 +7,9 @@ network. Being linear, it can carry the flow's coherent oscillation forward,
 but not the turbulence: decaying modes die out (the forecast relaxes to the
 mean) and the rank truncation removes the small scales.
 
-State. Each frame is turned into a fluctuation about the pooled training
-mean field, scaled per channel by the fluctuation's training RMS, so u_x and
-u_y weigh the same in the SVD (u_y's std is about half of u_x's); channels
-and space are flattened into one vector. Both the mean and the scale are
-fitted here: normalization is the first step of fitting a model.
+State. Each frame is a normalized snapshot z_t (`snapshots.py`): a
+fluctuation about the pooled training mean field, scaled per channel by the
+fluctuation's training RMS, flattened into one vector.
 
 Fit (projected exact DMD over several trajectories, method of snapshots).
 Snapshot pairs (z_t, z_{t+1}) are formed within each dataset only, never
@@ -20,9 +18,6 @@ Y the "after" ones (one column per pair), the Gram matrix G = Z^T Z of all
 frames gives X^T X = V S^2 V^T (POD basis U = X V S^-1, truncated to `rank`)
 and the reduced operator A~ = U^T A U = S^-1 V^T (X^T Y) V S^-1, without
 ever forming the (state x state) operator or holding X in a factorized form.
-The state has ~292k entries and there are ~7k frames, so G is small; it is
-computed on JAX's default device (the GPU with the `gpu` extra) in blocks of
-state columns, so every frame crosses to the device once per pass.
 
 Forecast. The last context frame is projected onto U, evolved with the
 eigendecomposition A~ = W diag(lambda) W^-1, and mapped back. With
@@ -41,56 +36,28 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any, Self
 
-import jax
-import jax.numpy as jnp
 import numpy as np
 
 from mhd_surrogate.models.base import CHECKPOINT_META, real_size
+from mhd_surrogate.models.snapshots import (
+    DEFAULT_CHUNK_T,
+    DEFAULT_COLUMN_BLOCK,
+    gram_matrix,
+    load_frames,
+    normalize_in_place,
+    project_basis,
+    truncated_pod,
+)
 
 log = logging.getLogger(__name__)
 
 DEFAULT_RANK = 100
-DEFAULT_CHUNK_T = 64
-DEFAULT_COLUMN_BLOCK = 32768
-# Singular values below this fraction of the largest are numerically zero;
-# keeping them would divide by ~0 in S^-1. The Gram matrix squares the
-# singular values, so with float32 frames it resolves them only down to
-# ~sqrt(float32 eps) ~ 3e-4 of the largest; 1e-3 stays clear of that floor.
-RELATIVE_TOLERANCE = 1e-3
-
-
-@jax.jit
-def _gram(block: jax.Array) -> jax.Array:
-    # HIGHEST: full float32 on GPUs that would otherwise use TF32 for matmuls.
-    return jnp.matmul(block, block.T, precision=jax.lax.Precision.HIGHEST)
-
-
-@jax.jit
-def _project(block: jax.Array, coefficients: jax.Array) -> jax.Array:
-    return jnp.matmul(block.T, coefficients, precision=jax.lax.Precision.HIGHEST)
 
 
 def stabilize_eigenvalues(eigenvalues: np.ndarray) -> np.ndarray:
     """Move eigenvalues outside the unit circle onto it, keeping their phase."""
     magnitude = np.abs(eigenvalues)
     return np.where(magnitude > 1.0, eigenvalues / magnitude, eigenvalues)
-
-
-def truncated_pod(
-    gram: np.ndarray, rank: int, label: str = "dmd"
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """POD of the snapshots whose Gram matrix is `gram` (method of
-    snapshots): (all squared singular values, largest first; the `rank`
-    leading singular values S; their right singular vectors V). The rank is
-    capped at the singular values above the numerical tolerance."""
-    s2, v = np.linalg.eigh(gram)
-    order = np.argsort(s2)[::-1]
-    s2, v = s2[order], v[:, order]
-    usable = int(np.sum(s2 > RELATIVE_TOLERANCE**2 * s2[0]))
-    r = min(rank, usable)
-    if r < rank:
-        log.warning("%s: rank %d requested, only %d usable singular values", label, rank, r)
-    return s2, np.sqrt(s2[:r]), v[:, :r]
 
 
 def eigendynamics(reduced: np.ndarray, stabilize: bool) -> tuple[np.ndarray, np.ndarray, int]:
@@ -144,10 +111,9 @@ class DMD:
 
     def fit(self, datasets: Mapping[str, Any]) -> None:
         frames, lengths = self._load(datasets)
-        self._normalize_in_place(frames)
         before, after = pair_indices(lengths)
 
-        gram = self._gram(frames)
+        gram = gram_matrix(frames, self.column_block)
         s2, s, v = truncated_pod(gram[np.ix_(before, before)], self.rank, self.name)
         r = len(s)
 
@@ -155,7 +121,7 @@ class DMD:
         reduced = (v / s).T @ gram[np.ix_(before, after)] @ (v / s)
         eigenvalues, eigenvectors, n_unstable = eigendynamics(reduced, self.stabilize)
 
-        self.basis = self._basis(frames, before, v / s)
+        self.basis = project_basis(frames, before, v / s, self.column_block)
         self.eigenvalues = eigenvalues
         self.eigenvectors = eigenvectors
         self.datasets = list(datasets)
@@ -168,68 +134,15 @@ class DMD:
         log.info("dmd: %s", ", ".join(f"{k}={v:.4g}" for k, v in self.fit_info.items()))
 
     def _load(self, datasets: Mapping[str, Any]) -> tuple[np.ndarray, list[int]]:
-        """All frames stacked as (frames, state) float32, in dataset order."""
+        """All frames as normalized snapshots, (frames, state) float32 in
+        dataset order, and the datasets' lengths; fits the normalization."""
         lengths = [array.shape[0] for array in datasets.values()]
         if not lengths or min(lengths) < 2:
             raise ValueError("DMD.fit needs datasets with at least 2 frames each")
-        first = next(iter(datasets.values()))
-        self._frame_shape = tuple(first.shape[1:])
-        frames = np.empty((sum(lengths), int(np.prod(self._frame_shape))), dtype=np.float32)
-        row = 0
-        for name, array in datasets.items():
-            for start in range(0, array.shape[0], self.chunk_t):
-                block = np.asarray(array[start : start + self.chunk_t], dtype=np.float32)
-                frames[row : row + len(block)] = block.reshape(len(block), -1)
-                row += len(block)
-            log.info("dmd: loaded %s (%d frames so far)", name, row)
+        frame_shape = tuple(next(iter(datasets.values())).shape[1:])
+        frames = load_frames(datasets, self.chunk_t, self.name)
+        self.mean, self.scale = normalize_in_place(frames, frame_shape, self.chunk_t)
         return frames, lengths
-
-    def _normalize_in_place(self, frames: np.ndarray) -> None:
-        """Subtract the per-pixel mean and divide each channel by the RMS of
-        its fluctuation, both pooled over all frames."""
-        n_channels = self._frame_shape[0]
-        mean = frames.mean(axis=0, dtype=np.float64)
-        frames -= mean.astype(np.float32)
-        per_channel = frames.reshape(len(frames), n_channels, -1)
-        # Sum of squares a chunk of frames at a time: a float64 square of the
-        # whole array would double the ~8 GB the frames already take.
-        squares = np.zeros(n_channels)
-        for start in range(0, len(frames), self.chunk_t):
-            chunk = per_channel[start : start + self.chunk_t].astype(np.float64)
-            squares += np.square(chunk).sum(axis=(0, 2))
-        scale = np.sqrt(squares / (len(frames) * per_channel.shape[2]))
-        per_channel /= scale.astype(np.float32)[None, :, None]
-        self.mean = mean.reshape(self._frame_shape).astype(np.float32)
-        self.scale = scale.astype(np.float32)
-
-    def _column_blocks(self, frames: np.ndarray):
-        """(start, width, block) for every `column_block`-wide slice of the
-        state, the last one zero-padded to full width: zero columns add
-        nothing to a Gram matrix or a projection, and one block shape means
-        one XLA compile (with GEMM autotuning, ~45 s on this GPU) not two."""
-        for start in range(0, frames.shape[1], self.column_block):
-            block = frames[:, start : start + self.column_block]
-            width = block.shape[1]
-            if width < self.column_block and frames.shape[1] > self.column_block:
-                block = np.pad(block, ((0, 0), (0, self.column_block - width)))
-            yield start, width, np.ascontiguousarray(block)
-
-    def _gram(self, frames: np.ndarray) -> np.ndarray:
-        gram = np.zeros((len(frames), len(frames)), dtype=np.float64)
-        for _, _, block in self._column_blocks(frames):
-            gram += np.asarray(_gram(block), dtype=np.float64)
-        return gram
-
-    def _basis(
-        self, frames: np.ndarray, before: np.ndarray, coefficients: np.ndarray
-    ) -> np.ndarray:
-        """U = X V S^-1, one block of state rows at a time."""
-        weights = np.zeros((len(frames), coefficients.shape[1]), dtype=np.float32)
-        weights[before] = coefficients
-        basis = np.empty((frames.shape[1], coefficients.shape[1]), dtype=np.float32)
-        for start, width, block in self._column_blocks(frames):
-            basis[start : start + width] = np.asarray(_project(block, weights))[:width]
-        return basis
 
     # -- forecasting ---------------------------------------------------------
 

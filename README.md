@@ -83,7 +83,8 @@ src/mhd_surrogate/   importable package, split by pipeline stage
   analysis/          fields, summary, spectral
   training/          mlflow_utils, tracking, export, mlflow_model, run, scoring, gating, trainer, tuning
   evaluation/        protocol, metrics, quantities, stability, selection, rollout, gate, diagnostics, ensemble, evaluate
-  models/            base (interface), baselines, dmd, hankel_dmd, neural, unet, registry
+  models/            base (interface), baselines, snapshots, dmd, hankel_dmd, neural, unet, registry,
+                     codec (codec interface + registry), pod_codec
   utils/             logging_config, parallel, jax_cache, jax_determinism, hydra_resolvers
 scripts/             CLI entry points, same split (plus viz/)
   data/              explore_data, convert_to_zarr, compute_stats
@@ -2817,6 +2818,56 @@ ensembles are part of the model anyway. The DVC pipeline's `gate` stage
 (see "Training and evaluation stages") is what this episode added to the
 pipeline: a retrain that comes out like the deterministic one now fails
 `dvc repro` instead of becoming the canonical model.
+
+## Codecs (latent spaces)
+
+Latent generative models -- latent flow matching or diffusion, say -- forecast
+in a compressed latent space instead of on the 292k-entry grid. The map into
+that space and back is a **codec** (`src/mhd_surrogate/models/codec.py`): an
+`encode`/`decode` pair on raw frames, normalizing internally like a model.
+"Codec", not "autoencoder", because the slot isn't one architecture: POD is a
+(linear) codec, and so are an autoencoder, a VAE or a VQ-VAE.
+
+- **Fitted on its own.** A codec is fitted, logged and referenced as a
+  component of its own, not as a first stage inside a latent model's `fit`.
+  Otherwise every trial of a latent model's sweep, and every seed, would refit
+  it -- costly, and its own variance would confound comparisons between the
+  latent models. Each run stays single-stage, so `FitHooks`, the trainer and
+  resuming don't change. This is also how latent diffusion is usually built:
+  the autoencoder is trained first and frozen.
+- **Its own selection rule, deliberately narrow.** A codec forecasts nothing,
+  so it isn't ranked by `selection_score`. A codec trained iteratively
+  early-stops on validation reconstruction RMSE: with the frame given, the
+  RMSE-optimal reconstruction is the frame itself, so the mean-reversion that
+  makes forecast RMSE a bad selection metric doesn't arise. Choosing *between*
+  codecs (latent size, architecture, a VAE's KL weight) is still choosing a
+  forecaster, by the `selection_score` of a latent model trained on each:
+  reconstruction RMSE always favors the larger latent space and says nothing
+  about how forecastable that space is. No guardrail is put on the
+  reconstruction's own physics scores: a latent model is held to the usual
+  guardrails anyway, which a codec that loses the small scales fails through
+  its latent models.
+- **Own registry and checkpoint format.** Codecs are registered by import
+  path in `codec.py`'s `CODECS` (imported only when built or loaded, as models
+  are), and a codec checkpoint has `codec.json` instead of `model.json`, so it
+  can't be loaded as a model by mistake.
+- **The final refit includes the codec.** The codec is part of fitting, so
+  the final train + val refit refits it too (its epoch count, for an
+  iterative one, fixed from its tuned run) before the latent model is refit
+  on it.
+
+**POD codec** (`models/pod_codec.py`, name `pod`): a frame's latent is its
+coefficients in the leading `rank` POD modes of the training frames -- of all
+rank-`rank` linear codecs, the one that reconstructs the (normalized)
+training frames best, in closed form. It is the basis DMD's dynamics live in,
+computed by the same code (`models/snapshots.py`: loading, normalization,
+the Gram matrix and its POD on the GPU), but from all training frames
+rather than DMD's "before" frames. Its training latents are uncorrelated,
+each with its mode's variance; `decode(encode(x))` is the orthogonal
+projection of `x` onto the basis, so what it loses is the trailing modes'
+variance, the small scales, which no latent model on it can forecast. It is
+the first codec because it needs no GPU training and exercises the latent
+plumbing, and it makes a "POD + neural dynamics" baseline possible.
 
 ## Docker
 

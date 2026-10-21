@@ -178,7 +178,15 @@ conventions below; it shifts which tools are worth reaching for at all.
   validation scores, MLflow training curves, a resumable state directory).
   Early stopping and the hyperparameter search maximize
   `evaluation.metrics.selection_score`, the selection rule as one number,
-  never a training loss or another metric.
+  never a training loss or another metric. The one exception is a codec
+  (`models/codec.py`, the encode/decode pair a latent model works in), which
+  forecasts nothing: it early-stops on validation reconstruction RMSE. With
+  the frame given, the RMSE-optimal reconstruction is the frame itself, not
+  a smoothed mean as for an uncertain forecast. Choosing between codecs
+  (latent size, architecture, a VAE's KL weight) is still choosing a
+  forecaster: it goes by the `selection_score` of a latent model trained on
+  each. Reconstruction RMSE always favors the larger latent space and says
+  nothing about how forecastable that space is.
 - Training entry points share `training/run.py`'s `run_training`
   (`train.py` and every Ray Tune trial call it). A change to what a run
   does goes there, not into `train.py`. NN-only code
