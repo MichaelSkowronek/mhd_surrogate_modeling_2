@@ -2897,6 +2897,46 @@ variance, the small scales, which no latent model on it can forecast. It is
 the first codec because it needs no GPU training and exercises the latent
 plumbing, and it makes a "POD + neural dynamics" baseline possible.
 
+#### POD rank sweep (2026-10-21)
+
+```bash
+uv run --extra gpu scripts/training/train_codec.py -m codec.rank=100,250,750,1500
+```
+
+What a POD codec of each rank costs before any latent model is trained on
+it (validation dataset; RMSE in training stds; runs in the `mhd-codecs`
+experiment, sweep `08-53-54`):
+
+| rank | variance kept (train) | reconstruction RMSE (val / train) | energy / enstrophy error | spectrum distance x / y | `u_y` peak power ratio / period error | parameters | fit |
+|---|---|---|---|---|---|---|---|
+| 100 | 90.2% | 0.286 / 0.281 | 0.032 / 0.336 | 1.73 / 1.52 | 0.90 / 0.003 | 29M | 47 s |
+| 250 | 95.1% | 0.209 / 0.199 | 0.017 / 0.268 | 1.33 / 1.21 | 0.94 / 0.001 | 73M | 46 s |
+| 750 | 98.2% | 0.138 / 0.119 | 0.007 / 0.178 | 0.84 / 0.81 | 0.95 / 0.002 | 219M | 47 s |
+| 1500 | 99.2% | 0.108 / 0.081 | 0.004 / 0.129 | 0.56 / 0.55 | 0.96 / 0.001 | 439M | 67 s |
+
+- **The codec isn't the bottleneck.** Even rank 100 loses less in its
+  reconstruction than the canonical Hankel DMD's forecast does: its
+  spectrum distance (1.73) and enstrophy error (0.34) are well under Hankel
+  DMD's validation scores (2.62, 0.73), and the coherent `u_y` oscillation survives every
+  rank (period error <= 0.003, 90-96% of its peak power). What a linear
+  forecast loses, it loses in the dynamics, not in the basis -- so a
+  nonlinear latent model on a few hundred POD modes has room to do better
+  than DMD before the codec limits it.
+- **Small scales are what the trailing modes hold.** Enstrophy (a
+  gradient quantity) is lost much faster than energy (0.34 vs 0.03 at rank
+  100), and the reconstruction's divergence is lower than the truth's at
+  every rank (ratio 0.44-0.67): the DNS field's own small-scale divergence
+  on this grid lives in the trailing modes.
+- **The trailing modes start to fit the training realizations.** The
+  train/val gap in reconstruction RMSE grows with rank (0.005 at rank 100,
+  0.027 at rank 1500): beyond a few hundred modes the basis describes the
+  training datasets' particular small scales better than an unseen one's.
+- **Which rank to use is not decided here.** Per the codec selection rule,
+  it is the downstream latent model's `selection_score` that picks a codec,
+  not its reconstruction (which always prefers the larger rank). The four
+  codecs stay logged for that comparison; at ~1.2 MB per mode each run
+  stores 0.1-1.8 GB twice (logged model and Hydra output), ~6 GB in all.
+
 ### Latent models
 
 ```bash
