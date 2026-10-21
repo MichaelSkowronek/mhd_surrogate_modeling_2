@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import importlib
 import logging
-import os
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -19,21 +18,17 @@ from typing import Any
 
 import jax
 import numpy as np
-import zarr
 from omegaconf import DictConfig, OmegaConf
 
 import mlflow
 from mhd_surrogate.data.grid import grid_spacing
-from mhd_surrogate.data.normalization import NormalizationStats
-from mhd_surrogate.data.versioning import data_provenance
 from mhd_surrogate.evaluation.selection import selection_scores
 from mhd_surrogate.models.base import FitHooks, fit_model
 from mhd_surrogate.models.registry import build_model
 from mhd_surrogate.training.export import checkpoint_digest, write_metrics
 from mhd_surrogate.training.mlflow_model import log_surrogate
+from mhd_surrogate.training.startup import configure_process, log_data_version, open_data
 from mhd_surrogate.training.tracking import resumed_run_id, save_run_record, tracked_run
-from mhd_surrogate.utils.jax_cache import enable_compilation_cache
-from mhd_surrogate.utils.jax_determinism import enable_deterministic_ops
 
 log = logging.getLogger(__name__)
 
@@ -61,16 +56,7 @@ def run_training(
     `on_validation` is called after every validation during training.
     """
     log.info("resolved config:\n%s", OmegaConf.to_yaml(cfg))
-    # Before anything is jitted: JAX reads the cache config on first compile.
-    if cfg.jax.compilation_cache_dir:
-        enable_compilation_cache(cfg.jax.compilation_cache_dir, cfg.jax.compilation_cache_max_gb)
-    # Before the backend starts: XLA reads its flags then.
-    if cfg.jax.get("deterministic_ops", False):
-        enable_deterministic_ops()
-
-    # Silences mlflow's "load this tracing skill" hint on every call, which
-    # is unrelated to this project's plain params/metrics logging.
-    os.environ.setdefault("MLFLOW_DISABLE_AGENT_HINT", "1")
+    configure_process(cfg)
 
     # `resume` only says where to continue; it isn't part of what's trained
     # (and MLflow wouldn't let a resumed run's params change).
@@ -88,29 +74,11 @@ def run_training(
     ) as run:
         if tags:
             mlflow.set_tags(tags)
-        # Which data/stats version this run was started against: the hashes
-        # dvc.lock pins, as params (searchable in the UI), plus the lock and
-        # stats as artifacts. Keeping disk in sync with the lock is `dvc
-        # repro`'s job, not checked here.
-        provenance = {f"data_version.{k}": v for k, v in data_provenance().items()}
-        mlflow.log_params(provenance)
-        mlflow.log_artifact("dvc.lock")
-        mlflow.log_artifact(cfg.normalization.stats_path)
+        log_data_version(cfg.normalization.stats_path)
         mlflow.log_param("jax_backend", jax.default_backend())
         log.info("jax devices: %s", jax.devices())
 
-        root = zarr.open_group(store=cfg.data.zarr_store, mode="r")
-        stats_path = Path(cfg.normalization.stats_path)
-        if not stats_path.exists():
-            raise FileNotFoundError(
-                f"{stats_path} not found; run scripts/data/compute_stats.py first"
-            )
-        stats = NormalizationStats.load(stats_path)
-        stats.check_compatible(
-            root.attrs["channel_names"], cfg.data.train_datasets, cfg.data.test_dataset
-        )
-        log.info("test_dataset %s: configured, deliberately not opened", cfg.data.test_dataset)
-
+        root, stats = open_data(cfg)
         model = build_model(OmegaConf.to_container(cfg.model, resolve=True))
         train = {name: root[name] for name in cfg.data.train_datasets}
         scale = np.asarray(stats.effective_std(cfg.normalization.std_mode))

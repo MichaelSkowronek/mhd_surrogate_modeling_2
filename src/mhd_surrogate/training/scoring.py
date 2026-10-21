@@ -11,26 +11,21 @@ beyond what early stopping uses (`evaluation/selection.py`).
 from __future__ import annotations
 
 import logging
-import os
 import time
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-import zarr
 from omegaconf import DictConfig, OmegaConf
 
 import mlflow
 from mhd_surrogate.data.grid import grid_spacing
-from mhd_surrogate.data.normalization import NormalizationStats
-from mhd_surrogate.data.versioning import data_provenance
 from mhd_surrogate.evaluation.evaluate import evaluate, train_eval_datasets
 from mhd_surrogate.models.registry import load_model
 from mhd_surrogate.training.export import checkpoint_digest, write_metrics
 from mhd_surrogate.training.mlflow_utils import finite_metrics, log_metric_series
+from mhd_surrogate.training.startup import configure_process, log_data_version, open_data
 from mhd_surrogate.training.tracking import tracked_run
-from mhd_surrogate.utils.jax_cache import enable_compilation_cache
-from mhd_surrogate.utils.jax_determinism import enable_deterministic_ops
 
 log = logging.getLogger(__name__)
 
@@ -53,12 +48,7 @@ def run_evaluation(cfg: DictConfig, log_file: Path | None) -> dict[str, dict[str
     """
     if not cfg.checkpoint:
         raise ValueError("checkpoint=<checkpoint directory> is required")
-    # Before anything is jitted / the backend starts, as in run.py.
-    if cfg.jax.compilation_cache_dir:
-        enable_compilation_cache(cfg.jax.compilation_cache_dir, cfg.jax.compilation_cache_max_gb)
-    if cfg.jax.get("deterministic_ops", False):
-        enable_deterministic_ops()
-    os.environ.setdefault("MLFLOW_DISABLE_AGENT_HINT", "1")
+    configure_process(cfg)
 
     checkpoint = Path(cfg.checkpoint)
     model = load_model(checkpoint)
@@ -73,16 +63,9 @@ def run_evaluation(cfg: DictConfig, log_file: Path | None) -> dict[str, dict[str
         run_name=f"evaluate {model.name}",
     ) as run:
         mlflow.set_tags({"stage": "evaluate", "checkpoint_sha256": digest})
-        mlflow.log_params({f"data_version.{k}": v for k, v in data_provenance().items()})
-        mlflow.log_artifact("dvc.lock")
-        mlflow.log_artifact(cfg.normalization.stats_path)
+        log_data_version(cfg.normalization.stats_path)
 
-        root = zarr.open_group(store=cfg.data.zarr_store, mode="r")
-        stats = NormalizationStats.load(Path(cfg.normalization.stats_path))
-        stats.check_compatible(
-            root.attrs["channel_names"], cfg.data.train_datasets, cfg.data.test_dataset
-        )
-        log.info("test_dataset %s: configured, deliberately not opened", cfg.data.test_dataset)
+        root, stats = open_data(cfg)
         scale = np.asarray(stats.effective_std(cfg.normalization.std_mode))
 
         model_id = trained_model_id(run.info.experiment_id, digest)

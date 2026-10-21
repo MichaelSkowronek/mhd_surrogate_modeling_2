@@ -25,8 +25,7 @@ from mhd_surrogate.evaluation.protocol import check_readable, check_window, spli
 from mhd_surrogate.evaluation.rollout import RolloutStability, rollout_stability
 from mhd_surrogate.models.registry import load_model
 from mhd_surrogate.training.export import write_metrics
-from mhd_surrogate.utils.jax_cache import enable_compilation_cache
-from mhd_surrogate.utils.jax_determinism import enable_deterministic_ops
+from mhd_surrogate.training.startup import configure_process
 
 log = logging.getLogger(__name__)
 
@@ -46,11 +45,7 @@ def run_gate(cfg: DictConfig) -> GateResult:
     (see `evaluation/gate.py`) and write `<cfg.export.dir>/gate.json`."""
     if not cfg.checkpoint or not cfg.export.dir:
         raise ValueError("checkpoint=<checkpoint directory> and export.dir=<dir> are required")
-    # Before anything is jitted / the backend starts, as in run.py.
-    if cfg.jax.compilation_cache_dir:
-        enable_compilation_cache(cfg.jax.compilation_cache_dir, cfg.jax.compilation_cache_max_gb)
-    if cfg.jax.get("deterministic_ops", False):
-        enable_deterministic_ops()
+    configure_process(cfg)
 
     export = Path(cfg.export.dir)
     val_scores = json.loads((export / "metrics.json").read_text())["val"]
