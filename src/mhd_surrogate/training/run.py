@@ -25,8 +25,9 @@ from mhd_surrogate.data.grid import grid_spacing
 from mhd_surrogate.evaluation.selection import selection_scores
 from mhd_surrogate.models.base import FitHooks, fit_model
 from mhd_surrogate.models.registry import build_model
-from mhd_surrogate.training.export import checkpoint_digest, write_metrics
+from mhd_surrogate.training.export import write_metrics
 from mhd_surrogate.training.mlflow_model import log_surrogate
+from mhd_surrogate.training.mlflow_utils import log_checkpoint_once
 from mhd_surrogate.training.startup import configure_process, log_data_version, open_data
 from mhd_surrogate.training.tracking import resumed_run_id, save_run_record, tracked_run
 
@@ -116,19 +117,20 @@ def run_training(
         checkpoint = (export_dir or output_dir) / "model"
         model.save(checkpoint)
         frame_shape = tuple(next(iter(train.values())).shape[1:])
-        model_info = log_surrogate(model, checkpoint, frame_shape, params=resolved["model"])
-        # The checkpoint's content hash ties a later evaluation of it (the DVC
-        # `evaluate` stage) back to this run's logged model.
-        digest = checkpoint_digest(checkpoint)
-        mlflow.set_tag("checkpoint_sha256", digest)
-        mlflow.set_logged_model_tags(model_info.model_id, {"checkpoint_sha256": digest})
-        log.info("checkpoint saved to %s, logged as model %s", checkpoint, model_info.model_id)
+        # Tagged with the checkpoint's content hash, which ties a later
+        # evaluation of it (the DVC `evaluate` stage) back to the logged
+        # model; a checkpoint already logged in the experiment isn't logged again.
+        model_id = log_checkpoint_once(
+            checkpoint,
+            lambda: log_surrogate(model, checkpoint, frame_shape, params=resolved["model"]),
+        )
+        log.info("checkpoint saved to %s, logged as model %s", checkpoint, model_id)
 
         scores: dict[str, dict[str, float]] = {}
         if cfg.evaluation.final:
             # By name: see training/scoring.py for why.
             scoring = importlib.import_module("mhd_surrogate.training.scoring")
-            scores = scoring.score_and_log(model, root, cfg, scale, model_info.model_id)
+            scores = scoring.score_and_log(model, root, cfg, scale, model_id)
         if export_dir is not None and scores:
             write_metrics(export_dir / "metrics.json", scores)
         if export_dir is not None:

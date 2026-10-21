@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
-from mlflow.entities import Metric
+from mlflow.entities import LoggedModelOutput, Metric
+from mlflow.models.model import ModelInfo
 
 import mlflow
+from mhd_surrogate.training.export import checkpoint_digest
+
+log = logging.getLogger(__name__)
 
 # MLflow's limit on metrics per log_batch call.
 MAX_BATCH = 1000
@@ -58,3 +64,40 @@ def log_metric_series(
     client = mlflow.MlflowClient()
     for i in range(0, len(metrics), MAX_BATCH):
         client.log_batch(run_id, metrics=metrics[i : i + MAX_BATCH])
+
+
+def logged_model_with_digest(experiment_id: str, digest: str) -> str | None:
+    """The newest logged model in the experiment whose checkpoint has
+    content hash `digest` (its `checkpoint_sha256` tag), if any."""
+    models = mlflow.search_logged_models(
+        experiment_ids=[experiment_id],
+        filter_string=f"tags.checkpoint_sha256 = '{digest}'",
+        order_by=[{"field_name": "creation_time", "ascending": False}],
+        max_results=1,
+        output_format="list",
+    )
+    return models[0].model_id if models else None
+
+
+def log_checkpoint_once(checkpoint: Path, log_model: Callable[[], ModelInfo]) -> str:
+    """The id of the logged model holding `checkpoint`, logged with
+    `log_model()` in the active run -- unless the run's experiment already
+    has a logged model of identical content, which the run then reuses
+    instead of storing another copy (a DVC re-run reproduces the canonical
+    checkpoint bit for bit, ~900 MB each time).
+
+    The run is tagged with the checkpoint's content hash (`checkpoint_sha256`,
+    a new logged model too); a reusing run is tagged `reused_logged_model`
+    and gets the model as one of its outputs, as if it had logged it."""
+    digest = checkpoint_digest(checkpoint)
+    mlflow.set_tag("checkpoint_sha256", digest)
+    run = mlflow.active_run()
+    existing = logged_model_with_digest(run.info.experiment_id, digest)
+    if existing is not None:
+        mlflow.set_tag("reused_logged_model", existing)
+        mlflow.MlflowClient().log_outputs(run.info.run_id, [LoggedModelOutput(existing, 0)])
+        log.info("checkpoint identical to logged model %s: reused, not logged again", existing)
+        return existing
+    model_id = log_model().model_id
+    mlflow.set_logged_model_tags(model_id, {"checkpoint_sha256": digest})
+    return model_id

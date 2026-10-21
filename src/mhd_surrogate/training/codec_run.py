@@ -23,9 +23,8 @@ from mhd_surrogate.data.grid import grid_spacing
 from mhd_surrogate.evaluation.evaluate import train_eval_datasets
 from mhd_surrogate.evaluation.reconstruction import reconstruction_scores
 from mhd_surrogate.models.codec import build_codec
-from mhd_surrogate.training.export import checkpoint_digest
 from mhd_surrogate.training.mlflow_codec import log_codec
-from mhd_surrogate.training.mlflow_utils import finite_metrics
+from mhd_surrogate.training.mlflow_utils import finite_metrics, log_checkpoint_once
 from mhd_surrogate.training.startup import configure_process, log_data_version, open_data
 from mhd_surrogate.training.tracking import tracked_run
 
@@ -90,11 +89,10 @@ def run_codec_training(
         checkpoint = output_dir / "codec"
         codec.save(checkpoint)
         frame_shape = tuple(next(iter(train.values())).shape[1:])
-        model_info = log_codec(codec, checkpoint, frame_shape, params=resolved["codec"])
-        digest = checkpoint_digest(checkpoint)
-        mlflow.set_tag("checkpoint_sha256", digest)
-        mlflow.set_logged_model_tags(model_info.model_id, {"checkpoint_sha256": digest})
-        log.info("checkpoint saved to %s, logged as model %s", checkpoint, model_info.model_id)
+        model_id = log_checkpoint_once(
+            checkpoint, lambda: log_codec(codec, checkpoint, frame_shape, params=resolved["codec"])
+        )
+        log.info("checkpoint saved to %s, logged as model %s", checkpoint, model_id)
 
         scale = np.asarray(stats.effective_std(cfg.normalization.std_mode))
         targets = [(cfg.data.val_dataset, "val")] + [
@@ -104,7 +102,7 @@ def run_codec_training(
             )
         ]
         return {
-            prefix: _score_one(codec, root[name], prefix, scale, model_info.model_id)
+            prefix: _score_one(codec, root[name], prefix, scale, model_id)
             for name, prefix in targets
         }
 

@@ -459,7 +459,10 @@ is a `train` dep; the rest (diagnostics, ensemble scores, the full
 `train` stage doesn't. Both stages still log to MLflow like any run: the
 `train` run tags itself and its logged model with the checkpoint's content
 hash (`checkpoint_sha256`), and the `evaluate` run finds that logged model by
-it and links its scores to it.
+it and links its scores to it. A re-run that reproduces the checkpoint bit
+for bit doesn't log it again: it reuses the logged model of identical
+content (see "Logged models" below), so re-running the pipeline doesn't
+store another ~900 MB copy each time.
 
 **A retrain has to pass the gate.** A retrain is a new draw of its recipe:
 a deterministic retrain of the noise-0.1 U-Net (2026-10-08) came out
@@ -1696,7 +1699,15 @@ forecast = model.predict(context, params={"n_steps": 837})  # last `window` fram
 ```
 
 and `mlflow models serve` can serve it, which is what the serving step will
-build on. Models are not registered in the Model Registry automatically:
+build on. A checkpoint is logged once per experiment: a run whose checkpoint
+is identical to an already logged model's (same `checkpoint_sha256`, which
+every run tags itself with) reuses that model instead of storing another
+copy (`training/mlflow_utils.py`'s `log_checkpoint_once`; codecs too) -- it's
+tagged `reused_logged_model`, lists the model among its outputs and links
+its scores to it. That's every re-run of the deterministic DVC `train`
+stage, which had stored another ~900 MB copy of Hankel DMD's checkpoint each
+time (seven identical copies of the current one by 2026-10-21). The model belongs to the run that logged it, so pruning
+that run's checkpoint also takes it from any run reusing it. Models are not registered in the Model Registry automatically:
 registering every experiment would bury the meaningful versions, so only the
 shortlist and the test-set finalists (see "How validation and test are used")
 get registered, deliberately. No input example is logged: one real frame is

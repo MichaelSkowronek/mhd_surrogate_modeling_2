@@ -23,7 +23,11 @@ from mhd_surrogate.data.grid import grid_spacing
 from mhd_surrogate.evaluation.evaluate import evaluate, train_eval_datasets
 from mhd_surrogate.models.registry import load_model
 from mhd_surrogate.training.export import checkpoint_digest, write_metrics
-from mhd_surrogate.training.mlflow_utils import finite_metrics, log_metric_series
+from mhd_surrogate.training.mlflow_utils import (
+    finite_metrics,
+    log_metric_series,
+    logged_model_with_digest,
+)
 from mhd_surrogate.training.startup import configure_process, log_data_version, open_data
 from mhd_surrogate.training.tracking import tracked_run
 
@@ -68,7 +72,7 @@ def run_evaluation(cfg: DictConfig, log_file: Path | None) -> dict[str, dict[str
         root, stats = open_data(cfg)
         scale = np.asarray(stats.effective_std(cfg.normalization.std_mode))
 
-        model_id = trained_model_id(run.info.experiment_id, digest)
+        model_id = logged_model_with_digest(run.info.experiment_id, digest)
         if model_id is None:
             log.warning("no logged model with checkpoint_sha256 %s: scores not linked", digest)
         else:
@@ -78,19 +82,6 @@ def run_evaluation(cfg: DictConfig, log_file: Path | None) -> dict[str, dict[str
             write_metrics(Path(cfg.export.dir) / "metrics.json", scores)
             log.info("wrote %s", Path(cfg.export.dir) / "metrics.json")
         return scores
-
-
-def trained_model_id(experiment_id: str, digest: str) -> str | None:
-    """The newest logged model in the experiment whose checkpoint has
-    content hash `digest`, if any."""
-    models = mlflow.search_logged_models(
-        experiment_ids=[experiment_id],
-        filter_string=f"tags.checkpoint_sha256 = '{digest}'",
-        order_by=[{"field_name": "creation_time", "ascending": False}],
-        max_results=1,
-        output_format="list",
-    )
-    return models[0].model_id if models else None
 
 
 def score_and_log(
