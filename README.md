@@ -1552,6 +1552,15 @@ part of the cache key, so the two kinds of compile never share an entry.
 Bit-identical results across *different* GPU models are out of reach
 either way.
 
+XLA's own per-fusion autotuning cache, which JAX keeps in the same
+directory, is *not* keyed on the flag, so deterministic runs turn it off
+(the compilation cache stays on). Found the hard way: after a smoke run of
+the POD codec (an autotuned compile of the same Gram matrix matmul) the
+`train` stage's Hankel DMD came out ~1e-6 off the canonical checkpoint --
+its deterministic compile had reused the kernel the autotuned one stored
+there. With the autotuning cache off it reproduces the checkpoint bit for
+bit, whatever an exploration run left in `.jax_cache/`.
+
 So the cache stays a performance knob: deleting `.jax_cache/` is always
 safe, and with deterministic ops on, a cold and a warm cache give the same
 outputs. JAX reads the cache config on its first compile and XLA its flags
