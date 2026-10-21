@@ -204,6 +204,26 @@ def test_a_non_scoring_run_exports_only_the_checkpoint_tagged_with_its_digest(wo
     assert model.tags["checkpoint_sha256"] == digest
 
 
+def test_a_rerun_with_an_identical_checkpoint_reuses_its_logged_model(workspace):
+    """As the DVC `train` stage's re-runs do: one copy of the checkpoint in
+    MLflow, linked to both runs (and the second run's scores linked to it)."""
+    cfg = config(workspace, "model=persistence")
+    run_training(cfg, workspace / "first", None, "persistence")
+    run_training(cfg, workspace / "second", None, "persistence")
+
+    client = MlflowClient(f"sqlite:///{workspace / 'mlruns.db'}")
+    experiment = mlflow.get_experiment_by_name("test").experiment_id
+    (model,) = client.search_logged_models([experiment])
+    first, second = sorted(client.search_runs([experiment]), key=lambda r: r.info.start_time)
+    assert model.source_run_id == first.info.run_id
+    assert second.data.tags["reused_logged_model"] == model.model_id
+    linked = {m.key for m in client.get_logged_model(model.model_id).metrics}
+    assert "val.skill_horizon" in linked
+    assert any(
+        m.run_id == second.info.run_id for m in client.get_logged_model(model.model_id).metrics
+    )
+
+
 def test_evaluating_a_stored_checkpoint_scores_it_like_the_end_of_a_run(workspace):
     export = workspace / "export"
     trained = config(workspace, "model=persistence", f"export.dir={export}")
