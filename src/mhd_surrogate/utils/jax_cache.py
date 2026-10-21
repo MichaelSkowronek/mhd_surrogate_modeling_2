@@ -12,7 +12,8 @@ A cache hit reuses the executable an earlier cold compile produced, so it's
 a performance knob, not a DVC dependency. That doesn't make cold compiles
 agree with each other: on the GPU they autotune kernels that round
 differently, so results that must reproduce also need deterministic ops
-(`utils/jax_determinism.py`).
+(`utils/jax_determinism.py`), which also turn the per-fusion autotuning
+results off: they aren't keyed on determinism.
 
 JAX initializes the cache on its first compile and ignores later changes to
 its config, so call `enable_compilation_cache` before anything is jitted.

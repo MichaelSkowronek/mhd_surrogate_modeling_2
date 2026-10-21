@@ -2,17 +2,29 @@ import os
 import subprocess
 import sys
 
+import jax
 import pytest
 
 from mhd_surrogate.utils import jax_determinism
-from mhd_surrogate.utils.jax_determinism import FLAG, enable_deterministic_ops
+from mhd_surrogate.utils.jax_determinism import FLAG, XLA_CACHES_OFF, enable_deterministic_ops
 
 
 @pytest.fixture
 def fresh_backend(monkeypatch):
     """Pretend JAX hasn't initialized its backend (in this process, earlier
-    tests have)."""
+    tests have); JAX's XLA-caches setting is restored afterwards."""
     monkeypatch.setattr(jax_determinism.xla_bridge, "backends_are_initialized", lambda: False)
+    xla_caches = jax.config.jax_persistent_cache_enable_xla_caches
+    yield
+    jax.config.update("jax_persistent_cache_enable_xla_caches", xla_caches)
+
+
+def test_xla_caches_beside_the_compilation_cache_are_turned_off(fresh_backend):
+    """XLA's per-fusion autotuning cache isn't keyed on the flag: a
+    deterministic compile would reuse an autotuned compile's kernels."""
+    enable_deterministic_ops()
+
+    assert jax.config.jax_persistent_cache_enable_xla_caches == XLA_CACHES_OFF
 
 
 def test_the_flag_is_added_to_xla_flags_keeping_the_others(monkeypatch, fresh_backend):
