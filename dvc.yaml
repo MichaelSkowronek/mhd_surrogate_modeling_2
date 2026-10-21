@@ -75,6 +75,7 @@ stages:
       - src/mhd_surrogate/training/mlflow_model.py
       - src/mhd_surrogate/training/mlflow_utils.py
       - src/mhd_surrogate/training/run.py
+      - src/mhd_surrogate/training/startup.py
       - src/mhd_surrogate/training/tracking.py
       - src/mhd_surrogate/data/__init__.py
       - src/mhd_surrogate/data/grid.py
@@ -135,6 +136,7 @@ stages:
       - src/mhd_surrogate/training/export.py
       - src/mhd_surrogate/training/mlflow_utils.py
       - src/mhd_surrogate/training/scoring.py
+      - src/mhd_surrogate/training/startup.py
       - src/mhd_surrogate/training/tracking.py
       - src/mhd_surrogate/data/__init__.py
       - src/mhd_surrogate/data/grid.py
@@ -204,11 +206,15 @@ stages:
       - src/mhd_surrogate/training/__init__.py
       - src/mhd_surrogate/training/export.py
       - src/mhd_surrogate/training/gating.py
+      - src/mhd_surrogate/training/startup.py
       - src/mhd_surrogate/data/__init__.py
       - src/mhd_surrogate/data/grid.py
+      - src/mhd_surrogate/data/normalization.py
+      - src/mhd_surrogate/data/versioning.py
       - src/mhd_surrogate/analysis/__init__.py
       - src/mhd_surrogate/analysis/fields.py
       - src/mhd_surrogate/utils/__init__.py
+      - src/mhd_surrogate/utils/parallel.py
       - src/mhd_surrogate/utils/jax_cache.py
       - src/mhd_surrogate/utils/jax_determinism.py
       - src/mhd_surrogate/utils/hydra_resolvers.py

@@ -170,8 +170,12 @@ stages:
       size: 2199
     - path: src/mhd_surrogate/training/run.py
       hash: md5
-      md5: 781338c1cfc2d8cfe77ae51f6e581fe8
-      size: 9301
+      md5: 53c54aebf579a8c014e5778257e7244d
+      size: 7605
+    - path: src/mhd_surrogate/training/startup.py
+      hash: md5
+      md5: 6294a36299cccb2b3df42388eea29701
+      size: 2708
     - path: src/mhd_surrogate/training/tracking.py
       hash: md5
       md5: f7ac0ed45b5a5cb13688f36dcdbd59d1
@@ -330,8 +334,12 @@ stages:
       size: 2199
     - path: src/mhd_surrogate/training/scoring.py
       hash: md5
-      md5: 7b1593f95e40d988046de1c18389e52a
-      size: 8043
+      md5: e3482b46b53f739eeaa70df01958e209
+      size: 7063
+    - path: src/mhd_surrogate/training/startup.py
+      hash: md5
+      md5: 6294a36299cccb2b3df42388eea29701
+      size: 2708
     - path: src/mhd_surrogate/training/tracking.py
       hash: md5
       md5: f7ac0ed45b5a5cb13688f36dcdbd59d1
@@ -435,6 +443,14 @@ stages:
       hash: md5
       md5: 838dd3ea41d2816c0b63e6b6187b0729
       size: 503
+    - path: src/mhd_surrogate/data/normalization.py
+      hash: md5
+      md5: ec64ef70263faa54e3fbd7d1d5b620f2
+      size: 9420
+    - path: src/mhd_surrogate/data/versioning.py
+      hash: md5
+      md5: ad83b714550bb0aa49d430d32ee0fff6
+      size: 1480
     - path: src/mhd_surrogate/evaluation/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -493,8 +509,12 @@ stages:
       size: 1929
     - path: src/mhd_surrogate/training/gating.py
       hash: md5
-      md5: 7f4ff51ea65c0afa1b57d01f7de303e8
-      size: 3401
+      md5: d9cd98a8f1df89fec45dc171b3745481
+      size: 3062
+    - path: src/mhd_surrogate/training/startup.py
+      hash: md5
+      md5: 6294a36299cccb2b3df42388eea29701
+      size: 2708
     - path: src/mhd_surrogate/utils/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -511,6 +531,10 @@ stages:
       hash: md5
       md5: bc4518fb1a024b36fa0f7c48a14de4bc
       size: 2182
+    - path: src/mhd_surrogate/utils/parallel.py
+      hash: md5
+      md5: 12780c8a2ef5c2334e0873254eb1eac2
+      size: 8491
     params:
       configs/data/re16k.yaml:
         context_steps: 80

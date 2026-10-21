@@ -81,7 +81,7 @@ uv run pre-commit run --all-files
 src/mhd_surrogate/   importable package, split by pipeline stage
   data/              dataset, grid, normalization, versioning, conversion
   analysis/          fields, summary, spectral
-  training/          mlflow_utils, tracking, export, mlflow_model, run, scoring, gating, trainer, tuning
+  training/          mlflow_utils, tracking, startup, export, mlflow_model, run, scoring, gating, trainer, tuning
   evaluation/        protocol, metrics, quantities, stability, selection, rollout, gate, diagnostics, ensemble, evaluate
   models/            base (interface), baselines, snapshots, dmd, hankel_dmd, neural, unet, registry,
                      codec (codec interface + registry), pod_codec

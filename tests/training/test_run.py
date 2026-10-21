@@ -13,8 +13,7 @@ from hydra import compose, initialize_config_dir
 import mhd_surrogate.utils.hydra_resolvers  # noqa: F401
 import mlflow
 from mhd_surrogate.data.normalization import compute_normalization_stats
-from mhd_surrogate.training import run as run_module
-from mhd_surrogate.training import scoring as scoring_module
+from mhd_surrogate.training import startup
 from mhd_surrogate.training.export import checkpoint_digest
 from mhd_surrogate.training.run import run_training
 from mhd_surrogate.training.scoring import run_evaluation
@@ -48,8 +47,7 @@ def workspace(tmp_path, monkeypatch):
     (tmp_path / "configs" / "analysis").mkdir(parents=True)
     shutil.copy(ROOT / "configs" / "analysis" / "grid.yaml", tmp_path / "configs" / "analysis")
     (tmp_path / "dvc.lock").write_text("schema: '2.0'\n")
-    monkeypatch.setattr(run_module, "data_provenance", lambda: {"raw": "stub"})
-    monkeypatch.setattr(scoring_module, "data_provenance", lambda: {"raw": "stub"})
+    monkeypatch.setattr(startup, "data_provenance", lambda: {"raw": "stub"})
     return tmp_path
 
 
@@ -112,7 +110,7 @@ def test_a_closed_form_model_is_fitted_scored_and_tracked(workspace):
 
 def test_deterministic_ops_are_enabled_before_the_run_when_configured(workspace, monkeypatch):
     calls = []
-    monkeypatch.setattr(run_module, "enable_deterministic_ops", lambda: calls.append(1))
+    monkeypatch.setattr(startup, "enable_deterministic_ops", lambda: calls.append(1))
 
     run_training(config(workspace, "model=persistence"), workspace / "a", None, "p")
     assert calls == []
