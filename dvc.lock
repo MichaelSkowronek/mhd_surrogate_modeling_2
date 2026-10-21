@@ -293,9 +293,9 @@ stages:
       size: 1480
     - path: src/mhd_surrogate/evaluation
       hash: md5
-      md5: 0a3fff5a98c1ec06c19ead567a708c81.dir
-      size: 46174
-      nfiles: 11
+      md5: 64d3bbeed4f904bd34d5cdaf1a6ba7e5.dir
+      size: 48500
+      nfiles: 12
     - path: src/mhd_surrogate/models/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e

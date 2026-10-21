@@ -81,8 +81,10 @@ uv run pre-commit run --all-files
 src/mhd_surrogate/   importable package, split by pipeline stage
   data/              dataset, grid, normalization, versioning, conversion
   analysis/          fields, summary, spectral
-  training/          mlflow_utils, tracking, startup, export, mlflow_model, run, scoring, gating, trainer, tuning
-  evaluation/        protocol, metrics, quantities, stability, selection, rollout, gate, diagnostics, ensemble, evaluate
+  training/          mlflow_utils, tracking, startup, export, mlflow_model, run, scoring, gating, trainer, tuning,
+                     mlflow_codec, codec_run
+  evaluation/        protocol, metrics, quantities, stability, selection, rollout, gate, diagnostics, ensemble, evaluate,
+                     reconstruction
   models/            base (interface), baselines, snapshots, dmd, hankel_dmd, neural, unet, registry,
                      codec (codec interface + registry), pod_codec
   utils/             logging_config, parallel, jax_cache, jax_determinism, hydra_resolvers
@@ -90,12 +92,12 @@ scripts/             CLI entry points, same split (plus viz/)
   data/              explore_data, convert_to_zarr, compute_stats
   analysis/          check_*.py, run_all_checks, benchmark_backends
   viz/               make_video, make_all_videos, make_forecast_video
-  training/          train, tune
+  training/          train, tune, train_codec
   evaluation/        check_rollout_stability, evaluate_checkpoint, gate_checkpoint
 tests/               mirrors src/ and scripts/ (data/, analysis/, training/, evaluation/, models/, utils/, viz/)
 dvc.yaml, dvc.lock  data pipeline (raw -> zarr -> stats) and its pinned hashes
 data/raw.dvc         DVC pointer to the raw .npy files (.dvc/ holds the remote config)
-configs/             Hydra tree: config.yaml (tune.yaml for the search) + data/, dataset/, normalization/, model/, evaluation/, mlflow/, search/ groups
+configs/             Hydra tree: config.yaml (tune.yaml for the search, train_codec.yaml for codecs) + data/, dataset/, normalization/, model/, codec/, evaluation/, mlflow/, search/ groups
   analysis/          plain-YAML configs (split.yaml, grid.yaml)
 ```
 
@@ -2821,6 +2823,11 @@ pipeline: a retrain that comes out like the deterministic one now fails
 
 ## Codecs (latent spaces)
 
+```bash
+uv run --extra gpu scripts/training/train_codec.py                     # codec=pod, rank 750
+uv run --extra gpu scripts/training/train_codec.py -m codec.rank=250,1500
+```
+
 Latent generative models -- latent flow matching or diffusion, say -- forecast
 in a compressed latent space instead of on the 292k-entry grid. The map into
 that space and back is a **codec** (`src/mhd_surrogate/models/codec.py`): an
@@ -2843,10 +2850,22 @@ that space and back is a **codec** (`src/mhd_surrogate/models/codec.py`): an
   codecs (latent size, architecture, a VAE's KL weight) is still choosing a
   forecaster, by the `selection_score` of a latent model trained on each:
   reconstruction RMSE always favors the larger latent space and says nothing
-  about how forecastable that space is. No guardrail is put on the
-  reconstruction's own physics scores: a latent model is held to the usual
-  guardrails anyway, which a codec that loses the small scales fails through
-  its latent models.
+  about how forecastable that space is. The reconstruction's physics scores
+  are reported, not gated: what the reconstruction loses, the latent model's
+  forecasts lose too, and a latent model is held to the usual guardrails
+  anyway, so a codec that loses too much fails through its latent models.
+- **Its own entry point and experiment.** `scripts/training/train_codec.py`
+  (root config `configs/train_codec.yaml`: the training config with a
+  `codec/` group in place of the model) fits the codec on the train datasets,
+  logs it as an MLflow model (`training/mlflow_codec.py`; its pyfunc
+  `predict` is the reconstruction) and scores its reconstruction
+  (`evaluation/reconstruction.py`) on validation and on
+  `evaluation.train_datasets`: `reconstruction_rmse` (in training stds, as a
+  forecast's RMSE) and the physics scores a forecast gets. A latent model
+  references the codec by its logged model's id, `models:/<model id>`. It
+  starts like the other entry points (`training/startup.py`: JAX config,
+  data version, checked stats), and logs to its own experiment,
+  `mhd-codecs`, so the forecasting models' runs table holds one kind of run.
 - **Own registry and checkpoint format.** Codecs are registered by import
   path in `codec.py`'s `CODECS` (imported only when built or loaded, as models
   are), and a codec checkpoint has `codec.json` instead of `model.json`, so it

@@ -1,12 +1,16 @@
 import subprocess
 import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
+import yaml
 
 from mhd_surrogate.models.codec import CODECS, build_codec, codec_class, load_codec
 from mhd_surrogate.models.pod_codec import PODCodec
 from mhd_surrogate.models.registry import load_model
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_build_codec_picks_the_class_by_name_and_passes_the_rest():
@@ -24,6 +28,14 @@ def test_build_codec_rejects_an_unknown_name():
 @pytest.mark.parametrize("name", sorted(CODECS))
 def test_each_entry_resolves_to_the_class_of_that_name(name):
     assert codec_class(name).name == name
+
+
+def test_every_codec_config_is_registered():
+    names = {
+        yaml.safe_load(p.read_text())["name"] for p in (ROOT / "configs" / "codec").glob("*.yaml")
+    }
+
+    assert names and names <= set(CODECS)
 
 
 def test_a_codec_checkpoint_loads_as_a_codec_only(tmp_path):
