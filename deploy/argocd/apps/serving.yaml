@@ -1,0 +1,21 @@
+# The forecast service (deploy/k8s/overlays/kind): synced from main, so a
+# merged change of its pins (image tag, model version) is a rollout, and
+# drift in the cluster is reverted (selfHeal).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: serving
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/MichaelSkowronek/mhd_surrogate_modeling_2.git
+    targetRevision: main
+    path: deploy/k8s/overlays/kind
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: mhd-serving
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

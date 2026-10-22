@@ -24,3 +24,16 @@ repos:
       - id: ruff-check
         args: ["--fix"]
       - id: ruff-format
+
+  # The serving image's tag in the overlay Argo CD deploys: the content hash
+  # of the image's inputs as they are staged (scripts/serving/image_tag.py).
+  # Rewrites the pin when an input changed, failing the commit once, as a
+  # fixer does: stage the pin with the change.
+  - repo: local
+    hooks:
+      - id: serving-image-pin
+        name: pin the serving image
+        entry: python3 scripts/serving/image_tag.py --pin deploy/k8s/overlays/kind/kustomization.yaml
+        language: system
+        pass_filenames: false
+        files: ^(Dockerfile|\.dockerignore|pyproject\.toml|uv\.lock|README\.md|src/|scripts/|configs/|deploy/k8s/overlays/kind/kustomization\.yaml)

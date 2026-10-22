@@ -1,0 +1,21 @@
+# The local Kubernetes cluster: kind, one node. Create it with
+# deploy/kind/create-cluster.sh, which first makes the Docker network it runs
+# on (README, "Kubernetes").
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: mhd
+networking:
+  ipFamily: ipv4
+nodes:
+  - role: control-plane
+    # kind v0.33.0's node image for Kubernetes 1.37.0, by digest.
+    image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+    extraPortMappings:
+      # The forecast service's NodePort (deploy/k8s/overlays/kind).
+      - containerPort: 30080
+        hostPort: 8080
+        listenAddress: 127.0.0.1
+      # Argo CD's UI and API (deploy/argocd/install).
+      - containerPort: 30081
+        hostPort: 8081
+        listenAddress: 127.0.0.1

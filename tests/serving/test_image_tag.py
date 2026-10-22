@@ -4,9 +4,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from image_tag import BUILD, INPUTS, image_tag, inputs_listing
+from image_tag import BUILD, INPUTS, REPOSITORY, image_tag, inputs_listing, pin, pinned_tag
 
 ROOT = Path(__file__).resolve().parents[2]
+OVERLAY = ROOT / "deploy/k8s/overlays/kind/kustomization.yaml"
 
 # The Docker test image has neither git nor the Dockerfile.
 needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="no git")
@@ -129,3 +130,50 @@ COPY tests ./tests
 
     assert dockerfile_sources(text, "final") == {"lock.txt", "a.txt", "b"}
     assert dockerfile_sources(text, "other") == {"lock.txt", "a.txt", "b", "tests"}
+
+
+OVERLAY_TEXT = f"""images:
+  - name: other
+    newName: ghcr.io/x/other
+    newTag: "1111"
+  - name: mhd-surrogate-serve
+    newName: {REPOSITORY}
+    newTag: "0000000000000000"
+"""
+
+
+def test_pin_rewrites_the_serving_images_tag_once(tmp_path):
+    path = tmp_path / "kustomization.yaml"
+    path.write_text(OVERLAY_TEXT)
+
+    assert pin(path, "abcdef0123456789")
+    assert pinned_tag(path.read_text()) == "abcdef0123456789"
+    assert path.read_text() == OVERLAY_TEXT.replace("0000000000000000", "abcdef0123456789")
+    assert not pin(path, "abcdef0123456789")
+
+
+def test_a_pin_reads_unquoted_too_and_is_written_quoted(tmp_path):
+    path = tmp_path / "kustomization.yaml"
+    path.write_text(OVERLAY_TEXT.replace('"0000000000000000"', "1234"))
+
+    assert pinned_tag(path.read_text()) == "1234"
+    assert pin(path, "1234")
+    assert 'newTag: "1234"' in path.read_text()
+
+
+def test_an_overlay_without_the_serving_image_is_refused(tmp_path):
+    path = tmp_path / "kustomization.yaml"
+    path.write_text("resources: []\n")
+
+    with pytest.raises(ValueError, match="no newTag"):
+        pin(path, "abc")
+
+
+@needs_git
+@pytest.mark.skipif(not OVERLAY.exists(), reason="no deploy/ (the image has none)")
+def test_the_deployed_overlay_pins_the_image_built_from_this_commit():
+    assert pinned_tag(OVERLAY.read_text()) == image_tag(inputs_listing(ROOT)), (
+        "the kind overlay pins another image than this commit's; run "
+        "`python3 scripts/serving/image_tag.py --pin deploy/k8s/overlays/kind/kustomization.yaml`"
+        " (the pre-commit hook does) and commit the pin"
+    )

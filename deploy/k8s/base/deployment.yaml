@@ -1,0 +1,127 @@
+# One forecast at a time per pod (MHD_SERVE_MAX_INFLIGHT), so the service
+# scales by replicas. The model is fetched by an init container into an
+# emptyDir and loaded before the server listens; the startup probe covers
+# that, and an update starts the new pod before the old one goes
+# (maxUnavailable 0), so a model or image rollout has no gap.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: serve
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # The registry version the overlay pins (MHD_MODEL_URI, its
+        # serving-model ConfigMap), checked against its checkpoint_sha256
+        # (scripts/serving/fetch_model.py).
+        - name: fetch
+          image: mhd-surrogate-serve
+          command:
+            - python
+            - scripts/serving/fetch_model.py
+            - --tracking-uri=http://mlflow:5000
+            - --dest=/models
+          envFrom:
+            - configMapRef:
+                name: serving-model
+          env:
+            - name: HOME
+              value: /tmp
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1536Mi
+            limits:
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: model
+              mountPath: /models
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: serve
+          image: mhd-surrogate-serve
+          command:
+            - uvicorn
+            - --factory
+            - mhd_surrogate.serving.app:app_from_env
+            - --host=0.0.0.0
+            - --port=8000
+          env:
+            - name: MHD_SERVE_MODEL_DIR
+              value: /models
+            - name: MHD_SERVE_JAX_CACHE_DIR
+              value: /cache
+            - name: HOME
+              value: /tmp
+          ports:
+            - name: http
+              containerPort: 8000
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # No CPU limit: a forecast uses every core it gets, and a limit
+          # would only throttle it.
+          resources:
+            requests:
+              cpu: "2"
+              memory: 2Gi
+            limits:
+              memory: 3Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: model
+              mountPath: /models
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            - name: cache
+              mountPath: /cache
+      volumes:
+        - name: model
+          emptyDir:
+            sizeLimit: 2Gi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: cache
+          emptyDir:
+            sizeLimit: 1Gi

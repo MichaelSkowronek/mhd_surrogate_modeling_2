@@ -42,7 +42,8 @@ the U-Net is stable over 3000-step rollouts and passes every guardrail
 the candidate to replace Hankel DMD as the canonical model.
 Serving is being built: the canonical model is promoted from the experiment
 store to a model registry on the tracking server and served by a FastAPI
-service that streams forecasts (see "Serving").
+service that streams forecasts, on a local Kubernetes cluster that Argo CD
+deploys from `main` (see "Serving").
 
 ## Setup
 
@@ -64,6 +65,10 @@ uv run python -c "import jax; print(jax.devices())"   # [CudaDevice(id=0)]
 ```
 
 The default Docker image is CPU-only; see "GPU image" under Docker below.
+
+**Kubernetes.** `deploy/install-tools.sh` installs the pinned kind, kubectl,
+helm, kubeconform and argocd into `~/.local/bin`, each checked against its
+release's checksum (see "Kubernetes" under Serving).
 `train.py` sets `XLA_PYTHON_CLIENT_PREALLOCATE=false` (and `app-gpu` sets it in
 the container): JAX's default of preallocating 75% of GPU memory fails under
 WSL with the desktop on the same GPU, and retries with a burst of
@@ -98,8 +103,10 @@ scripts/             CLI entry points, same split (plus viz/)
   viz/               make_video, make_all_videos, make_forecast_video
   training/          train, tune, train_codec
   evaluation/        check_rollout_stability, evaluate_checkpoint, gate_checkpoint
-  serving/           promote, fetch_model, check_parity, image_tag
+  serving/           promote, fetch_model, check_parity, image_tag, smoke_model, smoke_check
 tests/               mirrors src/ and scripts/ (data/, analysis/, training/, evaluation/, models/, serving/, utils/, viz/)
+deploy/              Kubernetes: kind/ (the local cluster), k8s/ (Kustomize base + overlays),
+                     argocd/ (Argo CD install + Applications), install-tools.sh, validate.sh
 dvc.yaml, dvc.lock  data pipeline (raw -> zarr -> stats) and its pinned hashes
 data/raw.dvc         DVC pointer to the raw .npy files (.dvc/ holds the remote config)
 configs/             Hydra tree: config.yaml (tune.yaml for the search, train_codec.yaml for codecs) + data/, dataset/, normalization/, model/, codec/, evaluation/, mlflow/, search/ groups
@@ -3000,9 +3007,8 @@ streams a stable 3000-step rollout.
 
 The canonical model is served from the MLflow Model Registry on the tracking
 server (see "Tracking stack"), not from the experiment store it was trained
-in, by a FastAPI service that streams forecasts. This section grows with the
-serving step; so far it covers how a model gets into that registry, the
-service itself and how its image is published.
+in, by a FastAPI service that streams forecasts, deployed to a local
+Kubernetes cluster that Argo CD keeps in the state `main` describes.
 
 ### Promotion
 
@@ -3168,6 +3174,112 @@ labeled with the pull request's head commit (`MHD_GIT_COMMIT`, which
 on `main`. `README.md` is an input (`pyproject.toml` names it as the
 package's readme), so most pull requests make a new image. Pull requests
 from forks don't push: they get no token that can.
+
+### Kubernetes
+
+```bash
+deploy/install-tools.sh          # kind, kubectl, helm, kubeconform, argocd: pinned, checksummed
+docker compose up -d             # the tracking server the cluster fetches models from
+deploy/kind/create-cluster.sh    # the kind cluster `mhd`
+deploy/argocd/bootstrap.sh       # Argo CD; from then on the cluster follows main
+curl -s localhost:8080/v1/model  # the forecast service (Argo CD's UI: localhost:8081)
+```
+
+A local cluster (kind, Kubernetes 1.37, one node) runs the forecast service
+as a production cluster would, and Argo CD keeps it in the state `main`
+describes (see "Continuous deployment").
+
+**Manifests** (`deploy/k8s/`, Kustomize). `base/` is the service, free of
+anything environment-specific: namespace `mhd-serving`, Deployment,
+Service. The overlays pin what varies: `overlays/kind/` is the deployed one,
+`overlays/ci/` CI's smoke deploy, built on it. Kustomize rather than a Helm
+chart: one service in two environments is a few patches on plain YAML, and a
+chart would add a templating language with nothing to template; Helm earns
+its keep for third-party charts (monitoring, next). `deploy/validate.sh`
+checks every rendered manifest against the Kubernetes 1.37 API (kubeconform,
+strict: an unknown field is an error), in CI too.
+
+**The pod.**
+- An init container (`scripts/serving/fetch_model.py`) fetches the pinned
+  registry version into an emptyDir and checks its checkpoint hash; the
+  server container loads it from there, so only the init container talks to
+  the registry. A restarted container finds the model in place; a new pod
+  fetches it again.
+- A startup probe covers the model load (up to 5 minutes), readiness and
+  liveness probe `/healthz`, which answers during a forecast.
+- One forecast at a time per pod (see "Forecast API"), so it scales by
+  replicas. Requests 2 CPUs and 2 GiB, a 3 GiB memory limit, no CPU limit: a
+  forecast uses every core it gets, and a limit would only throttle it.
+- A rollout starts the new pod before the old one goes
+  (`maxUnavailable: 0`), so the service answers throughout, and a new pod
+  that can't fetch its model (the tracking stack is down) leaves the old one
+  serving.
+- Non-root, a read-only root filesystem (`/tmp` and the JAX cache are
+  emptyDirs), no capabilities, the runtime's default seccomp profile.
+
+**Two pins, both in git.** The kind overlay pins
+- the image tag: the content hash of the image's inputs (see "Image
+  publishing"), which the pre-commit hook `serving-image-pin` writes and a
+  test checks (`test_the_deployed_overlay_pins_the_image_built_from_this_commit`),
+  so a commit's overlay names the image CI built from that commit's code;
+- the model version, `models:/mhd-surrogate/1`, not the alias: pods that
+  resolve `@champion` as they start would serve two versions once the alias
+  moves, a deployment change nobody reviewed. Through `configMapGenerator`,
+  a new version is a ConfigMap with a new name, which changes the Deployment
+  and so rolls it.
+
+**Reaching the tracking server.** The registry runs on the host (the compose
+stack, port 5000). kind's node is a container on a Docker network whose
+gateway is the host, so `create-cluster.sh` creates that network itself,
+with a fixed subnet (172.30.0.0/16; kind uses an existing `kind` network as
+it is), and the overlay maps `mlflow` to the gateway with `hostAliases` --
+`mlflow:5000` being a host the server's `--allowed-hosts` already accepts.
+A selector-less Service with an EndpointSlice would be the textbook way, but
+Argo CD doesn't sync EndpointSlices (they're on its default exclusion
+list). With the tracking stack in the cluster, its Service would replace
+this.
+
+**No Ingress.** kind maps the NodePorts to localhost (8080: the service,
+8081: Argo CD). ingress-nginx, the usual local ingress controller, was
+retired in March 2026, and a Gateway API controller would route a single
+service on a single machine.
+
+Measured: the kind overlay rolls out in ~11 s (fetching the 865 MB model
+from the compose stack and loading it); the smoke check and the parity check
+(5e-6, as under compose) pass against `localhost:8080`.
+
+### Continuous deployment
+
+Argo CD (`deploy/argocd/`) runs in the cluster and pulls: it polls the
+repository (every 3 minutes) and makes the cluster match `main`. Pushing
+from GitHub Actions can't work here -- GitHub's runners can't reach a
+cluster on this machine -- and pulling is the better design anyway: no
+cluster credentials in CI, and a change made in the cluster by hand is
+reverted (`selfHeal`).
+
+- **App of apps.** `bootstrap.sh` installs Argo CD
+  (`deploy/argocd/install`: the upstream v3.5.6 manifest, plain HTTP on
+  localhost) and applies a single Application, `root`, whose manifests are
+  the other Applications (`deploy/argocd/apps/`): `serving`, the kind
+  overlay, and `argocd`, Argo CD's own installation, so upgrading it is a
+  pull request too (never pruned: a broken render mustn't delete Argo CD).
+  Two commands rebuild the cluster from git.
+- **A rollout is a merged pull request.** Code: changing an image input
+  re-pins the image tag (the pre-commit hook); on the pull request, CI
+  builds and pushes that image and deploys it with the CI overlay to a
+  throwaway kind cluster (`deploy-smoke` in the `docker` workflow: a
+  throwaway tracking server with a tiny model,
+  `scripts/serving/smoke_model.py`, then `scripts/serving/smoke_check.py`
+  through the NodePort), and only then can it merge; Argo CD then rolls out
+  that very image. Model: `promote.py` moves `champion`, and the deployment
+  follows when a pull request moves the overlay's pin. Rollback is
+  `git revert`.
+- **What runs is what git says.** Every deployed image and model version is
+  a line in `main`'s history, and Argo CD shows whether the cluster matches
+  it.
+- **Limits.** The cluster is this machine's, so deploys converge only while
+  it runs; pointed at a real cluster, the same Applications would change only
+  in how pods reach the tracking server.
 
 ## Docker
 

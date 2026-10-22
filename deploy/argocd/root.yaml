@@ -1,0 +1,22 @@
+# The root of the cluster's desired state ("app of apps"): an Application
+# whose manifests are the other Applications, deploy/argocd/apps/ on main.
+# deploy/argocd/bootstrap.sh applies it once; everything else follows from
+# git.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/MichaelSkowronek/mhd_surrogate_modeling_2.git
+    targetRevision: main
+    path: deploy/argocd/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
