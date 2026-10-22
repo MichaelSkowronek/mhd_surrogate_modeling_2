@@ -93,6 +93,10 @@ COPY --chown=app:app configs ./configs
 RUN mkdir -p data reports/figures reports/videos reports/summaries outputs models .jax_cache \
     && chown -R app:app data reports outputs models .jax_cache
 
+# Links the image, published to GitHub's container registry (the serving
+# image, README "Image publishing"), to this repository.
+LABEL org.opencontainers.image.source="https://github.com/MichaelSkowronek/mhd_surrogate_modeling_2"
+
 # The commit the image is built from, for MLflow's source-commit tag
 # (training/tracking.py) and the OCI revision label. Passed in by compose
 # (`GIT_COMMIT=$(git rev-parse HEAD) docker compose build`) and CI; empty

@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# packages: write -- the serving image is pushed to GitHub's container
+# registry (ghcr.io) from here.
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
@@ -13,7 +19,7 @@ jobs:
     # error (see the HOST_UID/HOST_GID note below for a case that hung it
     # rather than failing); this is a hard backstop against the job running
     # for GitHub's default 6h job limit instead.
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
 
@@ -54,6 +60,49 @@ jobs:
       - run: docker run --rm mhd-surrogate:test
 
       - run: docker compose config -q
+
+      # The serving image (README, "Image publishing"): tagged with the hash
+      # of its inputs (scripts/serving/image_tag.py) and pushed here, on the
+      # pull request, so the image a merge deploys exists before the merge
+      # and is the one built from exactly that code. A tag is never
+      # overwritten: if it exists, the inputs are unchanged and so is the
+      # image. Not on pull requests from forks, which can't push.
+      - id: serve
+        run: python3 scripts/serving/image_tag.py --github-output >> "$GITHUB_OUTPUT"
+
+      - id: publish
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        run: echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+      - if: steps.publish.outputs.enabled
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: published
+        if: steps.publish.outputs.enabled
+        run: |
+          if docker buildx imagetools inspect "${{ steps.serve.outputs.image }}" > /dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "${{ steps.serve.outputs.image }} exists: its inputs are unchanged"
+          fi
+
+      - if: steps.publish.outputs.enabled && !steps.published.outputs.exists
+        uses: docker/build-push-action@v7.4.0
+        with:
+          context: .
+          target: ${{ steps.serve.outputs.target }}
+          # The pull request's head commit: a real commit with the tree the
+          # squash merge gets (the merge ref github.sha is on a PR is not).
+          build-args: |
+            UV_EXTRAS=${{ steps.serve.outputs.uv_extras }}
+            GIT_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}
+          tags: ${{ steps.serve.outputs.image }}
+          push: true
+          cache-from: type=gha,scope=serve
+          cache-to: type=gha,mode=max,scope=serve
 
       # Smoke-test the tracking stack (postgres, seaweedfs, mlflow) end to
       # end: brings the services up and waits for their healthchecks.
