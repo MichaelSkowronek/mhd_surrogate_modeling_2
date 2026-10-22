@@ -93,7 +93,8 @@ def main() -> None:
     steps = min(args.steps, info.limits.max_steps)
     context = np.random.default_rng(0).normal(size=(info.window, *info.frame_shape))
     seeds = list(range(min(args.members, info.limits.max_members)))
-    forecast = client.forecast(context.astype(np.float32), steps, seeds=seeds)
+    # A probe: its random context stays out of the service's drift metrics.
+    forecast = client.forecast(context.astype(np.float32), steps, seeds=seeds, probe=True)
     members = len(seeds) if info.stochastic else 1
     if forecast.shape != (members, steps, *info.frame_shape):
         sys.exit(f"the forecast has shape {forecast.shape}")

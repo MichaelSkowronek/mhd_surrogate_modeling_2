@@ -299,3 +299,20 @@ def test_a_forecast_that_fails_mid_stream_is_counted():
     assert metric(client, "mhd_forecasts_failed_total") == 1
     assert metric(client, "mhd_forecast_duration_seconds_count") == 0
     assert metric(client, "mhd_forecasts_inflight") == 0
+
+
+def test_a_probe_is_service_traffic_but_stays_out_of_the_ml_metrics():
+    reference = Reference(channel_names=["u_x", "u_y"], mean=[0.0, 0.0], std=[1.0, 1.0])
+    client = serve(fetched=FETCHED.model_copy(update={"reference": reference}))
+
+    response = client.post(
+        "/v1/forecast",
+        params={"n_steps": 4},
+        content=encode(context()),
+        headers={"Content-Type": MEDIA_TYPE, "X-Probe": "1"},
+    )
+
+    assert response.status_code == 200
+    assert metric(client, "mhd_forecast_frames_total") == 4
+    assert metric(client, "mhd_forecast_energy_ratio_count") == 0
+    assert metric(client, "mhd_context_std_ratio_count", channel="u_x") is None

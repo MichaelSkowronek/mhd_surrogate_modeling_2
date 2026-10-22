@@ -17,7 +17,7 @@ from collections.abc import Iterator, Sequence
 import httpx
 import numpy as np
 
-from mhd_surrogate.serving.schemas import ModelInfo
+from mhd_surrogate.serving.schemas import PROBE_HEADER, ModelInfo
 from mhd_surrogate.serving.stream import MEDIA_TYPE, encode, read_arrays
 
 # A forecast block can take a while on a CPU; this bounds the wait for each
@@ -61,20 +61,25 @@ class ForecastClient:
         n_steps: int,
         seeds: Sequence[int] = (0,),
         block_steps: int | None = None,
+        probe: bool = False,
     ) -> Iterator[tuple[int, np.ndarray]]:
         """(member, block) pairs of the forecast of `n_steps` frames from
         `context` (float32 frames, raw units), member by member: a
         stochastic model's sample for each of `seeds`, a deterministic
-        model's single forecast."""
+        model's single forecast. A `probe` (a synthetic check) is kept out
+        of the service's ML metrics."""
         params: dict = {"n_steps": n_steps, "seeds": list(seeds)}
         if block_steps is not None:
             params["block_steps"] = block_steps
+        headers = {"Content-Type": MEDIA_TYPE}
+        if probe:
+            headers[PROBE_HEADER] = "1"
         with self.http.stream(
             "POST",
             "/v1/forecast",
             params=params,
             content=encode(np.asarray(context, dtype=np.float32)),
-            headers={"Content-Type": MEDIA_TYPE},
+            headers=headers,
         ) as response:
             if response.status_code != 200:
                 response.read()
@@ -98,10 +103,11 @@ class ForecastClient:
         n_steps: int,
         seeds: Sequence[int] = (0,),
         block_steps: int | None = None,
+        probe: bool = False,
     ) -> np.ndarray:
         """The whole forecast, shape (members, n_steps, C, Nx, Ny)."""
         members: dict[int, list[np.ndarray]] = {}
-        for member, block in self.forecast_blocks(context, n_steps, seeds, block_steps):
+        for member, block in self.forecast_blocks(context, n_steps, seeds, block_steps, probe):
             members.setdefault(member, []).append(block)
         return np.stack([np.concatenate(blocks) for _, blocks in sorted(members.items())])
 

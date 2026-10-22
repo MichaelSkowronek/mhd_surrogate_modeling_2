@@ -13,6 +13,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Seeds are 32-bit, like the seeds `rollout.block_seed` draws.
 MAX_SEED = 2**32 - 1
+# Marks a synthetic request (a smoke check), kept out of the ML metrics.
+PROBE_HEADER = "X-Probe"
 
 
 class ForecastParams(BaseModel):
