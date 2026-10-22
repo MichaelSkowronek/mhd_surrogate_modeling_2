@@ -13,6 +13,7 @@ from mhd_surrogate.serving.fetch import (
     load_fetched,
     resolve_version,
 )
+from mhd_surrogate.serving.metrics import Reference
 from mhd_surrogate.training.export import checkpoint_digest
 from mhd_surrogate.training.mlflow_model import log_surrogate
 
@@ -111,3 +112,12 @@ def test_a_model_without_a_content_hash_is_refused(stores, tmp_path):
 def test_resolve_version_wants_a_models_uri(stores):
     with pytest.raises(ValueError, match="not a models:/ URI"):
         resolve_version(mlflow.MlflowClient(tracking_uri=stores[1]), "runs:/abc/model")
+
+
+def test_the_reference_statistics_come_with_the_version(stores, promoted, tmp_path):
+    reference = {"channel_names": ["u_x", "u_y"], "mean": [1.0, 0.0], "std": [0.8, 0.4]}
+    promoted(reference=reference)
+
+    fetched = fetch("models:/surrogate@champion", stores[1], tmp_path / "served")
+
+    assert fetched.reference == Reference(**reference)

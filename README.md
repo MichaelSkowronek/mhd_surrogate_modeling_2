@@ -95,7 +95,7 @@ src/mhd_surrogate/   importable package, split by pipeline stage
                      reconstruction
   models/            base (interface), baselines, snapshots, dmd, hankel_dmd, neural, unet, registry,
                      codec (codec interface + registry), pod_codec, latent, latent_linear
-  serving/           promotion, fetch, stream, schemas, app, client
+  serving/           promotion, fetch, stream, schemas, app, client, metrics
   utils/             logging_config, parallel, jax_cache, jax_determinism, hydra_resolvers
 scripts/             CLI entry points, same split (plus viz/)
   data/              explore_data, convert_to_zarr, compute_stats
@@ -105,7 +105,8 @@ scripts/             CLI entry points, same split (plus viz/)
   evaluation/        check_rollout_stability, evaluate_checkpoint, gate_checkpoint
   serving/           promote, fetch_model, check_parity, image_tag, smoke_model, smoke_check
 tests/               mirrors src/ and scripts/ (data/, analysis/, training/, evaluation/, models/, serving/, utils/, viz/)
-deploy/              Kubernetes: kind/ (the local cluster), k8s/ (Kustomize base, overlays, smoke-check),
+deploy/              Kubernetes: kind/ (the local cluster), k8s/ (Kustomize base, overlays,
+                     smoke-check, monitoring),
                      argocd/ (Argo CD install + Applications), install-tools.sh, validate.sh
 dvc.yaml, dvc.lock  data pipeline (raw -> zarr -> stats) and its pinned hashes
 data/raw.dvc         DVC pointer to the raw .npy files (.dvc/ holds the remote config)
@@ -3008,7 +3009,8 @@ streams a stable 3000-step rollout.
 The canonical model is served from the MLflow Model Registry on the tracking
 server (see "Tracking stack"), not from the experiment store it was trained
 in, by a FastAPI service that streams forecasts, deployed to a local
-Kubernetes cluster that Argo CD keeps in the state `main` describes.
+Kubernetes cluster that Argo CD keeps in the state `main` describes, and
+monitored by Prometheus and Grafana.
 
 ### Promotion
 
@@ -3029,6 +3031,11 @@ gated checkpoint:
 - `dvc.lock`, `metrics.json` and `gate.json` are committed, at a commit on
   `origin/main` (the promotion run is tagged with it);
 - the gate passed.
+
+It also attaches the training data's normalization statistics to the
+version (`reference_stats`), the reference the server measures input drift
+against (see "Monitoring"), and pins the new version in the deployment (see
+"Continuous deployment").
 
 **Why a second store.** The experiment store (the local sqlite one) holds
 every sweep's runs and models; the registry holds only what was promoted,
@@ -3078,6 +3085,7 @@ A FastAPI service (`src/mhd_surrogate/serving/app.py`):
 | `POST /v1/forecast?n_steps=837&seeds=0&block_steps=100` | body: the context as `.npy` (`application/x-npy`), float32 frames in raw units; response: the forecast streamed as `.npy` records (`application/x-npy-stream`) |
 | `GET /v1/model` | what is served: registered name and version, logged model, checkpoint hash, `window`, frame shape, whether it's stochastic, training and image commits, the request limits |
 | `GET /healthz` | liveness |
+| `GET /metrics` | Prometheus metrics (see "Monitoring") |
 
 ```python
 from mhd_surrogate.serving.client import ForecastClient
@@ -3241,7 +3249,7 @@ list). With the tracking stack in the cluster, its Service would replace
 this.
 
 **No Ingress.** kind maps the NodePorts to localhost (8080: the service,
-8081: Argo CD). ingress-nginx, the usual local ingress controller, was
+8081: Argo CD, 8082: Grafana). ingress-nginx, the usual local ingress controller, was
 retired in March 2026, and a Gateway API controller would route a single
 service on a single machine.
 
@@ -3291,6 +3299,58 @@ reverted (`selfHeal`).
 - **Limits.** The cluster is this machine's, so deploys converge only while
   it runs; pointed at a real cluster, the same Applications would change only
   in how pods reach the tracking server.
+
+### Monitoring
+
+```bash
+open http://localhost:8082        # Grafana: "MHD surrogate: forecast service", user admin, password:
+kubectl -n monitoring get secret monitoring-grafana -o jsonpath='{.data.admin-password}' | base64 -d
+kubectl -n monitoring port-forward svc/monitoring-kube-prometheus-prometheus 9090   # Prometheus
+curl -s localhost:8080/metrics    # what the service exposes
+```
+
+The service exposes Prometheus metrics at `/metrics`
+(`src/mhd_surrogate/serving/metrics.py`); the cluster runs
+kube-prometheus-stack (Prometheus, Grafana, Alertmanager and the Prometheus
+operator), an Argo CD Application from the chart's Helm repository, pinned
+(`deploy/argocd/apps/monitoring.yaml`). The service brings what monitoring
+needs from it itself (`deploy/k8s/monitoring`): a ServiceMonitor, so
+Prometheus scrapes it every 15 s, and its Grafana dashboard, JSON in git
+(`dashboards/forecast-service.json`) that Grafana's sidecar loads from a
+labeled ConfigMap.
+
+- **Service.** Requests by route, method and status
+  (`mhd_serve_requests_total`; the matched route's template, so the label
+  set stays bounded; not called `endpoint`, the label the Prometheus
+  operator gives every scraped series), time to a response's start, forecasts in flight, their
+  duration and frames, forecasts that failed after their response started,
+  and which model is served (`mhd_model_info`). Counted by a plain ASGI
+  middleware: Starlette's `BaseHTTPMiddleware` would pass every streamed
+  forecast chunk through a queue of its own.
+- **Model, by proxy.** A served forecast has no truth to be scored against,
+  so two proxies stand in, with what they measure on known data:
+  - *Input drift*: each context's per-channel mean and standard deviation,
+    in units of the training data's (`mhd_context_mean_shift`,
+    `mhd_context_std_ratio`), the training set's normalization statistics,
+    which promotion attaches to the registered version (`reference_stats`)
+    and fetch hands the server. Training and validation contexts (4-frame
+    windows) stay within +-0.025 training stds of the mean and at 0.83-1.22
+    times the std.
+  - *Forecast energy*: each streamed block's mean kinetic energy over the
+    context's (`mhd_forecast_energy_ratio`), the quantity the selection
+    rule's stability check bounds. The validation truth's 100-step blocks
+    stay at 1.00-1.05 times its context's; Hankel DMD's 3000-step forecast
+    decays to 0.72 (it damps) and never exceeds 0.85. A blow-up grows it.
+- **No alert rules yet.** Their thresholds are a decision of the same kind
+  as the selection rule's guardrails, so they come with their measured basis
+  (above) for review first. Alertmanager runs, with nothing to route.
+- **kind specifics.** The chart's scrapes of etcd, the controller manager,
+  the scheduler and kube-proxy are off: kind runs those bound to localhost,
+  where Prometheus can't reach them, and they would only fail. Prometheus
+  keeps 7 days in an emptyDir (gone with the pod). Grafana's NodePort is
+  mapped to localhost:8082 (`deploy/kind/cluster.yaml`; a cluster created
+  before that mapping needs recreating: `kind delete cluster --name mhd`,
+  then the two commands under "Kubernetes").
 
 ## Docker
 

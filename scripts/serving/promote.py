@@ -39,6 +39,9 @@ from mhd_surrogate.utils.logging_config import add_log_level_arg, setup_logging
 log = logging.getLogger(__name__)
 
 DVC_LOCK = Path("dvc.lock")
+# The training data's per-channel statistics (the DVC compute_stats stage),
+# the reference for input drift.
+STATS = Path("data/processed/normalization_stats.json")
 KIND_OVERLAY = Path("deploy/k8s/overlays/kind/kustomization.yaml")
 
 # The tracking server advertises presigned multipart transfers for artifacts
@@ -115,6 +118,8 @@ def main() -> None:
 
     check_pipeline(args.stage)
     commit = check_committed([DVC_LOCK, metrics, gate], args.allow_unmerged)
+    stats = json.loads(STATS.read_text())
+    reference = {key: stats[key] for key in ("channel_names", "mean", "std")}
     if not gate_passed(gate):
         sys.exit(f"the gate didn't pass: {gate.read_text()}")
 
@@ -137,11 +142,12 @@ def main() -> None:
         args.experiment,
         scores=scores,
         params={**params, "dvc_stage": args.stage, "model_dir": str(args.model_dir)},
-        records=[DVC_LOCK, metrics, gate],
+        records=[DVC_LOCK, metrics, gate, STATS],
         run_tags={
             "mlflow.source.git.commit": commit,
             "mlflow.source.name": "scripts/serving/promote.py",
         },
+        reference=reference,
     )
 
     how = "copied and registered" if promotion.copied else "already registered, alias moved"

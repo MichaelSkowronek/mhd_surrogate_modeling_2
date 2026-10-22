@@ -9,6 +9,7 @@
   block, not the forecast. Headers give the members, steps and block size.
 - `GET /v1/model`: what is served (`schemas.ModelInfo`).
 - `GET /healthz`: liveness.
+- `GET /metrics`: Prometheus metrics (`serving/metrics.py`), service and ML.
 
 The model is the logged model `serving/fetch.py` fetched into
 `MHD_SERVE_MODEL_DIR`, loaded by the image's own code
@@ -34,18 +35,20 @@ import importlib.metadata
 import logging
 import math
 import os
-from collections.abc import AsyncIterator, Iterator, Sequence
+import time
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from typing import Annotated
 
 import anyio.to_thread
 import numpy as np
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from mhd_surrogate.evaluation.protocol import ForecastModel, ensemble_size, is_stochastic
 from mhd_surrogate.evaluation.rollout import rollout_blocks
 from mhd_surrogate.models.registry import load_model
 from mhd_surrogate.serving.fetch import MODEL_DIR, FetchedModel, checkpoint_path, load_fetched
+from mhd_surrogate.serving.metrics import RequestMetrics, ServeMetrics
 from mhd_surrogate.serving.schemas import ForecastParams, Limits, ModelInfo, ServeSettings
 from mhd_surrogate.serving.stream import MEDIA_TYPE, STREAM_MEDIA_TYPE, decode, encode
 from mhd_surrogate.training.tracking import IMAGE_COMMIT_ENV
@@ -92,12 +95,18 @@ def create_app(model: ForecastModel, fetched: FetchedModel, settings: ServeSetti
         image_commit=os.environ.get(IMAGE_COMMIT_ENV) or None,
         limits=limits,
     )
-    slots = _Slots(settings.max_inflight)
+    metrics = ServeMetrics(
+        info.model_dump(include={"name", "version", "model_id", "model_type", "checkpoint_sha256"}),
+        fetched.reference,
+    )
+    slots = _Slots(settings.max_inflight, metrics)
     max_body = NPY_HEADER_BYTES + limits.max_context_frames * 4 * math.prod(info.frame_shape)
     app = FastAPI(
         title="MHD surrogate forecasts", version=importlib.metadata.version("mhd-surrogate")
     )
+    app.add_middleware(RequestMetrics, metrics=metrics)
     app.state.slots = slots
+    app.state.metrics = metrics
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
@@ -106,6 +115,11 @@ def create_app(model: ForecastModel, fetched: FetchedModel, settings: ServeSetti
     @app.get("/v1/model")
     def model_info() -> ModelInfo:
         return info
+
+    @app.get("/metrics", include_in_schema=False)
+    def prometheus_metrics() -> Response:
+        content, media_type = metrics.exposition()
+        return Response(content, media_type=media_type)
 
     @app.post(
         "/v1/forecast",
@@ -141,6 +155,7 @@ def create_app(model: ForecastModel, fetched: FetchedModel, settings: ServeSetti
             context = _context(await _body(request, max_body), info, limits)
             members = params.seeds[: ensemble_size(model, len(params.seeds))]
             blocks = _blocks(model, context, params.n_steps, members, block_steps)
+            context_energy = metrics.observe_context(context[len(context) - info.window :])
         except BaseException:
             slots.release()
             raise
@@ -151,27 +166,32 @@ def create_app(model: ForecastModel, fetched: FetchedModel, settings: ServeSetti
             "X-Steps": str(params.n_steps),
             "X-Block-Steps": str(block_steps),
         }
-        return StreamingResponse(
-            _records(blocks, slots), media_type=STREAM_MEDIA_TYPE, headers=headers
+        records = _records(
+            blocks, slots, metrics, lambda block: metrics.observe_block(block, context_energy)
         )
+        return StreamingResponse(records, media_type=STREAM_MEDIA_TYPE, headers=headers)
 
     return app
 
 
 class _Slots:
-    """At most `n` forecasts at a time (used from the event loop only)."""
+    """At most `n` forecasts at a time (used from the event loop only),
+    counted in `metrics.inflight`."""
 
-    def __init__(self, n: int):
+    def __init__(self, n: int, metrics: ServeMetrics):
         self.free = n
+        self.metrics = metrics
 
     def acquire(self) -> bool:
         if not self.free:
             return False
         self.free -= 1
+        self.metrics.inflight.inc()
         return True
 
     def release(self) -> None:
         self.free += 1
+        self.metrics.inflight.dec()
 
 
 def _check_limits(params: ForecastParams, block_steps: int, limits: Limits) -> None:
@@ -235,23 +255,38 @@ def _blocks(
         yield from rollout_blocks(model, context, n_steps, block_steps, seed=seed)
 
 
-async def _records(blocks: Iterator[np.ndarray], slots: _Slots) -> AsyncIterator[bytes]:
-    """The `.npy` records of `blocks`, each computed in a worker thread; the
-    slot is released when the stream ends, fails or the client goes away.
+async def _records(
+    blocks: Iterator[np.ndarray],
+    slots: _Slots,
+    metrics: ServeMetrics,
+    observe: Callable[[np.ndarray], None],
+) -> AsyncIterator[bytes]:
+    """The `.npy` records of `blocks`, each computed (and passed to
+    `observe`) in a worker thread; the slot is released when the stream
+    ends, fails or the client goes away.
 
     A failure mid-stream ends the stream early (the client counts the frames,
     `serving/client.py`): the response has started, so the status can't
     change any more."""
+    start = time.perf_counter()
     try:
-        while (record := await anyio.to_thread.run_sync(_next_record, blocks)) is not None:
+        while (record := await anyio.to_thread.run_sync(_next_record, blocks, observe)) is not None:
             yield record
+        metrics.duration.observe(time.perf_counter() - start)
     except Exception:
+        metrics.failed.inc()
         log.exception("the forecast failed after its response started")
     finally:
         blocks.close()
         slots.release()
 
 
-def _next_record(blocks: Iterator[np.ndarray]) -> bytes | None:
+def _next_record(
+    blocks: Iterator[np.ndarray], observe: Callable[[np.ndarray], None]
+) -> bytes | None:
     block = next(blocks, None)
-    return None if block is None else encode(np.asarray(block, dtype=np.float32))
+    if block is None:
+        return None
+    block = np.asarray(block, dtype=np.float32)
+    observe(block)
+    return encode(block)

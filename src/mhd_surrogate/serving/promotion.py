@@ -29,6 +29,11 @@ metrics linked to the copy, so its model page shows what it scored.
 A checkpoint registered already (same `checkpoint_sha256`) isn't copied
 again: only the alias moves, back to its version.
 
+The training data's per-channel statistics (`reference`), the reference
+the server measures input drift against (`serving/metrics.py`), are a tag
+of the version (`reference_stats`), set on a version registered already
+too.
+
 That the checkpoint is the gated one is the caller's to check
 (`scripts/serving/promote.py`: the pipeline up to date by `dvc status`,
 dvc.lock committed on `main`, the gate passed by `gate_passed`).
@@ -44,6 +49,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from mlflow.entities import LoggedModel, LoggedModelOutput, LoggedModelStatus, Metric, Param
 from mlflow.entities.model_registry import ModelVersion
@@ -59,6 +65,7 @@ DIGEST_TAG = "checkpoint_sha256"
 CHECKPOINT_ARTIFACT = "checkpoint"
 MLMODEL = "MLmodel"
 MODELS_URI = "models:/"
+REFERENCE_TAG = "reference_stats"
 
 
 @dataclass(frozen=True)
@@ -90,6 +97,7 @@ def promote(
     params: Mapping[str, str] | None = None,
     records: Sequence[Path | str] = (),
     run_tags: Mapping[str, str] | None = None,
+    reference: Mapping[str, Any] | None = None,
 ) -> Promotion:
     """Point `alias` of the registered model `name` on the tracking server
     `target_uri` at `checkpoint`, first copying its logged model there from
@@ -98,7 +106,9 @@ def promote(
 
     The copy is logged by a run in `experiment`, tagged `run_tags`, with
     `params` as its params, `records` as its artifacts and `scores` as
-    metrics linked to the copy.
+    metrics linked to the copy. `reference` (the training data's
+    per-channel `channel_names`, `mean` and `std`) becomes the version's
+    `reference_stats` tag.
     """
     digest = checkpoint_digest(checkpoint)
     target = mlflow.MlflowClient(tracking_uri=target_uri, registry_uri=target_uri)
@@ -126,6 +136,10 @@ def promote(
         target.set_terminated(run_id)
     else:
         log.info("checkpoint already registered as %s version %s", name, version.version)
+    if reference is not None:
+        target.set_model_version_tag(
+            name, str(version.version), REFERENCE_TAG, json.dumps(dict(reference))
+        )
     target.set_registered_model_alias(name, alias, str(version.version))
     return Promotion(name, str(version.version), registered_model_id(version), alias, copied)
 
