@@ -1,11 +1,14 @@
 """Smoke-check a deployed forecast service.
 
 Waits for `/healthz`, reads `/v1/model` (and checks it against `--expect-*`
-if given), then forecasts `--steps` steps (at most the service's limit) of
+if given: `--expect-model-uri` is what the deployment fetched,
+`$MHD_MODEL_URI`, whose name and version, if it names one, must be served),
+then forecasts `--steps` steps (at most the service's limit) of
 `--members` seeds from a random context of the served model's shape, and
 checks every member's frames arrived, shaped as the model's frames and
-finite. Exits 1 on the first problem. CI's deploy-smoke job runs it against
-its throwaway cluster.
+finite. Exits 1 on the first problem. The deployment runs it after every
+sync (an Argo CD PostSync hook, deploy/k8s/smoke-check/), CI's deploy-smoke
+job against its throwaway cluster.
 
 Usage:
     uv run scripts/serving/smoke_check.py --url http://localhost:8080 --expect-version 1
@@ -33,11 +36,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--steps", type=int, default=20)
     parser.add_argument("--members", type=int, default=2)
     parser.add_argument("--wait", type=float, default=120.0, help="seconds to wait for /healthz")
+    parser.add_argument("--expect-model-uri", help="models:/<name>/<version> or @<alias>")
     parser.add_argument("--expect-name")
     parser.add_argument("--expect-version")
     parser.add_argument("--expect-sha", help="the checkpoint's checkpoint_sha256")
     add_log_level_arg(parser)
     return parser.parse_args()
+
+
+def expected_from_uri(model_uri: str) -> dict[str, str]:
+    """What a model URI says the service must serve: the name and version
+    of `models:/<name>/<version>`, the name of `models:/<name>@<alias>`
+    (the alias may have moved since), the logged model of
+    `models:/<model id>`."""
+    path = model_uri.removeprefix("models:/")
+    if "@" in path:
+        return {"name": path.split("@", 1)[0]}
+    if "/" in path:
+        name, version = path.split("/", 1)
+        return {"name": name, "version": version}
+    return {"model_id": path}
 
 
 def wait_until_healthy(url: str, seconds: float) -> None:
@@ -60,11 +78,15 @@ def main() -> None:
     client = ForecastClient(args.url)
     info = client.model_info()
     print(f"serving {info.name} version {info.version} ({info.model_id}, {info.model_type})")
-    for field, expected in [
-        ("name", args.expect_name),
-        ("version", args.expect_version),
-        ("checkpoint_sha256", args.expect_sha),
-    ]:
+    expectations = {
+        "name": args.expect_name,
+        "version": args.expect_version,
+        "checkpoint_sha256": args.expect_sha,
+    }
+    if args.expect_model_uri:
+        for field, value in expected_from_uri(args.expect_model_uri).items():
+            expectations[field] = expectations.get(field) or value
+    for field, expected in expectations.items():
         if expected is not None and getattr(info, field) != expected:
             sys.exit(f"{field} is {getattr(info, field)!r}, expected {expected!r}")
 

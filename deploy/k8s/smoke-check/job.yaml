@@ -1,0 +1,65 @@
+# After every sync, the service as deployed must answer, serve the model
+# version the overlay pins and forecast (scripts/serving/smoke_check.py). An
+# Argo CD PostSync hook: a failed check fails the sync in Argo CD, which
+# doesn't roll back (a `git revert` does). The last one is kept until the
+# next sync replaces it, for its log. Applied without Argo CD (CI), it runs
+# once, right away.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: smoke-check
+  labels:
+    app.kubernetes.io/name: mhd-surrogate-smoke-check
+    app.kubernetes.io/part-of: mhd-surrogate
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mhd-surrogate-smoke-check
+        app.kubernetes.io/part-of: mhd-surrogate
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: smoke-check
+          image: mhd-surrogate-serve
+          command:
+            - python
+            - scripts/serving/smoke_check.py
+            - --url=http://serve
+            - --wait=300
+            - --expect-model-uri=$(MHD_MODEL_URI)
+          envFrom:
+            - configMapRef:
+                name: serving-model
+          env:
+            - name: HOME
+              value: /tmp
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
