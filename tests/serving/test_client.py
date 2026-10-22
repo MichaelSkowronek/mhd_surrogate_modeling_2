@@ -119,3 +119,19 @@ def test_the_client_takes_a_base_url_or_an_http_client():
         ForecastClient()
     with pytest.raises(ValueError, match="either base_url or http"):
         ForecastClient("http://localhost:1", http=httpx.Client())
+
+
+def test_a_probe_says_so_in_its_request():
+    seen = []
+
+    def handler(request):
+        seen.append(request.headers.get("X-Probe"))
+        record = encode(np.zeros((1, *FRAME), np.float32))
+        headers = {"X-Members": "1", "Content-Type": STREAM_MEDIA_TYPE}
+        return httpx.Response(200, content=record, headers=headers)
+
+    client = mocked(handler)
+    client.forecast(context(), 1, probe=True)
+    client.forecast(context(), 1)
+
+    assert seen == ["1", None]

@@ -16,7 +16,9 @@ to be scored against, so these are proxies:
   ratio. The validation truth's 100-step blocks stay at 1.00-1.05 times its
   context's; Hankel DMD's forecast decays to 0.72 (it damps).
 
-The buckets resolve those ranges. The shift histogram, signed, has no
+Synthetic requests (`X-Probe`, the deployment's smoke check) are left out
+of both: their made-up contexts would read as drift. The buckets resolve
+those ranges. The shift histogram, signed, has no
 `_sum` (Prometheus' rule for histograms that can see negative values): its
 quantiles come from the buckets, as every histogram's do. Each app has a
 registry of its own, so several apps in one process (the tests) don't share

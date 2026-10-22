@@ -7,6 +7,9 @@
   frames at a time (`evaluation/rollout.py`'s `rollout_blocks`, so a
   model's streamed forecast is its scored one), so the server holds one
   block, not the forecast. Headers give the members, steps and block size.
+  A request with an `X-Probe` header (a synthetic check, `smoke_check.py`)
+  counts as service traffic but stays out of the ML metrics: its made-up
+  context would read as input drift.
 - `GET /v1/model`: what is served (`schemas.ModelInfo`).
 - `GET /healthz`: liveness.
 - `GET /metrics`: Prometheus metrics (`serving/metrics.py`), service and ML.
@@ -49,7 +52,13 @@ from mhd_surrogate.evaluation.rollout import rollout_blocks
 from mhd_surrogate.models.registry import load_model
 from mhd_surrogate.serving.fetch import MODEL_DIR, FetchedModel, checkpoint_path, load_fetched
 from mhd_surrogate.serving.metrics import RequestMetrics, ServeMetrics
-from mhd_surrogate.serving.schemas import ForecastParams, Limits, ModelInfo, ServeSettings
+from mhd_surrogate.serving.schemas import (
+    PROBE_HEADER,
+    ForecastParams,
+    Limits,
+    ModelInfo,
+    ServeSettings,
+)
 from mhd_surrogate.serving.stream import MEDIA_TYPE, STREAM_MEDIA_TYPE, decode, encode
 from mhd_surrogate.training.tracking import IMAGE_COMMIT_ENV
 from mhd_surrogate.utils.jax_cache import enable_compilation_cache
@@ -155,7 +164,9 @@ def create_app(model: ForecastModel, fetched: FetchedModel, settings: ServeSetti
             context = _context(await _body(request, max_body), info, limits)
             members = params.seeds[: ensemble_size(model, len(params.seeds))]
             blocks = _blocks(model, context, params.n_steps, members, block_steps)
-            context_energy = metrics.observe_context(context[len(context) - info.window :])
+            visible = context[len(context) - info.window :]
+            probe = PROBE_HEADER in request.headers
+            context_energy = None if probe else metrics.observe_context(visible)
         except BaseException:
             slots.release()
             raise

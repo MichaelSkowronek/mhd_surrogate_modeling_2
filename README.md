@@ -3341,6 +3341,12 @@ labeled ConfigMap.
     rule's stability check bounds. The validation truth's 100-step blocks
     stay at 1.00-1.05 times its context's; Hankel DMD's 3000-step forecast
     decays to 0.72 (it damps) and never exceeds 0.85. A blow-up grows it.
+  - *Probes stay out.* Synthetic requests -- the post-sync smoke check, any
+    `ForecastClient(...).forecast(..., probe=True)` -- carry an `X-Probe`
+    header: they count as service traffic but not in the two proxies,
+    since their made-up contexts would read as drift (the smoke check's
+    random frames did, at 2.4 times the training std of `u_y`, until it
+    was marked).
 - **No alert rules yet.** Their thresholds are a decision of the same kind
   as the selection rule's guardrails, so they come with their measured basis
   (above) for review first. Alertmanager runs, with nothing to route.
