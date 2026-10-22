@@ -248,3 +248,7 @@ mlflow/seaweedfs/*
 mlruns.db
 mlruns/
 mlartifacts/
+
+# The model the forecast service serves, fetched from the registry
+# (scripts/serving/fetch_model.py, docker-compose.yml's serve-fetch)
+models/served/

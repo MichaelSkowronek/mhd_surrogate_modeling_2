@@ -41,7 +41,8 @@ the U-Net is stable over 3000-step rollouts and passes every guardrail
 (skill horizon 10-12 against Hankel DMD's 7; see "Input noise"), making it
 the candidate to replace Hankel DMD as the canonical model.
 Serving is being built: the canonical model is promoted from the experiment
-store to a model registry on the tracking server (see "Serving").
+store to a model registry on the tracking server and served by a FastAPI
+service that streams forecasts (see "Serving").
 
 ## Setup
 
@@ -89,7 +90,7 @@ src/mhd_surrogate/   importable package, split by pipeline stage
                      reconstruction
   models/            base (interface), baselines, snapshots, dmd, hankel_dmd, neural, unet, registry,
                      codec (codec interface + registry), pod_codec, latent, latent_linear
-  serving/           promotion
+  serving/           promotion, fetch, stream, schemas, app, client
   utils/             logging_config, parallel, jax_cache, jax_determinism, hydra_resolvers
 scripts/             CLI entry points, same split (plus viz/)
   data/              explore_data, convert_to_zarr, compute_stats
@@ -97,7 +98,7 @@ scripts/             CLI entry points, same split (plus viz/)
   viz/               make_video, make_all_videos, make_forecast_video
   training/          train, tune, train_codec
   evaluation/        check_rollout_stability, evaluate_checkpoint, gate_checkpoint
-  serving/           promote
+  serving/           promote, fetch_model, check_parity
 tests/               mirrors src/ and scripts/ (data/, analysis/, training/, evaluation/, models/, serving/, utils/, viz/)
 dvc.yaml, dvc.lock  data pipeline (raw -> zarr -> stats) and its pinned hashes
 data/raw.dvc         DVC pointer to the raw .npy files (.dvc/ holds the remote config)
@@ -2999,8 +3000,9 @@ streams a stable 3000-step rollout.
 
 The canonical model is served from the MLflow Model Registry on the tracking
 server (see "Tracking stack"), not from the experiment store it was trained
-in. This section grows with the serving step; so far it covers how a model
-gets into that registry.
+in, by a FastAPI service that streams forecasts. This section grows with the
+serving step; so far it covers how a model gets into that registry and the
+service itself.
 
 ### Promotion
 
@@ -3055,6 +3057,87 @@ with a dated registered model and experiment (`--name
 smoke-mhd-surrogate-<date> --experiment smoke-tests-<date>`), deleted
 afterwards like any smoke run.
 
+### Forecast API
+
+```bash
+docker compose --profile serve up -d       # fetch @champion, serve it on localhost:8000
+curl -s localhost:8000/v1/model            # what is served
+JAX_PLATFORMS=cpu uv run scripts/serving/check_parity.py   # served == offline forecast
+```
+
+A FastAPI service (`src/mhd_surrogate/serving/app.py`):
+
+| Endpoint | |
+|---|---|
+| `POST /v1/forecast?n_steps=837&seeds=0&block_steps=100` | body: the context as `.npy` (`application/x-npy`), float32 frames in raw units; response: the forecast streamed as `.npy` records (`application/x-npy-stream`) |
+| `GET /v1/model` | what is served: registered name and version, logged model, checkpoint hash, `window`, frame shape, whether it's stochastic, training and image commits, the request limits |
+| `GET /healthz` | liveness |
+
+```python
+from mhd_surrogate.serving.client import ForecastClient
+
+client = ForecastClient("http://localhost:8000")
+(forecast,) = client.forecast(context, n_steps=837)  # one member: (837, C, Nx, Ny)
+```
+
+- **Arrays as `.npy`, streamed.** A frame is 2x1151x127 float32 (1.17 MB),
+  an 837-step forecast ~1 GB. JSON (or base64) would inflate that and hold
+  the whole forecast in one document -- which is also why this isn't
+  `mlflow models serve`, whose `/invocations` takes and returns JSON
+  without streaming. The request body is one `.npy` record, the response a
+  stream of them (`serving/stream.py`): the forecast's blocks as
+  `rollout_blocks` produces them, member after member, so the server holds
+  one block (100 frames, ~117 MB, by default), and a model's streamed
+  forecast is the one it is scored on. The headers give the members, steps
+  and block size (`X-Members`, `X-Steps`, `X-Block-Steps`) and the model
+  version. NumPy reads the stream record by record; `serving/client.py`'s
+  `ForecastClient` does, and raises if a stream ends before every frame
+  arrived (the status is already 200 when a forecast fails mid-stream).
+- **Validated input.** pydantic validates the parameters
+  (`serving/schemas.py`), and the context is checked against the served
+  model: float32, frames of its signature's shape, at least `window` of
+  them (extra leading frames are ignored, as under the forecast protocol),
+  at most 80 (the protocol's context length), finite. A refusal says why
+  (400, 413, 415, 422). `.npy` records holding pickles are refused both ways.
+- **The gate sets the horizon.** `max_steps` is the number of steps the
+  model's gate validated a rollout stable for (`gate.rollout_stable_steps`,
+  which promotion logs on the model; 3000 for Hankel DMD): the service
+  doesn't forecast further than the model was shown to stay bounded.
+  `MHD_SERVE_MAX_STEPS` overrides it, and is required for a model that was
+  never gated.
+- **Ensembles.** `seeds` are a stochastic model's members
+  (`evaluation/protocol.py`'s `ensemble_size`); a deterministic model
+  forecasts one member whatever the seeds, and says so (`X-Members: 1`).
+- **One forecast at a time per pod.** A forecast keeps every core busy, so
+  a server runs `MHD_SERVE_MAX_INFLIGHT` (1) at a time and answers more with
+  503 and `Retry-After`; it scales by replicas, each one uvicorn worker (a
+  worker holds the model). Forecasts run in a worker thread, so `/healthz`
+  answers within milliseconds during one.
+- **Fetched, not looked up.** The server never talks to the registry.
+  `scripts/serving/fetch_model.py` (`serving/fetch.py`) resolves the model
+  URI (a version, an alias or a logged model), downloads the logged model,
+  checks its checkpoint against the version's `checkpoint_sha256` and
+  records what it is (`serving.json`); the server only loads that
+  directory, so it needs no registry credentials and serves the version it
+  started with. In Kubernetes that's an init container, in compose the
+  one-shot `serve-fetch` service before `serve`. The model is loaded before
+  the server listens, so a server that answers `/healthz` is ready.
+- **The image's code loads the model.** The checkpoint is loaded with the
+  image's `models/registry.py`, not `mlflow.pyfunc.load_model`: a pyfunc's
+  `code_paths` copy of the package only goes on `sys.path`, behind the
+  `mhd_surrogate` the process has imported already, so it would never take
+  effect (checked in MLflow 3.16). The image must therefore read the served
+  checkpoint's format; `/v1/model` shows both commits.
+
+Measured on the CPU (Hankel DMD, compose on this machine): fetching (865 MB)
+and loading take ~20 s; a 3000-step forecast (3.5 GB) streams in ~11 s,
+with the server at ~1.1 GB. The served 837-step validation forecast equals
+the offline one to 5e-6 of the truth's standard deviation
+(`scripts/serving/check_parity.py`), the same difference as between
+streaming that forecast in 100-step blocks on the host and computing it in
+one call: the float rounding of computing it in blocks, not of the server
+or the image.
+
 ## Docker
 
 The project ships as a container image so the exact environment (Python
@@ -3073,7 +3156,8 @@ machine, and later stages (training jobs, serving) have a unit to deploy.
   mounts, as is the JAX compilation cache (`.jax_cache/`), so the container
   doesn't recompile on every run. `.dockerignore` keeps them out of the build context too.
 - **`docker-compose.yml`** — the app container plus a full MLflow tracking
-  stack (below).
+  stack (below), and the forecast service (`serve-fetch`, `serve`; see
+  "Forecast API").
 - **The source commit is baked in, not read from git.** The image has no git
   and no `.git`, so MLflow can't detect a run's commit itself. Mounting `.git`
   wouldn't fix that properly: it shows the checkout's *current* commit, which
@@ -3090,6 +3174,7 @@ docker compose up -d                          # tracking stack; UI on http://loc
 docker compose run --rm app                   # train.py, logging to the stack
 docker compose run --rm --no-deps app python scripts/analysis/run_all_checks.py
 docker compose run --rm test                  # pytest inside the image
+docker compose --profile serve up -d          # the forecast service (see "Forecast API")
 docker compose down                           # stop; all state stays in ./mlflow
 ```
 

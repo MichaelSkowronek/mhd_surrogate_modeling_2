@@ -13,6 +13,7 @@
 #   docker compose run --rm app                    # default: training entrypoint
 #   docker compose run --rm app python scripts/analysis/run_all_checks.py
 #   docker compose run --rm test                   # pytest in the container
+#   docker compose --profile serve up -d           # the forecast service on :8000
 #   docker compose run --rm app-gpu                # same, on the NVIDIA GPU (needs the
 #                                                  # NVIDIA Container Toolkit, see README)
 #
@@ -162,6 +163,46 @@ services:
               count: all
               capabilities: [gpu]
     profiles: ["gpu"]
+
+  # The forecast service (src/mhd_surrogate/serving/), laid out as
+  # Kubernetes runs it: `serve-fetch` fetches the model from the registry
+  # into models/served/ (an init container there), then `serve` serves it
+  # on localhost:8000. MHD_MODEL_URI picks the model (default: the alias).
+  #   docker compose --profile serve up -d
+  serve-fetch:
+    <<: *app
+    depends_on:
+      mlflow: {condition: service_healthy}
+    command:
+      - python
+      - scripts/serving/fetch_model.py
+      - --model-uri=${MHD_MODEL_URI:-models:/mhd-surrogate@champion}
+      - --tracking-uri=http://mlflow:5000
+      - --dest=/app/models/served
+    restart: "no"
+    profiles: ["serve"]
+
+  serve:
+    <<: *app
+    depends_on:
+      serve-fetch: {condition: service_completed_successfully}
+    environment:
+      MHD_SERVE_MODEL_DIR: /app/models/served
+      MHD_SERVE_JAX_CACHE_DIR: /app/.jax_cache
+    command:
+      - uvicorn
+      - --factory
+      - mhd_surrogate.serving.app:app_from_env
+      - --host=0.0.0.0
+      - --port=8000
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+    profiles: ["serve"]
 
   test:
     build:
