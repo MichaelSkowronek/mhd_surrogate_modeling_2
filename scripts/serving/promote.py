@@ -9,6 +9,11 @@ checkpoint is the gated one: the pipeline up to the `gate` stage up to date
 `main`, and the gate passed. Promoting a registered checkpoint again only
 moves the alias back to its version.
 
+Then it pins the promoted version in the overlay Argo CD deploys
+(`--pin`, deploy/k8s/overlays/kind/kustomization.yaml): the deployment
+follows once that change is merged, in a pull request like any other
+(README, "Continuous deployment"). `--no-pin` for a smoke run.
+
 Usage:
     docker compose up -d     # the tracking server holding the registry
     uv run scripts/serving/promote.py
@@ -20,6 +25,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -33,6 +39,7 @@ from mhd_surrogate.utils.logging_config import add_log_level_arg, setup_logging
 log = logging.getLogger(__name__)
 
 DVC_LOCK = Path("dvc.lock")
+KIND_OVERLAY = Path("deploy/k8s/overlays/kind/kustomization.yaml")
 
 # The tracking server advertises presigned multipart transfers for artifacts
 # of 500 MB or more, signed for its object store's address inside the
@@ -56,6 +63,13 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="allow a commit not on origin/main (smoke runs only, to a smoke registered model)",
     )
+    parser.add_argument(
+        "--pin",
+        type=Path,
+        default=KIND_OVERLAY,
+        help="the Kustomize overlay to pin the promoted version in (default: %(default)s)",
+    )
+    parser.add_argument("--no-pin", dest="pin", action="store_const", const=None)
     add_log_level_arg(parser)
     return parser.parse_args()
 
@@ -83,6 +97,15 @@ def check_committed(paths: list[Path], allow_unmerged: bool) -> str:
     return subprocess.run(
         ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
     ).stdout.strip()
+
+
+def pin_model(text: str, name: str, version: str) -> str:
+    """A Kustomize overlay's `text` with its `MHD_MODEL_URI` (the model the
+    deployment fetches) pinned to version `version` of `name`."""
+    pattern = re.compile(rf"(MHD_MODEL_URI=models:/){re.escape(name)}/\w+")
+    if not pattern.search(text):
+        raise ValueError(f"the overlay doesn't pin a version of {name}")
+    return pattern.sub(lambda match: f"{match.group(1)}{name}/{version}", text, count=1)
 
 
 def main() -> None:
@@ -126,6 +149,14 @@ def main() -> None:
         f"{promotion.name} version {promotion.version} ({promotion.model_id}) "
         f"is now @{promotion.alias} ({how})"
     )
+    if args.pin is not None:
+        text = args.pin.read_text()
+        pinned = pin_model(text, promotion.name, promotion.version)
+        if pinned == text:
+            print(f"{args.pin} pins it already")
+        else:
+            args.pin.write_text(pinned)
+            print(f"pinned {args.pin}: merge that change to deploy it")
 
 
 if __name__ == "__main__":

@@ -105,7 +105,7 @@ scripts/             CLI entry points, same split (plus viz/)
   evaluation/        check_rollout_stability, evaluate_checkpoint, gate_checkpoint
   serving/           promote, fetch_model, check_parity, image_tag, smoke_model, smoke_check
 tests/               mirrors src/ and scripts/ (data/, analysis/, training/, evaluation/, models/, serving/, utils/, viz/)
-deploy/              Kubernetes: kind/ (the local cluster), k8s/ (Kustomize base + overlays),
+deploy/              Kubernetes: kind/ (the local cluster), k8s/ (Kustomize base, overlays, smoke-check),
                      argocd/ (Argo CD install + Applications), install-tools.sh, validate.sh
 dvc.yaml, dvc.lock  data pipeline (raw -> zarr -> stats) and its pinned hashes
 data/raw.dvc         DVC pointer to the raw .npy files (.dvc/ holds the remote config)
@@ -3191,7 +3191,8 @@ describes (see "Continuous deployment").
 
 **Manifests** (`deploy/k8s/`, Kustomize). `base/` is the service, free of
 anything environment-specific: namespace `mhd-serving`, Deployment,
-Service. The overlays pin what varies: `overlays/kind/` is the deployed one,
+Service; `smoke-check/` the post-sync check (see "Continuous deployment").
+The overlays pin what varies: `overlays/kind/` is the deployed one,
 `overlays/ci/` CI's smoke deploy, built on it. Kustomize rather than a Helm
 chart: one service in two environments is a few patches on plain YAML, and a
 chart would add a templating language with nothing to template; Helm earns
@@ -3271,9 +3272,19 @@ reverted (`selfHeal`).
   throwaway tracking server with a tiny model,
   `scripts/serving/smoke_model.py`, then `scripts/serving/smoke_check.py`
   through the NodePort), and only then can it merge; Argo CD then rolls out
-  that very image. Model: `promote.py` moves `champion`, and the deployment
-  follows when a pull request moves the overlay's pin. Rollback is
-  `git revert`.
+  that very image. Model: `promote.py` moves `champion` and pins the new
+  version in the kind overlay (`--pin`, the default; `--no-pin` for a smoke
+  run); merging that one-line change deploys it. Rollback is `git revert`.
+- **Checked after every sync.** A PostSync hook (`deploy/k8s/smoke-check`, a
+  Job running `scripts/serving/smoke_check.py` in the cluster) checks the
+  service as deployed: it answers, serves the version the overlay pins
+  (`--expect-model-uri=$(MHD_MODEL_URI)`, from the same ConfigMap the pod
+  fetched with) and forecasts. A failed check fails the sync in Argo CD; it
+  doesn't roll back (Argo CD doesn't), a `git revert` does. It lives apart
+  from `base/` because the base's labels go into selectors, which a Job's
+  must not have, and its pod mustn't carry the server's labels, or the
+  Service would route requests to it. CI applies it too, without Argo CD,
+  where it runs once.
 - **What runs is what git says.** Every deployed image and model version is
   a line in `main`'s history, and Argo CD shows whether the cluster matches
   it.

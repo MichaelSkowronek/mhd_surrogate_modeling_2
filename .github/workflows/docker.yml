@@ -191,9 +191,16 @@ jobs:
             python scripts/serving/smoke_check.py --url http://localhost:8080 \
             --expect-name mhd-surrogate-smoke
 
+      # The deployment's own post-sync check (deploy/k8s/smoke-check), which
+      # Argo CD runs after every sync: applied without Argo CD, it ran once.
+      - run: |
+          kubectl -n mhd-serving wait --for=condition=complete job/smoke-check --timeout=300s
+          kubectl -n mhd-serving logs job/smoke-check
+
       - if: failure()
         run: |
           kubectl -n mhd-serving get all || true
           kubectl -n mhd-serving describe pods || true
           kubectl -n mhd-serving logs deployment/serve --all-containers --prefix || true
+          kubectl -n mhd-serving logs job/smoke-check || true
           docker logs mlflow || true
