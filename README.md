@@ -98,7 +98,7 @@ scripts/             CLI entry points, same split (plus viz/)
   viz/               make_video, make_all_videos, make_forecast_video
   training/          train, tune, train_codec
   evaluation/        check_rollout_stability, evaluate_checkpoint, gate_checkpoint
-  serving/           promote, fetch_model, check_parity
+  serving/           promote, fetch_model, check_parity, image_tag
 tests/               mirrors src/ and scripts/ (data/, analysis/, training/, evaluation/, models/, serving/, utils/, viz/)
 dvc.yaml, dvc.lock  data pipeline (raw -> zarr -> stats) and its pinned hashes
 data/raw.dvc         DVC pointer to the raw .npy files (.dvc/ holds the remote config)
@@ -3001,8 +3001,8 @@ streams a stable 3000-step rollout.
 The canonical model is served from the MLflow Model Registry on the tracking
 server (see "Tracking stack"), not from the experiment store it was trained
 in, by a FastAPI service that streams forecasts. This section grows with the
-serving step; so far it covers how a model gets into that registry and the
-service itself.
+serving step; so far it covers how a model gets into that registry, the
+service itself and how its image is published.
 
 ### Promotion
 
@@ -3137,6 +3137,37 @@ the offline one to 5e-6 of the truth's standard deviation
 streaming that forecast in 100-step blocks on the host and computing it in
 one call: the float rounding of computing it in blocks, not of the server
 or the image.
+
+### Image publishing
+
+The serving image is the Dockerfile's `runtime` target without the extras
+(no Ray, no tracking-server drivers: 1.9 GB instead of 2.3 GB), published
+to GitHub's container registry as
+`ghcr.io/michaelskowronek/mhd-surrogate-serve:<tag>` by the `docker`
+workflow. The repository is public and so is the image, so a cluster pulls
+it without credentials.
+
+**Tagged by content, pushed before the merge.** The tag is a hash of the
+image's inputs (`scripts/serving/image_tag.py`): the files the Dockerfile
+copies into it (`src/`, `scripts/`, `configs/`, `pyproject.toml`,
+`uv.lock`, `README.md`; a test checks the list against the Dockerfile), the
+Dockerfile and `.dockerignore`, and the build arguments that change what's
+in it, all as git's index has them. Not a commit hash, which covers the
+whole tree and exists only once the commit does: the content hash is known
+while the change is made, so the deployment can pin it in the same pull
+request, and it is the same for the pull request's head and the squash
+commit that lands on `main` (branch protection makes them the same tree).
+The workflow pushes the image under it on the pull request, before the
+merge, so by the time `main` changes, the image the deployment names exists
+and is the one CI built from that code -- the tested artifact, not a
+rebuild after the merge. A tag is never overwritten: if it exists, the
+inputs are the same and the build is skipped. That also keeps a tag's image
+fixed although the base image (`python:3.14-slim`) floats. The image is
+labeled with the pull request's head commit (`MHD_GIT_COMMIT`, which
+`/v1/model` reports as `image_commit`), a commit of the same tree as the one
+on `main`. `README.md` is an input (`pyproject.toml` names it as the
+package's readme), so most pull requests make a new image. Pull requests
+from forks don't push: they get no token that can.
 
 ## Docker
 
