@@ -24,6 +24,13 @@ dependencies = [
     # Neural networks: Equinox (models as JAX pytrees) and Optax (optimizers).
     "equinox>=0.13",
     "optax>=0.2.5",
+    # The forecast service (src/mhd_surrogate/serving/) and its client.
+    # FastAPI, uvicorn and pydantic-settings come with mlflow already; listed
+    # because the package imports them itself.
+    "fastapi>=0.141.1",
+    "uvicorn>=0.53.0",
+    "httpx>=0.28.1",
+    "pydantic-settings>=2.15.0",
 ]
 
 [project.optional-dependencies]

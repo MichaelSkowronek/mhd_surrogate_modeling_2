@@ -7,7 +7,6 @@ import yaml
 from mlflow.entities.model_registry import ModelVersion
 
 import mlflow
-from mhd_surrogate.models.baselines import MeanField
 from mhd_surrogate.serving.promotion import (
     Promotion,
     gate_passed,
@@ -16,35 +15,10 @@ from mhd_surrogate.serving.promotion import (
     retarget_mlmodel,
 )
 from mhd_surrogate.training.export import checkpoint_digest
-from mhd_surrogate.training.mlflow_model import log_surrogate
-from mhd_surrogate.training.mlflow_utils import log_checkpoint_once
 
 FRAME = (2, 5, 4)
 IDENTITY = {"model_id", "model_uuid", "run_id", "artifact_path"}
 EXPERIMENT = "promotions"
-
-
-@pytest.fixture
-def stores(tmp_path, monkeypatch):
-    """(source, target) tracking URIs: two sqlite stores, their artifacts
-    (./mlruns) kept in tmp_path."""
-    monkeypatch.chdir(tmp_path)
-    return f"sqlite:///{tmp_path / 'source.db'}", f"sqlite:///{tmp_path / 'target.db'}"
-
-
-def logged_checkpoint(source: str, directory: Path, seed: int = 0) -> tuple[MeanField, Path, str]:
-    """A fitted model's checkpoint, logged once in the source store's
-    experiment `exp` as a training run does; returns the model, the
-    checkpoint and the logged model's id."""
-    model = MeanField()
-    model.fit({"a": np.random.default_rng(seed).normal(size=(6, *FRAME)).astype(np.float32)})
-    checkpoint = directory / f"checkpoint-{seed}"
-    model.save(checkpoint)
-    mlflow.set_tracking_uri(source)
-    mlflow.set_experiment("exp")
-    with mlflow.start_run():
-        model_id = log_checkpoint_once(checkpoint, lambda: log_surrogate(model, checkpoint, FRAME))
-    return model, checkpoint, model_id
 
 
 def run_promote(checkpoint: Path, stores: tuple[str, str], **kwargs) -> Promotion:
@@ -66,8 +40,10 @@ def downloaded(uri: str, model_id: str, directory: Path) -> Path:
     return Path(mlflow.artifacts.download_artifacts(location, dst_path=str(directory)))
 
 
-def test_promote_registers_a_copy_under_the_alias_that_serves_the_model(stores, tmp_path):
-    model, checkpoint, _ = logged_checkpoint(stores[0], tmp_path)
+def test_promote_registers_a_copy_under_the_alias_that_serves_the_model(
+    stores, logged_checkpoint, tmp_path
+):
+    model, checkpoint, _ = logged_checkpoint()
 
     promotion = run_promote(checkpoint, stores)
 
@@ -81,8 +57,10 @@ def test_promote_registers_a_copy_under_the_alias_that_serves_the_model(stores, 
     assert (prediction == model.mean).all()
 
 
-def test_the_copy_is_the_source_byte_for_byte_but_for_its_identity(stores, tmp_path):
-    _, checkpoint, source_id = logged_checkpoint(stores[0], tmp_path)
+def test_the_copy_is_the_source_byte_for_byte_but_for_its_identity(
+    stores, logged_checkpoint, tmp_path
+):
+    _, checkpoint, source_id = logged_checkpoint()
 
     promotion = run_promote(checkpoint, stores)
 
@@ -104,8 +82,8 @@ def test_the_copy_is_the_source_byte_for_byte_but_for_its_identity(stores, tmp_p
     assert after["artifact_path"] == logged.artifact_location
 
 
-def test_the_copy_and_its_version_record_where_it_came_from(stores, tmp_path):
-    _, checkpoint, source_id = logged_checkpoint(stores[0], tmp_path)
+def test_the_copy_and_its_version_record_where_it_came_from(stores, logged_checkpoint, tmp_path):
+    _, checkpoint, source_id = logged_checkpoint()
     source = mlflow.MlflowClient(tracking_uri=stores[0]).get_logged_model(source_id)
 
     promotion = run_promote(checkpoint, stores)
@@ -124,8 +102,8 @@ def test_the_copy_and_its_version_record_where_it_came_from(stores, tmp_path):
     assert version.run_id == copy.source_run_id
 
 
-def test_the_promotion_run_logs_the_scores_params_and_records(stores, tmp_path):
-    _, checkpoint, _ = logged_checkpoint(stores[0], tmp_path)
+def test_the_promotion_run_logs_the_scores_params_and_records(stores, logged_checkpoint, tmp_path):
+    _, checkpoint, _ = logged_checkpoint()
     record = tmp_path / "gate.json"
     record.write_text(json.dumps({"val": {"passed": 1.0}}))
 
@@ -149,9 +127,11 @@ def test_the_promotion_run_logs_the_scores_params_and_records(stores, tmp_path):
     assert [o.model_id for o in run.outputs.model_outputs] == [promotion.model_id]
 
 
-def test_promoting_a_registered_checkpoint_again_only_moves_the_alias(stores, tmp_path):
-    _, first, _ = logged_checkpoint(stores[0], tmp_path, seed=0)
-    _, second, _ = logged_checkpoint(stores[0], tmp_path, seed=1)
+def test_promoting_a_registered_checkpoint_again_only_moves_the_alias(
+    stores, logged_checkpoint, tmp_path
+):
+    _, first, _ = logged_checkpoint(0)
+    _, second, _ = logged_checkpoint(1)
     client = target_client(stores)
 
     one = run_promote(first, stores)
@@ -169,8 +149,10 @@ def test_promoting_a_registered_checkpoint_again_only_moves_the_alias(stores, tm
     assert len(client.search_logged_models([experiment.experiment_id])) == 2
 
 
-def test_a_checkpoint_the_source_experiment_never_logged_is_refused(stores, tmp_path):
-    _, checkpoint, _ = logged_checkpoint(stores[0], tmp_path)
+def test_a_checkpoint_the_source_experiment_never_logged_is_refused(
+    stores, logged_checkpoint, tmp_path
+):
+    _, checkpoint, _ = logged_checkpoint()
     (checkpoint / "model.json").write_text("{}")  # another checkpoint now
 
     with pytest.raises(LookupError, match="no logged model of checkpoint"):
@@ -181,8 +163,10 @@ def test_a_checkpoint_the_source_experiment_never_logged_is_refused(stores, tmp_
     assert target_client(stores).search_experiments(filter_string=f"name = '{EXPERIMENT}'") == []
 
 
-def test_a_source_copy_that_isnt_the_checkpoint_is_refused_and_nothing_registered(stores, tmp_path):
-    _, checkpoint, source_id = logged_checkpoint(stores[0], tmp_path)
+def test_a_source_copy_that_isnt_the_checkpoint_is_refused_and_nothing_registered(
+    stores, logged_checkpoint, tmp_path
+):
+    _, checkpoint, source_id = logged_checkpoint()
     stored = mlflow.MlflowClient(tracking_uri=stores[0]).get_logged_model(source_id)
     (Path(stored.artifact_location) / "artifacts" / checkpoint.name / "model.json").write_text("{}")
 
@@ -205,8 +189,8 @@ def test_gate_passed_reads_the_verdict(tmp_path):
     assert not gate_passed(path)
 
 
-def test_retarget_mlmodel_rewrites_only_the_identity_fields(stores, tmp_path):
-    _, _, source_id = logged_checkpoint(stores[0], tmp_path)
+def test_retarget_mlmodel_rewrites_only_the_identity_fields(stores, logged_checkpoint, tmp_path):
+    _, _, source_id = logged_checkpoint()
     local = downloaded(stores[0], source_id, tmp_path / "m")
     before = mlmodel(local)
 
