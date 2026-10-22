@@ -1,0 +1,22 @@
+# Argo CD manages its own installation (deploy/argocd/install). Not pruned:
+# a broken render of it must not delete Argo CD. Server-side apply: its
+# CRDs are too large for the annotation client-side apply keeps.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argocd
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/MichaelSkowronek/mhd_surrogate_modeling_2.git
+    targetRevision: main
+    path: deploy/argocd/install
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true

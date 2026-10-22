@@ -1,0 +1,24 @@
+# The kind overlay on CI's throwaway cluster (.github/workflows/docker.yml,
+# deploy-smoke): the same image pin, a smoke model registered on a
+# throwaway tracking server (scripts/serving/smoke_model.py), and smaller
+# requests for the runner.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../kind
+configMapGenerator:
+  - name: serving-model
+    namespace: mhd-serving
+    behavior: replace
+    literals:
+      - MHD_MODEL_URI=models:/mhd-surrogate-smoke@champion
+patches:
+  - target:
+      kind: Deployment
+      name: serve
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests
+        value:
+          cpu: 500m
+          memory: 512Mi

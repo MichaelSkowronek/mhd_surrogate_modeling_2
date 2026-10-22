@@ -1,0 +1,51 @@
+# The forecast service on the local kind cluster, as Argo CD deploys it from
+# main (deploy/argocd/apps/serving.yaml).
+#
+# Two pins, both changed by pull request:
+# - the image tag: the content hash of the image's inputs, which the
+#   pre-commit hook writes (scripts/serving/image_tag.py --pin) and CI
+#   checks, so the pushed image CI built from this code is the one deployed;
+# - the model version: registry version, not alias, so a model change is a
+#   change of this file (and the ConfigMap's hash suffix rolls the
+#   Deployment), not a lookup each pod makes when it starts.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+images:
+  - name: mhd-surrogate-serve
+    newName: ghcr.io/michaelskowronek/mhd-surrogate-serve
+    newTag: "9795b3dc250ee839"
+configMapGenerator:
+  - name: serving-model
+    namespace: mhd-serving
+    literals:
+      - MHD_MODEL_URI=models:/mhd-surrogate/1
+patches:
+  # The tracking server runs on the host (docker-compose.yml), published on
+  # port 5000, and the host is the kind network's gateway
+  # (deploy/kind/create-cluster.sh). `mlflow` is the name the server's
+  # --allowed-hosts accepts. A Service with a hand-made EndpointSlice would
+  # be the usual way, but Argo CD doesn't sync EndpointSlices (they're on
+  # its default exclusion list); a tracking stack in the cluster would
+  # replace this with its Service.
+  - target:
+      kind: Deployment
+      name: serve
+    patch: |-
+      - op: add
+        path: /spec/template/spec/hostAliases
+        value:
+          - ip: 172.30.0.1
+            hostnames: [mlflow]
+  # Reachable from the host on localhost:8080 (deploy/kind/cluster.yaml).
+  - target:
+      kind: Service
+      name: serve
+    patch: |-
+      - op: add
+        path: /spec/type
+        value: NodePort
+      - op: add
+        path: /spec/ports/0/nodePort
+        value: 30080

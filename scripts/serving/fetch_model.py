@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 from pathlib import Path
 
@@ -35,8 +36,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument(
         "--model-uri",
-        required=True,
-        help="models:/<name>/<version>, models:/<name>@<alias> or models:/<model id>",
+        default=os.environ.get("MHD_MODEL_URI"),
+        help="models:/<name>/<version>, models:/<name>@<alias> or models:/<model id> "
+        "(default: $MHD_MODEL_URI)",
     )
     parser.add_argument(
         "--tracking-uri",
@@ -45,12 +47,18 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--dest", type=Path, required=True)
     add_log_level_arg(parser)
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not args.model_uri:
+        parser.error("give --model-uri or set MHD_MODEL_URI")
+    return args
 
 
 def main() -> None:
     args = parse_args()
     setup_logging(args.log_level)
+    # MLflow downloads a model's files on more threads than urllib3 keeps
+    # connections for, which it warns about for every file; harmless.
+    logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
     tracking_uri = args.tracking_uri or yaml.safe_load(DEFAULT_TRACKING.read_text())["tracking_uri"]
     fetched = fetch(args.model_uri, tracking_uri, args.dest)
     print(fetched.model_dump_json(indent=2))

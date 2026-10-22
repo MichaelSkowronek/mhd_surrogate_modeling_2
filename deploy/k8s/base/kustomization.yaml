@@ -1,0 +1,15 @@
+# The forecast service (src/mhd_surrogate/serving/), environment-neutral:
+# the overlays pin the image and the model version and say how to reach the
+# tracking server (README, "Kubernetes").
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: mhd-serving
+labels:
+  - pairs:
+      app.kubernetes.io/name: mhd-surrogate-serve
+      app.kubernetes.io/part-of: mhd-surrogate
+    includeSelectors: true
+resources:
+  - namespace.yaml
+  - deployment.yaml
+  - service.yaml

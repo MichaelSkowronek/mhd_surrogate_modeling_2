@@ -131,3 +131,69 @@ jobs:
 
       - if: always()
         run: docker compose down
+
+  # The serving image deployed the way the cluster runs it (README,
+  # "Kubernetes"): deploy/k8s/overlays/ci (the kind overlay with a smoke
+  # model) on a throwaway kind cluster, with the image build-and-test pushed
+  # -- the pinned one, which the tests check is this commit's -- and a
+  # throwaway tracking server on the runner standing in for the compose
+  # stack. Then the service must answer as deployed.
+  deploy-smoke:
+    needs: build-and-test
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - id: serve
+        run: python3 scripts/serving/image_tag.py --github-output >> "$GITHUB_OUTPUT"
+
+      - run: |
+          deploy/install-tools.sh kind kubectl kubeconform
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - run: deploy/validate.sh
+
+      - uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - run: docker pull "${{ steps.serve.outputs.image }}"
+
+      # On the host network, so the cluster reaches it at the kind network's
+      # gateway, as it reaches the compose stack locally. `mlflow:5000` is
+      # the host the pods name it by.
+      - name: Tracking server with a smoke model
+        env:
+          IMAGE: ${{ steps.serve.outputs.image }}
+        run: |
+          docker run -d --name mlflow --network host "$IMAGE" mlflow server \
+            --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:////tmp/mlflow.db \
+            --serve-artifacts --artifacts-destination /tmp/artifacts \
+            --allowed-hosts mlflow:5000,localhost:5000
+          timeout 120 sh -c 'until curl -sf http://localhost:5000/health; do sleep 2; done'
+          docker run --rm --network host "$IMAGE" \
+            python scripts/serving/smoke_model.py --tracking-uri http://localhost:5000
+
+      - run: deploy/kind/create-cluster.sh
+
+      - run: kind load docker-image "${{ steps.serve.outputs.image }}" --name mhd
+
+      - run: |
+          kubectl apply -k deploy/k8s/overlays/ci
+          kubectl -n mhd-serving rollout status deployment/serve --timeout=300s
+
+      - run: |
+          docker run --rm --network host "${{ steps.serve.outputs.image }}" \
+            python scripts/serving/smoke_check.py --url http://localhost:8080 \
+            --expect-name mhd-surrogate-smoke
+
+      - if: failure()
+        run: |
+          kubectl -n mhd-serving get all || true
+          kubectl -n mhd-serving describe pods || true
+          kubectl -n mhd-serving logs deployment/serve --all-containers --prefix || true
+          docker logs mlflow || true
