@@ -9,6 +9,7 @@ from mhd_surrogate.models.baselines import Persistence
 from mhd_surrogate.serving import app as app_module
 from mhd_surrogate.serving.app import app_from_env, create_app
 from mhd_surrogate.serving.fetch import FetchedModel, fetch
+from mhd_surrogate.serving.metrics import Reference
 from mhd_surrogate.serving.schemas import ServeSettings
 from mhd_surrogate.serving.stream import MEDIA_TYPE, encode, read_arrays
 
@@ -251,3 +252,50 @@ def test_app_from_env_serves_the_fetched_model(stores, promoted, tmp_path, monke
     response = post(client, encode(np.zeros((0, *FRAME), np.float32)), n_steps=3)
     (forecast,) = read_arrays([response.content])
     assert (forecast == model.mean).all() and forecast.shape == (3, *FRAME)
+
+
+def metric(client: TestClient, name: str, **labels) -> float | None:
+    return client.app.state.metrics.registry.get_sample_value(name, labels or None)
+
+
+def test_metrics_count_requests_forecasts_and_their_frames():
+    client = serve()
+
+    post(client, encode(context()), n_steps=7, block_steps=3)
+    post(client, b"garbage", n_steps=1)
+
+    requests = "mhd_serve_requests_total"
+    forecast = {"route": "/v1/forecast", "method": "POST"}
+    assert metric(client, requests, **forecast, status="200") == 1
+    assert metric(client, requests, **forecast, status="400") == 1
+    assert metric(client, "mhd_forecast_frames_total") == 7
+    assert metric(client, "mhd_forecast_duration_seconds_count") == 1
+    # Persistence repeats the context's last frame: every block's energy is its.
+    assert metric(client, "mhd_forecast_energy_ratio_count") == 3
+    assert metric(client, "mhd_forecast_energy_ratio_sum") == pytest.approx(3.0)
+    assert metric(client, "mhd_forecasts_inflight") == 0
+    exposition = client.get("/metrics")
+    assert exposition.status_code == 200
+    assert 'mhd_model_info{checkpoint_sha256="abc"' in exposition.text
+
+
+def test_drift_is_measured_if_the_model_has_a_reference():
+    reference = Reference(channel_names=["u_x", "u_y"], mean=[0.0, 0.0], std=[1.0, 1.0])
+
+    with_reference = serve(fetched=FETCHED.model_copy(update={"reference": reference}))
+    without = serve()
+    for client in (with_reference, without):
+        post(client, encode(context()), n_steps=1)
+
+    assert metric(with_reference, "mhd_context_std_ratio_count", channel="u_y") == 1
+    assert metric(without, "mhd_context_std_ratio_count", channel="u_y") is None
+
+
+def test_a_forecast_that_fails_mid_stream_is_counted():
+    client = serve(FailsAfterOneBlock())
+
+    post(client, encode(context()), n_steps=6, block_steps=2)
+
+    assert metric(client, "mhd_forecasts_failed_total") == 1
+    assert metric(client, "mhd_forecast_duration_seconds_count") == 0
+    assert metric(client, "mhd_forecasts_inflight") == 0

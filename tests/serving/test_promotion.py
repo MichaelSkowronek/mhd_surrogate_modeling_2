@@ -216,3 +216,18 @@ def test_registered_model_id_is_the_model_id_or_else_the_models_uri_source():
     assert registered_model_id(version(source="models:/m-2")) == "m-2"
     with pytest.raises(ValueError, match="has no logged model"):
         registered_model_id(version(source="s3://bucket/model"))
+
+
+def test_the_reference_statistics_are_a_tag_of_the_version_new_or_registered(
+    stores, logged_checkpoint
+):
+    _, checkpoint, _ = logged_checkpoint()
+    first = {"channel_names": ["u_x"], "mean": [1.0], "std": [2.0]}
+    second = {"channel_names": ["u_x"], "mean": [1.5], "std": [2.0]}
+
+    run_promote(checkpoint, stores, reference=first)
+    tags = target_client(stores).get_model_version("surrogate", "1").tags
+    assert json.loads(tags["reference_stats"]) == first
+    run_promote(checkpoint, stores, reference=second)
+    tags = target_client(stores).get_model_version("surrogate", "1").tags
+    assert json.loads(tags["reference_stats"]) == second

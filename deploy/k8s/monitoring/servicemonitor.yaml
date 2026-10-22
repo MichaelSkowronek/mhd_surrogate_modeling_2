@@ -1,0 +1,17 @@
+# Prometheus scrapes the service's /metrics (src/mhd_surrogate/serving/
+# metrics.py) every 15 s. Synced even before the monitoring stack's CRDs
+# exist: Argo CD then retries it (SkipDryRunOnMissingResource).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: serve
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mhd-surrogate-serve
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

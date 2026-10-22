@@ -1,0 +1,59 @@
+# Prometheus, Grafana, Alertmanager and the Prometheus operator: the
+# kube-prometheus-stack chart, pinned. A third-party chart, so Helm (the
+# service's own manifests are Kustomize, deploy/k8s). The service brings its
+# ServiceMonitor and dashboard itself (deploy/k8s/monitoring).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monitoring
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://prometheus-community.github.io/helm-charts
+    chart: kube-prometheus-stack
+    targetRevision: 92.2.0
+    helm:
+      releaseName: monitoring
+      valuesObject:
+        # kind's control-plane components listen on localhost only, where
+        # Prometheus can't scrape them: their scrapes would only fail.
+        kubeEtcd:
+          enabled: false
+        kubeControllerManager:
+          enabled: false
+        kubeScheduler:
+          enabled: false
+        kubeProxy:
+          enabled: false
+        prometheus:
+          prometheusSpec:
+            # Select every ServiceMonitor and rule, not only the chart's.
+            serviceMonitorSelectorNilUsesHelmValues: false
+            podMonitorSelectorNilUsesHelmValues: false
+            ruleSelectorNilUsesHelmValues: false
+            retention: 7d
+            resources:
+              requests:
+                cpu: 100m
+                memory: 512Mi
+        grafana:
+          # On localhost:8082 (deploy/kind/cluster.yaml); dashboards from
+          # ConfigMaps labeled grafana_dashboard in any namespace.
+          service:
+            type: NodePort
+            nodePort: 30082
+          sidecar:
+            dashboards:
+              searchNamespace: ALL
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      # The operator's CRDs are too large for client-side apply.
+      - ServerSideApply=true

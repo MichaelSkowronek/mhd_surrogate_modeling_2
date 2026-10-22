@@ -28,11 +28,13 @@ from mlflow.models import Model
 from pydantic import BaseModel
 
 import mlflow
+from mhd_surrogate.serving.metrics import Reference
 from mhd_surrogate.serving.promotion import (
     CHECKPOINT_ARTIFACT,
     DIGEST_TAG,
     MLMODEL,
     MODELS_URI,
+    REFERENCE_TAG,
     registered_model_id,
 )
 from mhd_surrogate.training.export import checkpoint_digest
@@ -51,8 +53,10 @@ class FetchedModel(BaseModel):
     """What was fetched: the registered `name` and `version` (the logged
     model's name and None for a bare logged model), the logged model, its
     checkpoint's content hash, the commit it was trained at, the steps its
-    gate validated a rollout stable for (None if it wasn't gated) and the
-    frame shape (C, Nx, Ny) of its signature."""
+    gate validated a rollout stable for (None if it wasn't gated), the
+    frame shape (C, Nx, Ny) of its signature, and the training data's
+    per-channel statistics, the reference for input drift (None if the
+    registered version has none, `serving/metrics.py`)."""
 
     model_uri: str
     name: str
@@ -63,6 +67,7 @@ class FetchedModel(BaseModel):
     source_commit: str | None
     validated_steps: int | None
     frame_shape: tuple[int, int, int]
+    reference: Reference | None = None
 
 
 def fetch(model_uri: str, tracking_uri: str, destination: Path | str) -> FetchedModel:
@@ -92,6 +97,7 @@ def fetch(model_uri: str, tracking_uri: str, destination: Path | str) -> Fetched
         source_commit=logged.tags.get(COMMIT_TAG),
         validated_steps=_validated_steps(logged),
         frame_shape=_frame_shape(destination / MODEL_DIR),
+        reference=_reference(version),
     )
     (destination / SERVING_JSON).write_text(fetched.model_dump_json(indent=2) + "\n")
     log.info("fetched %s (%s) into %s", model_uri, logged.model_id, destination)
@@ -161,6 +167,12 @@ def _check_checkpoint(model_dir: Path, digest: str) -> None:
 def _validated_steps(logged: LoggedModel) -> int | None:
     values = [m.value for m in logged.metrics or [] if m.key == VALIDATED_STEPS_METRIC]
     return int(values[-1]) if values else None
+
+
+def _reference(version: ModelVersion | None) -> Reference | None:
+    if version is None or REFERENCE_TAG not in version.tags:
+        return None
+    return Reference.model_validate_json(version.tags[REFERENCE_TAG])
 
 
 def _frame_shape(model_dir: Path) -> tuple[int, int, int]:
