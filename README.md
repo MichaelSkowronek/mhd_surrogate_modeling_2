@@ -40,6 +40,8 @@ canonical. Selection now ranks by how long a forecast stays bounded first
 the U-Net is stable over 3000-step rollouts and passes every guardrail
 (skill horizon 10-12 against Hankel DMD's 7; see "Input noise"), making it
 the candidate to replace Hankel DMD as the canonical model.
+Serving is being built: the canonical model is promoted from the experiment
+store to a model registry on the tracking server (see "Serving").
 
 ## Setup
 
@@ -87,6 +89,7 @@ src/mhd_surrogate/   importable package, split by pipeline stage
                      reconstruction
   models/            base (interface), baselines, snapshots, dmd, hankel_dmd, neural, unet, registry,
                      codec (codec interface + registry), pod_codec, latent, latent_linear
+  serving/           promotion
   utils/             logging_config, parallel, jax_cache, jax_determinism, hydra_resolvers
 scripts/             CLI entry points, same split (plus viz/)
   data/              explore_data, convert_to_zarr, compute_stats
@@ -94,7 +97,8 @@ scripts/             CLI entry points, same split (plus viz/)
   viz/               make_video, make_all_videos, make_forecast_video
   training/          train, tune, train_codec
   evaluation/        check_rollout_stability, evaluate_checkpoint, gate_checkpoint
-tests/               mirrors src/ and scripts/ (data/, analysis/, training/, evaluation/, models/, utils/, viz/)
+  serving/           promote
+tests/               mirrors src/ and scripts/ (data/, analysis/, training/, evaluation/, models/, serving/, utils/, viz/)
 dvc.yaml, dvc.lock  data pipeline (raw -> zarr -> stats) and its pinned hashes
 data/raw.dvc         DVC pointer to the raw .npy files (.dvc/ holds the remote config)
 configs/             Hydra tree: config.yaml (tune.yaml for the search, train_codec.yaml for codecs) + data/, dataset/, normalization/, model/, codec/, evaluation/, mlflow/, search/ groups
@@ -1710,7 +1714,8 @@ time (seven identical copies of the current one by 2026-10-21). The model belong
 that run's checkpoint also takes it from any run reusing it. Models are not registered in the Model Registry automatically:
 registering every experiment would bury the meaningful versions, so only the
 shortlist and the test-set finalists (see "How validation and test are used")
-get registered, deliberately. No input example is logged: one real frame is
+get registered, deliberately. The model that is served is registered in a
+registry of its own, on the tracking server (see "Promotion"). No input example is logged: one real frame is
 ~1 MB as JSON, and the signature already pins the shapes.
 
 `src/mhd_surrogate/training/tracking.py`'s `tracked_run` owns the run
@@ -2990,6 +2995,66 @@ end to end, not as a contender; on the real data (a smoke run on the POD
 codec at rank 750) it trains in ~30 s, and its checkpoint, codec included,
 streams a stable 3000-step rollout.
 
+## Serving
+
+The canonical model is served from the MLflow Model Registry on the tracking
+server (see "Tracking stack"), not from the experiment store it was trained
+in. This section grows with the serving step; so far it covers how a model
+gets into that registry.
+
+### Promotion
+
+```bash
+docker compose up -d                  # the tracking server holding the registry
+uv run scripts/serving/promote.py     # after `dvc repro`, on main
+```
+
+`scripts/serving/promote.py` puts the DVC pipeline's gated checkpoint
+(`models/hankel_dmd/model`) into the registered model `mhd-surrogate` on the
+tracking server and points its `champion` alias at it
+(`src/mhd_surrogate/serving/promotion.py`). It refuses anything but the
+gated checkpoint:
+
+- the pipeline up to the `gate` stage is up to date (`dvc status --with-deps
+  gate` is empty), so the checkpoint, its scores and the gate's verdict on
+  disk are the ones `dvc.lock` records, and the gate ran on that checkpoint;
+- `dvc.lock`, `metrics.json` and `gate.json` are committed, at a commit on
+  `origin/main` (the promotion run is tagged with it);
+- the gate passed.
+
+**Why a second store.** The experiment store (the local sqlite one) holds
+every sweep's runs and models; the registry holds only what was promoted,
+on the stack built to be shared (Postgres, S3 artifacts, an HTTP API a
+cluster can reach) -- separate experiment and production registries, the
+"deploy models" pattern. Open-source MLflow can't copy a model version
+between stores (`copy_model_version` stays within one registry), so
+promotion copies the logged model itself: it finds the experiment store's
+logged model holding the checkpoint by content hash (`checkpoint_sha256`,
+which every training run tags, see "Experiment tracking (MLflow)"),
+downloads it, hashes the checkpoint again and uploads it as a new logged
+model on the server. Only the identity fields of its MLmodel (model id, run
+id, artifact location) are rewritten to the copy's; the checkpoint, the
+code, the pinned requirements and the signature are the source's, byte for
+byte. The registry serves the artifact that was trained and gated, not a
+rebuild of it.
+
+**Lineage.** The copy is logged by a run in the server's
+`mhd-surrogate-promotions` experiment. The copy and its registered version
+are tagged with where it came from (`promoted_from.tracking_uri`,
+`promoted_from.model_id`, `promoted_from.run_id` -- the training run in the
+experiment store); the run's params are the data version
+(`data_version.*`, from `dvc.lock`), its artifacts the files that justified
+the promotion (`dvc.lock`, `metrics.json`, `gate.json`), and the validation
+and gate scores are metrics linked to the copy, so its model page shows what
+it scored.
+
+Promoting a checkpoint that is registered already (same `checkpoint_sha256`)
+copies nothing: only the alias moves, to its version. Promoting the 865 MB
+Hankel DMD checkpoint takes ~9 s. A smoke run passes `--allow-unmerged`
+with a dated registered model and experiment (`--name
+smoke-mhd-surrogate-<date> --experiment smoke-tests-<date>`), deleted
+afterwards like any smoke run.
+
 ## Docker
 
 The project ships as a container image so the exact environment (Python
@@ -3105,6 +3170,18 @@ are not meant for anything reachable beyond your machine.
 scripts/training/train.py mlflow=server` logs to it via `localhost:5000`
 (the `mlflow/server.yaml` config); the default `mlflow=local` still uses the
 SQLite file and needs no containers.
+
+**Large artifacts from outside the stack.** For an artifact of 500 MB or
+more, the MLflow server (3.16, on an S3 store) advertises presigned
+multipart transfers: the client sends or fetches the parts straight from the
+object store, at the address the server knows it by, `seaweedfs:8333`, which
+resolves only inside the compose network. A client outside it -- the host, a
+Kubernetes pod -- sets `MLFLOW_ENABLE_PROXY_MULTIPART_UPLOAD=false` and
+`MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD=false`, so these go through the
+server like every smaller artifact; `scripts/serving/promote.py` sets both.
+Without them an upload fails on the unresolvable name and a download keeps
+retrying it. `train.py mlflow=server` from the host with a checkpoint that
+large (Hankel DMD's 865 MB) needs them exported too.
 
 The default image is CPU-only; `app-gpu` adds the CUDA build of JAX (see
 "GPU image").
