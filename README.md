@@ -67,8 +67,8 @@ uv run python -c "import jax; print(jax.devices())"   # [CudaDevice(id=0)]
 The default Docker image is CPU-only; see "GPU image" under Docker below.
 
 **Kubernetes.** `deploy/install-tools.sh` installs the pinned kind, kubectl,
-helm, kubeconform and argocd into `~/.local/bin`, each checked against its
-release's checksum (see "Kubernetes" under Serving).
+helm, kubeconform, argocd and promtool into `~/.local/bin`, each checked
+against its release's checksum (see "Kubernetes" under Serving).
 `train.py` sets `XLA_PYTHON_CLIENT_PREALLOCATE=false` (and `app-gpu` sets it in
 the container): JAX's default of preallocating 75% of GPU memory fails under
 WSL with the desktop on the same GPU, and retries with a burst of
@@ -3211,7 +3211,7 @@ from forks don't push: they get no token that can.
 ### Kubernetes
 
 ```bash
-deploy/install-tools.sh          # kind, kubectl, helm, kubeconform, argocd: pinned, checksummed
+deploy/install-tools.sh          # kind, kubectl, helm, kubeconform, argocd, promtool: pinned, checksummed
 docker compose up -d             # the tracking server the cluster fetches models from
 deploy/kind/create-cluster.sh    # the kind cluster `mhd`
 deploy/argocd/bootstrap.sh       # Argo CD; from then on the cluster follows main
@@ -3381,9 +3381,28 @@ labeled ConfigMap.
     since their made-up contexts would read as drift (the smoke check's
     random frames did, at 2.4 times the training std of `u_y`, until it
     was marked).
-- **No alert rules yet.** Their thresholds are a decision of the same kind
-  as the selection rule's guardrails, so they come with their measured basis
-  (above) for review first. Alertmanager runs, with nothing to route.
+- **Alerts** (`deploy/k8s/monitoring/alerts.yaml`, a PrometheusRule). The
+  model alerts' thresholds are a decision of the same kind as the selection
+  rule's guardrails, set on the measured basis above:
+
+  | Alert | Fires when | Basis |
+  |---|---|---|
+  | `ForecastServiceDown` (critical) | no server answered a scrape for 5 min | |
+  | `ForecastsFailing` | a forecast failed mid-stream within 15 min | |
+  | `ForecastServiceSaturated` | over 20% of forecast requests got 503 in 15 min | one forecast per pod: add replicas |
+  | `ForecastBlowUp` (critical) | a block had over 2x its context's energy in 15 min | the stability check's 2x; truth <= 1.05x, Hankel DMD <= 0.85x |
+  | `ForecastCollapse` | the median block energy fell below 0.5x the context's in 1 h | Hankel DMD damps to 0.72x, no lower |
+  | `ForecastInputDrift` | a channel's 5th/95th percentile mean shift beyond +-0.1 training stds in 1 h | train and val contexts within +-0.025 |
+  | `ForecastInputScaleDrift` | a channel's 5th/95th percentile std ratio outside 0.7-1.5 in 1 h | train and val contexts at 0.83-1.22 |
+
+  `tests/serving/test_alert_rules.py` runs promtool's rule unit tests on
+  synthetic series of the server's own metrics -- its buckets, its label
+  formatting -- so each alert is checked to fire when it should and to stay
+  quiet otherwise (a threshold moved from 2x to 3x fails it); CI installs
+  promtool, of the Prometheus version the stack runs. Live, on the cluster,
+  Prometheus loads all seven, healthy and quiet under real validation
+  traffic. Alertmanager receives them, with no receiver configured to
+  notify yet.
 - **kind specifics.** The chart's scrapes of etcd, the controller manager,
   the scheduler and kube-proxy are off: kind runs those bound to localhost,
   where Prometheus can't reach them, and they would only fail. Prometheus

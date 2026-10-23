@@ -182,11 +182,15 @@ jobs:
 
       - run: kind load docker-image "${{ steps.serve.outputs.image }}" --name mhd
 
-      # The overlay brings a ServiceMonitor (deploy/k8s/monitoring), whose
-      # CRD the monitoring stack installs on the real cluster: here only the
-      # CRD, of the operator version that stack runs.
+      # The overlay brings a ServiceMonitor and a PrometheusRule
+      # (deploy/k8s/monitoring), whose CRDs the monitoring stack installs on
+      # the real cluster: here only the CRDs, of the operator version that
+      # stack runs.
       - run: |
-          kubectl apply --server-side -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.94.1/example/prometheus-operator-crd/monitoring.coreos.com_servicemonitors.yaml
+          crds=https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.94.1/example/prometheus-operator-crd
+          for kind in servicemonitors prometheusrules; do
+            kubectl apply --server-side -f "$crds/monitoring.coreos.com_$kind.yaml"
+          done
 
       - run: |
           kubectl apply -k deploy/k8s/overlays/ci
