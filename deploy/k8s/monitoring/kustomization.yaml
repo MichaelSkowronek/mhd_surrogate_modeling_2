@@ -1,12 +1,13 @@
 # What the monitoring stack (deploy/argocd/apps/monitoring.yaml) needs from
-# the service: a ServiceMonitor, so Prometheus scrapes its /metrics, and its
-# Grafana dashboard. Apart from base/ so the base's selector labels stay off
+# the service: a ServiceMonitor, so Prometheus scrapes its /metrics, its
+# alert rules and its Grafana dashboard. Apart from base/ so the base's selector labels stay off
 # them.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: mhd-serving
 resources:
   - servicemonitor.yaml
+  - alerts.yaml
 configMapGenerator:
   - name: forecast-service-dashboard
     files:

@@ -1,0 +1,95 @@
+# The forecast service's alerts (README, "Monitoring"), on the metrics of
+# src/mhd_surrogate/serving/metrics.py. The model alerts' thresholds come
+# with their measured basis (train and validation data only), reviewed
+# like the selection rule's guardrails; tests/serving/test_alert_rules.py
+# checks each fires when it should and not otherwise (promtool test rules).
+# Synced even before the monitoring stack's CRDs exist: Argo CD then retries
+# it (SkipDryRunOnMissingResource).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: forecast-service
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  groups:
+    - name: forecast-service
+      rules:
+        - alert: ForecastServiceDown
+          expr: absent(up{namespace="mhd-serving", job="serve"} == 1)
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: No forecast server has answered a scrape for 5 minutes.
+        - alert: ForecastsFailing
+          expr: sum(increase(mhd_forecasts_failed_total[15m])) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: A forecast failed after its response had started.
+            description: >-
+              The client saw a stream cut short; the server's log has the
+              traceback.
+        - alert: ForecastServiceSaturated
+          expr: >-
+            sum(rate(mhd_serve_requests_total{route="/v1/forecast", status="503"}[15m]))
+            / sum(rate(mhd_serve_requests_total{route="/v1/forecast"}[15m])) > 0.2
+          labels:
+            severity: warning
+          annotations:
+            summary: Over 20% of forecast requests were refused as busy in 15 minutes.
+            description: >-
+              Every pod was forecasting (one forecast per pod at a time);
+              more replicas would serve them.
+        - alert: ForecastBlowUp
+          expr: >-
+            sum(increase(mhd_forecast_energy_ratio_bucket{le="+Inf"}[15m]))
+            - sum(increase(mhd_forecast_energy_ratio_bucket{le="2.0"}[15m])) > 0
+          labels:
+            severity: critical
+          annotations:
+            summary: A forecast block had over twice its context's kinetic energy.
+            description: >-
+              The selection rule's stability check fails a block at 2x the
+              truth's largest; the validation truth's blocks stay at
+              1.00-1.05x their context's, Hankel DMD's forecast at 0.72-0.85x.
+        - alert: ForecastCollapse
+          expr: >-
+            histogram_quantile(0.5, sum by (le) (rate(mhd_forecast_energy_ratio_bucket[1h])))
+            < 0.5
+          labels:
+            severity: warning
+          annotations:
+            summary: Forecasts' median block energy fell below half their context's in 1 hour.
+            description: >-
+              Hankel DMD's forecast damps to 0.72x its context's energy and
+              no lower; the validation truth stays at 1.00-1.05x.
+        - alert: ForecastInputDrift
+          expr: >-
+            histogram_quantile(0.95, sum by (le, channel) (rate(mhd_context_mean_shift_bucket[1h])))
+            > 0.1
+            or
+            histogram_quantile(0.05, sum by (le, channel) (rate(mhd_context_mean_shift_bucket[1h])))
+            < -0.1
+          labels:
+            severity: warning
+          annotations:
+            summary: Contexts' channel means moved beyond 0.1 training stds in 1 hour.
+            description: >-
+              Training and validation contexts (4-frame windows) stay within
+              0.025 training stds of the training mean.
+        - alert: ForecastInputScaleDrift
+          expr: >-
+            histogram_quantile(0.95, sum by (le, channel) (rate(mhd_context_std_ratio_bucket[1h])))
+            > 1.5
+            or
+            histogram_quantile(0.05, sum by (le, channel) (rate(mhd_context_std_ratio_bucket[1h])))
+            < 0.7
+          labels:
+            severity: warning
+          annotations:
+            summary: Contexts' channel stds left 0.7-1.5 times the training std in 1 hour.
+            description: >-
+              Training and validation contexts (4-frame windows) stay at
+              0.83-1.22 times the training std.

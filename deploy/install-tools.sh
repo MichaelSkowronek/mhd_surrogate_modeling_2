@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Install the pinned Kubernetes tools into ~/.local/bin (Linux x86-64), each
+# Install the pinned Kubernetes and monitoring tools into ~/.local/bin (Linux x86-64), each
 # checked against its release's SHA-256 checksum. With arguments, only those
-# tools (CI's deploy-smoke job needs kind, kubectl and kubeconform):
+# tools (CI's deploy-smoke job needs kind, kubectl and kubeconform, its
+# tests job promtool):
 #
 #   deploy/install-tools.sh                         # all of them
 #   deploy/install-tools.sh kind kubectl kubeconform
@@ -12,6 +13,7 @@ KUBECTL=v1.37.1        # Kubernetes 1.37, the kind node's version
 HELM=v4.3.1
 KUBECONFORM=v0.8.0
 ARGOCD=v3.5.6          # the version deploy/argocd/install installs
+PROMETHEUS=3.15.0      # promtool, of the Prometheus the monitoring stack runs
 
 BIN="$HOME/.local/bin"
 mkdir -p "$BIN"
@@ -62,7 +64,16 @@ install_argocd() {
   install -m 0755 argocd "$BIN/"
 }
 
-for tool in "${@:-kind kubectl helm kubeconform argocd}"; do
+install_promtool() {
+  local base=https://github.com/prometheus/prometheus/releases/download/v$PROMETHEUS
+  local archive=prometheus-$PROMETHEUS.linux-amd64.tar.gz
+  curl -fsSLo prometheus.tgz "$base/$archive"
+  check prometheus.tgz "$(curl -fsSL "$base/sha256sums.txt" | awk -v a="$archive" '$2 == a {print $1}')"
+  tar -xzf prometheus.tgz "prometheus-$PROMETHEUS.linux-amd64/promtool"
+  install -m 0755 "prometheus-$PROMETHEUS.linux-amd64/promtool" "$BIN/"
+}
+
+for tool in "${@:-kind kubectl helm kubeconform argocd promtool}"; do
   for name in $tool; do
     "install_$name"
     echo "installed $name"
