@@ -64,7 +64,7 @@ class ServeMetrics:
     """The metrics of one app serving `model` (the `ModelInfo` fields
     `name`, `version`, `model_id`, `model_type`, `checkpoint_sha256`)."""
 
-    def __init__(self, model: dict[str, str], reference: Reference | None):
+    def __init__(self, model: dict[str, str | None], reference: Reference | None):
         self.registry = CollectorRegistry()
         self.reference = reference
         options = {"registry": self.registry}
@@ -109,7 +109,9 @@ class ServeMetrics:
             buckets=SCALE_BUCKETS,
             **options,
         )
-        Info("mhd_model", "The model served", **options).info(model)
+        # A bare logged model has no version: an empty label, not None.
+        info = {key: "" if value is None else str(value) for key, value in model.items()}
+        Info("mhd_model", "The model served", **options).info(info)
 
     def observe_context(self, frames: np.ndarray) -> float | None:
         """Record the drift of the context `frames` (the ones the model

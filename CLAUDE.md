@@ -97,7 +97,9 @@ conventions below; it shifts which tools are worth reaching for at all.
   canonical model's `train` stage, which stores the checkpoint -> its
   `evaluate` stage, which scores it into `metrics.json` -> its `gate`
   stage, which fails `dvc repro` unless the checkpoint still meets the bar
-  that made it canonical), run with `uv run dvc repro`. Don't
+  that made it canonical; and `serve_parity`, which fails unless the
+  serving code serves that checkpoint's own forecast), run with
+  `uv run dvc repro`. Don't
   rebuild the zarr, the stats or the canonical model by running the scripts
   by hand and leave `dvc.lock` out of date: a new pipeline step or
   dependency goes in `dvc.yaml`, and `dvc.lock` is committed with the change
@@ -210,7 +212,7 @@ conventions below; it shifts which tools are worth reaching for at all.
   out of the DVC `train` stage's deps while a non-neural model is
   canonical: the deps list exactly what `train.py` imports (checked by
   `tests/training/test_dvc_train_stage.py`, which does the same for the
-  `evaluate` stage and `scripts/evaluation/evaluate_checkpoint.py`). Code
+  `evaluate`, `gate` and `serve_parity` stages' entry points). Code
   early stopping needs goes in `evaluation/selection.py` (and what it
   imports); evaluation-only code (diagnostics, ensemble scores) must stay
   out of `train.py`'s imports -- `run.py` reaches the final scoring
@@ -297,6 +299,12 @@ conventions below; it shifts which tools are worth reaching for at all.
   are deleted afterwards like any smoke run.
 - The server loads a checkpoint with the image's code, not the pyfunc's
   `code_paths` copy, so the image must read the served checkpoint's format.
+- The serving code is a DVC dependency: all of `serving/` is a dep of the
+  `serve_parity` stage, which serves the canonical model's validation
+  forecast in process and fails unless it equals the offline one within
+  `serving.parity_tolerance` (1e-4 of the truth's std). A pull request that
+  changes serving code runs `dvc repro serve_parity` and commits `dvc.lock`
+  and the verdict with it; a new serving module needs no dvc.yaml edit.
 - MLflow clients outside the compose network (the host, pods) set
   `MLFLOW_ENABLE_PROXY_MULTIPART_UPLOAD=false` and
   `MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD=false`: for artifacts of 500 MB or

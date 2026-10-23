@@ -11,6 +11,7 @@ defaults:
   - normalization: per_channel
   - model: mean_field
   - evaluation: default
+  - serving: default
   - mlflow: local
   - override hydra/job_logging: project
   - override hydra/hydra_logging: none

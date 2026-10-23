@@ -1,5 +1,5 @@
-"""The DVC `train`, `evaluate` and `gate` stages' code deps must cover
-everything their entry points import.
+"""The DVC `train`, `evaluate`, `gate` and `serve_parity` stages' code deps
+must cover everything their entry points import.
 
 They're listed module by module (not the whole package) so unrelated edits
 don't force a re-run; a module an entry point starts importing without being
@@ -51,6 +51,7 @@ def module_files(module: str) -> list[Path]:
 TRAIN = ROOT / "scripts" / "training" / "train.py"
 EVALUATE = ROOT / "scripts" / "evaluation" / "evaluate_checkpoint.py"
 GATE = ROOT / "scripts" / "evaluation" / "gate_checkpoint.py"
+SERVE_PARITY = ROOT / "scripts" / "serving" / "serve_parity.py"
 
 
 def stage(name: str) -> dict:
@@ -96,7 +97,8 @@ def train_import_closure() -> set[Path]:
 
 
 @pytest.mark.parametrize(
-    "name, entry_point", [("train", TRAIN), ("evaluate", EVALUATE), ("gate", GATE)]
+    "name, entry_point",
+    [("train", TRAIN), ("evaluate", EVALUATE), ("gate", GATE), ("serve_parity", SERVE_PARITY)],
 )
 def test_stage_deps_cover_everything_its_entry_point_imports(name, entry_point):
     deps = [ROOT / dep for dep in stage(name)["deps"]]
@@ -156,3 +158,15 @@ def test_trained_model_module_follows_the_model_override():
     cmd = "uv run scripts/training/train.py model=persistence export.dir=x"
 
     assert trained_model_module(cmd) == "mhd_surrogate.models.baselines"
+
+
+def test_serve_parity_serves_what_train_stored_on_the_cpu():
+    """The pod forecasts on the CPU, so the parity is checked there, and it
+    runs all of the serving code (its whole package is a dep)."""
+    train, parity = stage("train"), stage("serve_parity")
+    (checkpoint,) = train["outs"]
+
+    assert checkpoint in parity["deps"]
+    assert f"checkpoint={checkpoint}" in parity["cmd"].split()
+    assert parity["cmd"].split()[0] == "JAX_PLATFORMS=cpu"
+    assert "src/mhd_surrogate/serving" in parity["deps"]

@@ -1,0 +1,10 @@
+# The forecast service's checks against the canonical model.
+#
+# parity_tolerance: the DVC `serve_parity` stage's bound on how far the
+#   served validation forecast may differ from the offline one
+#   (src/mhd_surrogate/serving/parity.py), in units of the truth's standard
+#   deviation, anywhere in the forecast. The service streams in blocks, which
+#   rounds differently from one call: 5.2e-6 for Hankel DMD on the CPU. This
+#   is about 20 times that, so a change to the block arithmetic passes and a
+#   change in what the service serves doesn't.
+parity_tolerance: 1.0e-4

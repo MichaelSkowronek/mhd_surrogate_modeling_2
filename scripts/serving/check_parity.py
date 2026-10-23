@@ -1,4 +1,4 @@
-"""Check that the forecast service serves the model's own forecast.
+"""Check that a running forecast service serves the model's own forecast.
 
 Sends the validation dataset's context (its first `context_steps` frames,
 configs/data/re16k.yaml) to the service, streams back the forecast, and
@@ -7,7 +7,10 @@ compares it with the forecast the same fetched model makes offline,
 Both must run on the same JAX backend to agree beyond float rounding: the
 service in the image runs on the CPU, so run this with `JAX_PLATFORMS=cpu`.
 Exits 1 if they differ by more than `--tolerance` (relative to the truth's
-standard deviation). The test dataset is never read.
+standard deviation). The DVC `serve_parity` stage makes the same check in
+process, on every change to the serving code (scripts/serving/serve_parity.py);
+this one is for a deployed service, over HTTP. The test dataset is never
+read.
 
 Usage:
     JAX_PLATFORMS=cpu uv run scripts/serving/check_parity.py --model-dir models/served
@@ -28,6 +31,7 @@ from mhd_surrogate.evaluation.protocol import forecast
 from mhd_surrogate.models.registry import load_model
 from mhd_surrogate.serving.client import ForecastClient
 from mhd_surrogate.serving.fetch import MODEL_DIR, checkpoint_path, load_fetched
+from mhd_surrogate.serving.parity import relative_difference
 from mhd_surrogate.utils.logging_config import add_log_level_arg, setup_logging
 
 log = logging.getLogger(__name__)
@@ -42,12 +46,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tolerance", type=float, default=1e-5)
     add_log_level_arg(parser)
     return parser.parse_args()
-
-
-def relative_difference(served: np.ndarray, offline: np.ndarray, truth: np.ndarray) -> float:
-    """The largest pointwise difference of two forecasts, in units of the
-    truth's standard deviation."""
-    return float(np.max(np.abs(served - offline)) / np.std(truth))
 
 
 def rmse(prediction: np.ndarray, truth: np.ndarray) -> float:
