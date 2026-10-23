@@ -18,12 +18,18 @@ conventions below; it shifts which tools are worth reaching for at all.
 
 - Organize code by pipeline stage. Under `src/mhd_surrogate/` the
   subpackages are `data/`, `analysis/`, `models/`, `training/`,
-  `evaluation/` and `utils/`; under `scripts/` the subdirectories are
-  `data/`, `analysis/`, `viz/`, `training/` and `evaluation/`. Put new code in the one
+  `evaluation/`, `serving/` and `utils/`; under `scripts/` the subdirectories are
+  `data/`, `analysis/`, `viz/`, `training/`, `evaluation/` and `serving/`. Put new code in the one
   matching its stage rather than at the top level of `src/mhd_surrogate/` or
   `scripts/`, and add a new subpackage/subdirectory only when a genuinely new
   stage appears.
 - Mirror that structure in `tests/` (`tests/data/`, `tests/analysis/`, ...).
+  The test directories have no `__init__.py`, so a test module's basename
+  must be unique across `tests/` (`tests/serving/test_serving_metrics.py`,
+  not a second `test_metrics.py`).
+- The Kubernetes side lives in `deploy/`: `kind/` (the local cluster),
+  `k8s/` (Kustomize base, overlays and the service's own monitoring and
+  smoke-check pieces), `argocd/` (Argo CD's installation and Applications).
 - Hydra configs live in the `configs/` tree (`config.yaml` plus its groups).
   Plain-YAML configs read directly by the data/analysis scripts live in
   `configs/analysis/`; don't put them inside a Hydra group directory, where
@@ -72,7 +78,8 @@ conventions below; it shifts which tools are worth reaching for at all.
   `gate.max_scores`). They change only with the next switch, never to match
   a retrain: a retrain that fails the gate is a bad draw to investigate (or
   answer with several seeds selected on validation), not a reason to loosen
-  the limits or to retry until it passes.
+  the limits or to retry until it passes. The same pull request promotes and
+  pins the model (see "Serving and deployment").
 - `scripts/analysis/*.py` scripts read `configs/analysis/split.yaml` (via
   `--config`) and analyze each configured dataset's full recorded length
   (`arr.shape[0]`): datasets are held out whole, so no region within a
@@ -260,8 +267,54 @@ conventions below; it shifts which tools are worth reaching for at all.
   source-commit tag from that build arg (`tracked_run`); without it they're
   untagged. Don't add git or mount `.git` instead: the checkout's current
   commit needn't be the one the image was built from.
+- The compose tracking stack has no restart policy: after a reboot, start it
+  (`docker compose up -d`) before anything that needs the registry -- the
+  kind cluster's pods fetch their model from it.
 - See the README's "Docker" section for the full rationale and the
   tracking-stack architecture.
+
+## Serving and deployment
+
+- The cluster follows `main`: Argo CD syncs `deploy/argocd/apps` into the
+  kind cluster and reverts manual changes (`selfHeal`). Don't `kubectl
+  apply` into Argo-managed namespaces to change them; to try a branch on
+  the cluster, remove `automated` from the `root` Application's and the
+  app's sync policy, apply, and restore with `kubectl apply -f
+  deploy/argocd/root.yaml`.
+- The kind overlay's pins are written by tools, never by hand: the image
+  tag by the `serving-image-pin` pre-commit hook (the content hash of the
+  image's inputs; `image_tag.INPUTS` must match what the Dockerfile copies,
+  which a test checks), the model version and its checkpoint hash by
+  `scripts/serving/promote.py`.
+- Making a model canonical, or retraining it, and deploying it are one pull
+  request: after `dvc repro`, run `promote.py` in the pull request and
+  commit the pin it writes. CI fails unless the pinned checkpoint is
+  `dvc.lock`'s, so the merge deploys the checkpoint its own code gated.
+  Promotion doesn't move the `champion` alias: the deployment's post-sync
+  check does, once the version serves. In a stacked pull request, promote
+  only after the rebase onto `main`. Smoke promotions use `--no-pin` with
+  `--name smoke-mhd-surrogate-<date> --experiment smoke-tests-<date>`, and
+  are deleted afterwards like any smoke run.
+- The server loads a checkpoint with the image's code, not the pyfunc's
+  `code_paths` copy, so the image must read the served checkpoint's format.
+- MLflow clients outside the compose network (the host, pods) set
+  `MLFLOW_ENABLE_PROXY_MULTIPART_UPLOAD=false` and
+  `MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD=false`: for artifacts of 500 MB or
+  more the server hands out presigned URLs to `seaweedfs:8333`, which only
+  resolves inside it.
+- Synthetic requests to the service (smoke checks, probes) pass
+  `probe=True` (the `X-Probe` header), so the ML metrics see only real
+  traffic.
+- Don't name a metric label `endpoint`, `job`, `namespace`, `pod`,
+  `service`, `instance` or `container`: the Prometheus operator gives every
+  scraped series those, and pushes the metric's own aside
+  (`exported_endpoint`).
+- Thresholds of the model alerts (`deploy/k8s/monitoring/alerts.yaml`) are
+  decisions like the selection rule's guardrails: proposed with their
+  measured basis, never changed to silence an alert. Every alert has
+  promtool cases (`tests/serving/test_alert_rules.py`) that it fires when
+  it should and not otherwise.
+- See the README's "Serving" section for the full rationale.
 
 ## Code style
 
