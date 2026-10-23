@@ -1,7 +1,9 @@
 # After every sync, the service as deployed must answer, serve the model
-# version the overlay pins and forecast (scripts/serving/smoke_check.py). An
-# Argo CD PostSync hook: a failed check fails the sync in Argo CD, which
-# doesn't roll back (a `git revert` does). The last one is kept until the
+# version the overlay pins and forecast (scripts/serving/smoke_check.py);
+# then the check points the registry's `champion` alias at that version, so
+# the alias names the version verified in service. An Argo CD PostSync
+# hook: a failed check fails the sync in Argo CD and leaves the alias where
+# it was; Argo CD doesn't roll back (a `git revert` does). The last one is kept until the
 # next sync replaces it, for its log. Applied without Argo CD (CI), it runs
 # once, right away.
 apiVersion: batch/v1
@@ -39,6 +41,8 @@ spec:
             - --url=http://serve
             - --wait=300
             - --expect-model-uri=$(MHD_MODEL_URI)
+            - --set-alias=champion
+            - --tracking-uri=http://mlflow:5000
           envFrom:
             - configMapRef:
                 name: serving-model

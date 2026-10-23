@@ -1,7 +1,9 @@
 """Fetch a registered model for the forecast server.
 
-Resolves `--model-uri` on the tracking server, downloads the logged model
-into `--dest`, checks its checkpoint's content hash and records what it is
+Resolves `--model-uri` on the tracking server (it must be the checkpoint
+`--expect-checkpoint-md5` names, the hash the deployment pins next to the
+version), downloads the logged model into `--dest`, checks its
+checkpoint's content hash and records what it is
 (`serving.json`), for the server to load (src/mhd_surrogate/serving/fetch.py).
 Run before the server: an init container in Kubernetes, the `serve-fetch`
 service in docker-compose.yml.
@@ -45,6 +47,11 @@ def parse_args() -> argparse.Namespace:
         default=os.environ.get("MLFLOW_TRACKING_URI"),
         help=f"default: $MLFLOW_TRACKING_URI, else {DEFAULT_TRACKING}'s",
     )
+    parser.add_argument(
+        "--expect-checkpoint-md5",
+        default=os.environ.get("MHD_MODEL_CHECKPOINT_MD5") or None,
+        help="the checkpoint's dvc.lock hash (default: $MHD_MODEL_CHECKPOINT_MD5)",
+    )
     parser.add_argument("--dest", type=Path, required=True)
     add_log_level_arg(parser)
     args = parser.parse_args()
@@ -60,7 +67,7 @@ def main() -> None:
     # connections for, which it warns about for every file; harmless.
     logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
     tracking_uri = args.tracking_uri or yaml.safe_load(DEFAULT_TRACKING.read_text())["tracking_uri"]
-    fetched = fetch(args.model_uri, tracking_uri, args.dest)
+    fetched = fetch(args.model_uri, tracking_uri, args.dest, args.expect_checkpoint_md5)
     print(fetched.model_dump_json(indent=2))
 
 

@@ -12,6 +12,11 @@ serves is fixed when it starts, not looked up per request.
 The downloaded checkpoint must have the content hash the registered version
 (or else the logged model) is tagged with, `checkpoint_sha256`
 (`serving/promotion.py`): a corrupted or partial download is never served.
+And with `checkpoint_md5` -- the hash `dvc.lock` records for the canonical
+checkpoint, which the deployment pins next to the version -- the version
+must be tagged with that one (`checkpoint_dvc_md5`): the deployment never
+fetches a registry version of another checkpoint than the one its commit
+gated.
 A directory that already holds the logged model isn't downloaded again,
 only verified (a restarted pod's init container finds it there).
 """
@@ -31,6 +36,7 @@ import mlflow
 from mhd_surrogate.serving.metrics import Reference
 from mhd_surrogate.serving.promotion import (
     CHECKPOINT_ARTIFACT,
+    CHECKPOINT_MD5_TAG,
     DIGEST_TAG,
     MLMODEL,
     MODELS_URI,
@@ -70,12 +76,21 @@ class FetchedModel(BaseModel):
     reference: Reference | None = None
 
 
-def fetch(model_uri: str, tracking_uri: str, destination: Path | str) -> FetchedModel:
+def fetch(
+    model_uri: str,
+    tracking_uri: str,
+    destination: Path | str,
+    checkpoint_md5: str | None = None,
+) -> FetchedModel:
     """Download the model `model_uri` of the tracking server (or store)
-    `tracking_uri` into `destination` (see the module docstring)."""
+    `tracking_uri` into `destination`, which must be the checkpoint whose
+    `dvc.lock` hash is `checkpoint_md5` if given (see the module
+    docstring)."""
     destination = Path(destination)
     client = mlflow.MlflowClient(tracking_uri=tracking_uri, registry_uri=tracking_uri)
     version = resolve_version(client, model_uri)
+    if checkpoint_md5 is not None:
+        _check_pinned(model_uri, version, checkpoint_md5)
     logged = client.get_logged_model(registered_model_id(version) if version else _id(model_uri))
     digest = (version.tags if version else logged.tags).get(DIGEST_TAG)
     if digest is None:
@@ -129,6 +144,15 @@ def checkpoint_path(model_dir: Path | str) -> Path:
     `checkpoint` artifact, `training/mlflow_model.py`)."""
     flavor = Model.load(Path(model_dir) / MLMODEL).flavors["python_function"]
     return Path(model_dir) / flavor["artifacts"][CHECKPOINT_ARTIFACT]["path"]
+
+
+def _check_pinned(model_uri: str, version: ModelVersion | None, checkpoint_md5: str) -> None:
+    registered = version.tags.get(CHECKPOINT_MD5_TAG) if version is not None else None
+    if registered != checkpoint_md5:
+        raise ValueError(
+            f"the deployment pins checkpoint {checkpoint_md5}, but {model_uri} is "
+            f"{registered or 'not tagged with one'}"
+        )
 
 
 def _id(model_uri: str) -> str:

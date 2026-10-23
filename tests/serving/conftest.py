@@ -53,14 +53,15 @@ def logged_checkpoint(stores, tmp_path):
 @pytest.fixture
 def promoted(stores, logged_checkpoint):
     """`promoted(seed, **kwargs)`: a logged checkpoint promoted to the
-    target store's registered model `NAME` (alias `champion`); returns the
-    model and the `Promotion`."""
+    target store's registered model `NAME` (alias `champion`, unless
+    `kwargs` say otherwise); returns the model and the `Promotion`."""
 
     def run(seed: int = 0, **kwargs):
+        kwargs.setdefault("alias", "champion")
         model, checkpoint, _ = logged_checkpoint(seed)
         source, target = stores
         promotion = promote(
-            checkpoint, source, SOURCE_EXPERIMENT, target, NAME, "champion", EXPERIMENT, **kwargs
+            checkpoint, source, SOURCE_EXPERIMENT, target, NAME, EXPERIMENT, **kwargs
         )
         return model, promotion
 

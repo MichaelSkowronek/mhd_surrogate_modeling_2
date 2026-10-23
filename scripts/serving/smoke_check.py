@@ -6,9 +6,12 @@ if given: `--expect-model-uri` is what the deployment fetched,
 then forecasts `--steps` steps (at most the service's limit) of
 `--members` seeds from a random context of the served model's shape, and
 checks every member's frames arrived, shaped as the model's frames and
-finite. Exits 1 on the first problem. The deployment runs it after every
-sync (an Argo CD PostSync hook, deploy/k8s/smoke-check/), CI's deploy-smoke
-job against its throwaway cluster.
+finite. Exits 1 on the first problem. Then, with `--set-alias`, it points
+that alias of the served registered model at the version it checked: the
+deployment runs it after every sync (an Argo CD PostSync hook,
+deploy/k8s/smoke-check/) and moves `champion` that way, so the alias
+always names the version verified in service. CI's deploy-smoke job runs
+it against its throwaway cluster.
 
 Usage:
     uv run scripts/serving/smoke_check.py --url http://localhost:8080 --expect-version 1
@@ -18,12 +21,14 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import time
 
 import httpx
 import numpy as np
 
+import mlflow
 from mhd_surrogate.serving.client import ForecastClient
 from mhd_surrogate.utils.logging_config import add_log_level_arg, setup_logging
 
@@ -40,6 +45,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expect-name")
     parser.add_argument("--expect-version")
     parser.add_argument("--expect-sha", help="the checkpoint's checkpoint_sha256")
+    parser.add_argument("--set-alias", help="the alias to point at the version, if it passes")
+    parser.add_argument(
+        "--tracking-uri",
+        default=os.environ.get("MLFLOW_TRACKING_URI"),
+        help="the registry --set-alias writes to (default: $MLFLOW_TRACKING_URI)",
+    )
     add_log_level_arg(parser)
     return parser.parse_args()
 
@@ -101,6 +112,15 @@ def main() -> None:
     if not np.isfinite(forecast).all():
         sys.exit("the forecast isn't finite")
     print(f"forecast {members} member(s) x {steps} steps of {info.frame_shape}: ok")
+
+    if args.set_alias:
+        if info.version is None or args.tracking_uri is None:
+            sys.exit("--set-alias needs a registered version and --tracking-uri")
+        registry = mlflow.MlflowClient(
+            tracking_uri=args.tracking_uri, registry_uri=args.tracking_uri
+        )
+        registry.set_registered_model_alias(info.name, args.set_alias, info.version)
+        print(f"{info.name} @{args.set_alias} -> version {info.version}")
 
 
 if __name__ == "__main__":

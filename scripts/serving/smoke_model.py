@@ -4,9 +4,11 @@ Fits a mean field (src/mhd_surrogate/models/baselines.py) on random frames
 of a small shape, logs it in a throwaway experiment store and promotes it to
 the registered model `--name` on `--tracking-uri`
 (src/mhd_surrogate/serving/promotion.py), with a validated horizon of
-`--steps`, as the canonical model is promoted. CI's deploy-smoke job serves
-it from a throwaway kind cluster, having neither the real model nor its
-data.
+`--steps` and the checkpoint hash `--checkpoint-md5` the CI overlay pins
+(deploy/k8s/overlays/ci), as the canonical model is promoted, and points
+the `champion` alias at it, which the CI overlay fetches. CI's
+deploy-smoke job serves it from a throwaway kind cluster, having neither
+the real model nor its data.
 
 Usage:
     python scripts/serving/smoke_model.py --tracking-uri http://localhost:5000
@@ -40,6 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--name", default="mhd-surrogate-smoke")
     parser.add_argument("--frame", type=int, nargs=3, default=[2, 16, 8], metavar=("C", "NX", "NY"))
     parser.add_argument("--steps", type=int, default=100, help="the validated horizon")
+    parser.add_argument("--checkpoint-md5", default="smoke-checkpoint")
     add_log_level_arg(parser)
     return parser.parse_args()
 
@@ -66,9 +69,10 @@ def main() -> None:
             EXPERIMENT,
             args.tracking_uri,
             args.name,
-            "champion",
             f"{args.name}-promotions",
+            alias="champion",
             scores={"gate.rollout_stable_steps": float(args.steps)},
+            checkpoint_md5=args.checkpoint_md5,
         )
     print(f"{promotion.name} version {promotion.version} ({promotion.model_id}) is @champion")
 

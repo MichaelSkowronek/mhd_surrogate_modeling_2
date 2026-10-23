@@ -3016,26 +3016,51 @@ monitored by Prometheus and Grafana.
 
 ```bash
 docker compose up -d                  # the tracking server holding the registry
-uv run scripts/serving/promote.py     # after `dvc repro`, on main
+uv run dvc repro                      # in the pull request: train, evaluate, gate
+git commit dvc.lock models/ ...
+uv run scripts/serving/promote.py     # register the gated checkpoint, pin it
+git commit deploy/k8s/overlays/kind/kustomization.yaml
 ```
 
+Making a model canonical and deploying it is one pull request: the one
+that switches the canonical model or retrains it also promotes and pins it.
 `scripts/serving/promote.py` puts the DVC pipeline's gated checkpoint
 (`models/hankel_dmd/model`) into the registered model `mhd-surrogate` on the
-tracking server and points its `champion` alias at it
-(`src/mhd_surrogate/serving/promotion.py`). It refuses anything but the
+tracking server as a new version (`src/mhd_surrogate/serving/promotion.py`)
+and pins that version, together with the checkpoint's hash as `dvc.lock`
+records it, in the overlay Argo CD deploys. It refuses anything but the
 gated checkpoint:
 
 - the pipeline up to the `gate` stage is up to date (`dvc status --with-deps
   gate` is empty), so the checkpoint, its scores and the gate's verdict on
   disk are the ones `dvc.lock` records, and the gate ran on that checkpoint;
-- `dvc.lock`, `metrics.json` and `gate.json` are committed, at a commit on
-  `origin/main` (the promotion run is tagged with it);
+- `dvc.lock`, `metrics.json` and `gate.json` are committed (the promotion
+  run is tagged with the commit and its tree: on a pull request the head
+  commit, whose tree is the one the squash commit on `main` gets);
 - the gate passed.
+
+**Why in the same pull request.** The server loads the checkpoint with the
+image's code, and every merge deploys a new image. The gate checked one
+pair, a checkpoint and the code at that commit (`test_dvc_lock.py` makes a
+change to the canonical model's code retrain and re-gate it in the same
+pull request). Promoting later, from `main`, left a window in which the
+cluster ran the new code with the previous checkpoint, a pair nothing had
+checked. Now CI checks that the pinned checkpoint is `dvc.lock`'s
+(`test_the_deployed_overlay_pins_the_checkpoint_this_commit_gated`), so a
+pull request that changes the canonical checkpoint can't merge without
+pinning a registered version of exactly it, and the fetch refuses a version
+not tagged with the pinned hash (`checkpoint_dvc_md5`). A retrain that
+reproduces the checkpoint bit for bit (the stages run with deterministic
+ops) changes neither the hash nor the pin.
+
+**`champion` names what serves.** Promotion doesn't move the alias: the
+deployment's post-sync check does, once it has verified the version serving
+(see "Continuous deployment"). A version registered by a pull request that
+never merged is never pinned and never gets the alias.
 
 It also attaches the training data's normalization statistics to the
 version (`reference_stats`), the reference the server measures input drift
-against (see "Monitoring"), and pins the new version in the deployment (see
-"Continuous deployment").
+against (see "Monitoring").
 
 **Why a second store.** The experiment store (the local sqlite one) holds
 every sweep's runs and models; the registry holds only what was promoted,
@@ -3064,9 +3089,9 @@ and gate scores are metrics linked to the copy, so its model page shows what
 it scored.
 
 Promoting a checkpoint that is registered already (same `checkpoint_sha256`)
-copies nothing: only the alias moves, to its version. Promoting the 865 MB
-Hankel DMD checkpoint takes ~9 s. A smoke run passes `--allow-unmerged`
-with a dated registered model and experiment (`--name
+copies nothing: it keeps its version, and only the tags are refreshed.
+Promoting the 865 MB Hankel DMD checkpoint takes ~9 s. A smoke run passes
+`--no-pin` with a dated registered model and experiment (`--name
 smoke-mhd-surrogate-<date> --experiment smoke-tests-<date>`), deleted
 afterwards like any smoke run.
 
@@ -3226,7 +3251,7 @@ strict: an unknown field is an error), in CI too.
 - Non-root, a read-only root filesystem (`/tmp` and the JAX cache are
   emptyDirs), no capabilities, the runtime's default seccomp profile.
 
-**Two pins, both in git.** The kind overlay pins
+**Three pins, all in git.** The kind overlay pins
 - the image tag: the content hash of the image's inputs (see "Image
   publishing"), which the pre-commit hook `serving-image-pin` writes and a
   test checks (`test_the_deployed_overlay_pins_the_image_built_from_this_commit`),
@@ -3235,7 +3260,11 @@ strict: an unknown field is an error), in CI too.
   resolve `@champion` as they start would serve two versions once the alias
   moves, a deployment change nobody reviewed. Through `configMapGenerator`,
   a new version is a ConfigMap with a new name, which changes the Deployment
-  and so rolls it.
+  and so rolls it;
+- next to it, the checkpoint's hash as `dvc.lock` records it
+  (`MHD_MODEL_CHECKPOINT_MD5`): CI checks it is this commit's canonical
+  checkpoint and the init container that the registry's version is tagged
+  with it (see "Promotion").
 
 **Reaching the tracking server.** The registry runs on the host (the compose
 stack, port 5000). kind's node is a container on a Docker network whose
@@ -3280,15 +3309,20 @@ reverted (`selfHeal`).
   throwaway tracking server with a tiny model,
   `scripts/serving/smoke_model.py`, then `scripts/serving/smoke_check.py`
   through the NodePort), and only then can it merge; Argo CD then rolls out
-  that very image. Model: `promote.py` moves `champion` and pins the new
-  version in the kind overlay (`--pin`, the default; `--no-pin` for a smoke
-  run); merging that one-line change deploys it. Rollback is `git revert`.
+  that very image. Model: the pull request that makes a model canonical or
+  retrains it runs `promote.py`, which registers the gated checkpoint and
+  pins its version and hash in the kind overlay (see "Promotion"); merging
+  it deploys the new code and the checkpoint it gated together. Rollback is
+  `git revert`.
 - **Checked after every sync.** A PostSync hook (`deploy/k8s/smoke-check`, a
   Job running `scripts/serving/smoke_check.py` in the cluster) checks the
   service as deployed: it answers, serves the version the overlay pins
   (`--expect-model-uri=$(MHD_MODEL_URI)`, from the same ConfigMap the pod
-  fetched with) and forecasts. A failed check fails the sync in Argo CD; it
-  doesn't roll back (Argo CD doesn't), a `git revert` does. It lives apart
+  fetched with) and forecasts. Then it points the registry's `champion`
+  alias at that version, so `@champion` always names the version verified in
+  service (for anyone reading the registry: notebooks, the compose `serve`
+  service). A failed check fails the sync in Argo CD and leaves the alias
+  where it was; it doesn't roll back (Argo CD doesn't), a `git revert` does. It lives apart
   from `base/` because the base's labels go into selectors, which a Job's
   must not have, and its pod mustn't carry the server's labels, or the
   Service would route requests to it. CI applies it too, without Argo CD,
