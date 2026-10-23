@@ -12,6 +12,8 @@ configMapGenerator:
     behavior: replace
     literals:
       - MHD_MODEL_URI=models:/mhd-surrogate-smoke@champion
+      # scripts/serving/smoke_model.py tags the smoke model with it.
+      - MHD_MODEL_CHECKPOINT_MD5=smoke-checkpoint
 patches:
   - target:
       kind: Deployment

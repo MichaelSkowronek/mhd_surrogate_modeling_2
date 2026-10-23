@@ -121,3 +121,22 @@ def test_the_reference_statistics_come_with_the_version(stores, promoted, tmp_pa
     fetched = fetch("models:/surrogate@champion", stores[1], tmp_path / "served")
 
     assert fetched.reference == Reference(**reference)
+
+
+def test_the_pinned_checkpoint_must_be_the_versions(stores, promoted, tmp_path):
+    promoted(checkpoint_md5="abc.dir")
+
+    fetched = fetch("models:/surrogate/1", stores[1], tmp_path / "a", checkpoint_md5="abc.dir")
+    assert fetched.version == "1"
+    with pytest.raises(ValueError, match="pins checkpoint def.dir, but models:/surrogate/1 is abc"):
+        fetch("models:/surrogate/1", stores[1], tmp_path / "b", checkpoint_md5="def.dir")
+    assert not (tmp_path / "b").exists()
+
+
+def test_a_pinned_checkpoint_needs_a_tagged_version(stores, promoted, tmp_path):
+    _, promotion = promoted()
+
+    with pytest.raises(ValueError, match="is not tagged with one"):
+        fetch("models:/surrogate/1", stores[1], tmp_path / "a", checkpoint_md5="abc.dir")
+    with pytest.raises(ValueError, match="is not tagged with one"):
+        fetch(f"models:/{promotion.model_id}", stores[1], tmp_path / "b", checkpoint_md5="x")

@@ -5,9 +5,12 @@ The DVC pipeline decides which checkpoint is canonical: `train` fits it,
 canonical (dvc.yaml). The experiment store it's logged in (the local sqlite
 one, `configs/mlflow/local.yaml`) holds every sweep's models besides; what
 gets served comes from a registry of its own, the MLflow Model Registry on
-the tracking server (`configs/mlflow/server.yaml`): a registered model whose
-`champion` alias names the version to deploy. Promotion puts the gated
-checkpoint there and moves the alias to it.
+the tracking server (`configs/mlflow/server.yaml`). Promotion registers the
+gated checkpoint there as a version of a registered model; the deployment
+pins that version (README, "Continuous deployment"), and the deployment,
+once it has checked the version serving, points the `champion` alias at
+it, so the alias always names the version verified in service. (A caller
+may still move an alias itself: CI's smoke model has no deployment to.)
 
 Open-source MLflow can't copy a model between stores (`copy_model_version`
 stays within one registry), so `promote` copies the logged model holding the
@@ -27,12 +30,13 @@ version), the data version (params), the files that justified the promotion
 metrics linked to the copy, so its model page shows what it scored.
 
 A checkpoint registered already (same `checkpoint_sha256`) isn't copied
-again: only the alias moves, back to its version.
+again: its version is the one returned.
 
-The training data's per-channel statistics (`reference`), the reference
-the server measures input drift against (`serving/metrics.py`), are a tag
-of the version (`reference_stats`), set on a version registered already
-too.
+Two more tags of the version, set on a version registered already too:
+the training data's per-channel statistics (`reference_stats`), the
+reference the server measures input drift against (`serving/metrics.py`),
+and the checkpoint's hash as `dvc.lock` records it (`checkpoint_dvc_md5`),
+which the deployment pins next to the version and its fetch checks.
 
 That the checkpoint is the gated one is the caller's to check
 (`scripts/serving/promote.py`: the pipeline up to date by `dvc status`,
@@ -66,18 +70,19 @@ CHECKPOINT_ARTIFACT = "checkpoint"
 MLMODEL = "MLmodel"
 MODELS_URI = "models:/"
 REFERENCE_TAG = "reference_stats"
+CHECKPOINT_MD5_TAG = "checkpoint_dvc_md5"
 
 
 @dataclass(frozen=True)
 class Promotion:
-    """The registered version `alias` now points to; `copied` is False when
-    the checkpoint was registered already and only the alias moved."""
+    """The registered version of the checkpoint; `copied` is False when it
+    was registered already, `alias` the alias moved to it, if any."""
 
     name: str
     version: str
     model_id: str
-    alias: str
     copied: bool
+    alias: str | None = None
 
 
 def gate_passed(path: Path | str) -> bool:
@@ -91,24 +96,27 @@ def promote(
     source_experiment: str,
     target_uri: str,
     name: str,
-    alias: str,
     experiment: str,
+    *,
+    alias: str | None = None,
     scores: Mapping[str, float] | None = None,
     params: Mapping[str, str] | None = None,
     records: Sequence[Path | str] = (),
     run_tags: Mapping[str, str] | None = None,
     reference: Mapping[str, Any] | None = None,
+    checkpoint_md5: str | None = None,
 ) -> Promotion:
-    """Point `alias` of the registered model `name` on the tracking server
-    `target_uri` at `checkpoint`, first copying its logged model there from
-    the experiment `source_experiment` of the store `source_uri` unless it's
-    registered already (see the module docstring).
+    """Register `checkpoint` as a version of the registered model `name` on
+    the tracking server `target_uri`, copying its logged model there from the
+    experiment `source_experiment` of the store `source_uri` unless it's
+    registered already (see the module docstring), and point `alias` at it
+    if given.
 
     The copy is logged by a run in `experiment`, tagged `run_tags`, with
     `params` as its params, `records` as its artifacts and `scores` as
     metrics linked to the copy. `reference` (the training data's
     per-channel `channel_names`, `mean` and `std`) becomes the version's
-    `reference_stats` tag.
+    `reference_stats` tag, `checkpoint_md5` its `checkpoint_dvc_md5`.
     """
     digest = checkpoint_digest(checkpoint)
     target = mlflow.MlflowClient(tracking_uri=target_uri, registry_uri=target_uri)
@@ -136,12 +144,14 @@ def promote(
         target.set_terminated(run_id)
     else:
         log.info("checkpoint already registered as %s version %s", name, version.version)
+    number = str(version.version)
     if reference is not None:
-        target.set_model_version_tag(
-            name, str(version.version), REFERENCE_TAG, json.dumps(dict(reference))
-        )
-    target.set_registered_model_alias(name, alias, str(version.version))
-    return Promotion(name, str(version.version), registered_model_id(version), alias, copied)
+        target.set_model_version_tag(name, number, REFERENCE_TAG, json.dumps(dict(reference)))
+    if checkpoint_md5 is not None:
+        target.set_model_version_tag(name, number, CHECKPOINT_MD5_TAG, checkpoint_md5)
+    if alias is not None:
+        target.set_registered_model_alias(name, alias, number)
+    return Promotion(name, number, registered_model_id(version), copied, alias)
 
 
 def registered_version(client: mlflow.MlflowClient, name: str, digest: str) -> ModelVersion | None:

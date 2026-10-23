@@ -23,7 +23,8 @@ EXPERIMENT = "promotions"
 
 def run_promote(checkpoint: Path, stores: tuple[str, str], **kwargs) -> Promotion:
     source, target = stores
-    return promote(checkpoint, source, "exp", target, "surrogate", "champion", EXPERIMENT, **kwargs)
+    kwargs.setdefault("alias", "champion")
+    return promote(checkpoint, source, "exp", target, "surrogate", EXPERIMENT, **kwargs)
 
 
 def target_client(stores) -> mlflow.MlflowClient:
@@ -47,7 +48,9 @@ def test_promote_registers_a_copy_under_the_alias_that_serves_the_model(
 
     promotion = run_promote(checkpoint, stores)
 
-    assert promotion == Promotion("surrogate", "1", promotion.model_id, "champion", copied=True)
+    assert promotion == Promotion(
+        "surrogate", "1", promotion.model_id, copied=True, alias="champion"
+    )
     version = target_client(stores).get_model_version_by_alias("surrogate", "champion")
     assert (str(version.version), registered_model_id(version)) == ("1", promotion.model_id)
     mlflow.set_tracking_uri(stores[1])
@@ -136,13 +139,13 @@ def test_promoting_a_registered_checkpoint_again_only_moves_the_alias(
 
     one = run_promote(first, stores)
     again = run_promote(first, stores)
-    assert again == Promotion("surrogate", "1", one.model_id, "champion", copied=False)
+    assert again == Promotion("surrogate", "1", one.model_id, copied=False, alias="champion")
     two = run_promote(second, stores)
     assert (two.version, two.copied) == ("2", True)
     assert str(client.get_model_version_by_alias("surrogate", "champion").version) == "2"
     back = run_promote(first, stores)
 
-    assert back == Promotion("surrogate", "1", one.model_id, "champion", copied=False)
+    assert back == Promotion("surrogate", "1", one.model_id, copied=False, alias="champion")
     assert str(client.get_model_version_by_alias("surrogate", "champion").version) == "1"
     assert len(client.search_model_versions("name = 'surrogate'")) == 2
     (experiment,) = [e for e in client.search_experiments() if e.name == EXPERIMENT]
@@ -158,7 +161,7 @@ def test_a_checkpoint_the_source_experiment_never_logged_is_refused(
     with pytest.raises(LookupError, match="no logged model of checkpoint"):
         run_promote(checkpoint, stores)
     with pytest.raises(LookupError, match="no logged model of checkpoint"):
-        promote(checkpoint, stores[0], "missing", stores[1], "surrogate", "champion", EXPERIMENT)
+        promote(checkpoint, stores[0], "missing", stores[1], "surrogate", EXPERIMENT)
 
     assert target_client(stores).search_experiments(filter_string=f"name = '{EXPERIMENT}'") == []
 
@@ -231,3 +234,23 @@ def test_the_reference_statistics_are_a_tag_of_the_version_new_or_registered(
     run_promote(checkpoint, stores, reference=second)
     tags = target_client(stores).get_model_version("surrogate", "1").tags
     assert json.loads(tags["reference_stats"]) == second
+
+
+def test_without_an_alias_no_alias_moves(stores, logged_checkpoint):
+    _, checkpoint, _ = logged_checkpoint()
+
+    promotion = run_promote(checkpoint, stores, alias=None)
+
+    assert (promotion.version, promotion.alias) == ("1", None)
+    assert target_client(stores).get_registered_model("surrogate").aliases == {}
+
+
+def test_the_dvc_hash_is_a_tag_of_the_version_new_or_registered(stores, logged_checkpoint):
+    _, checkpoint, _ = logged_checkpoint()
+
+    run_promote(checkpoint, stores, checkpoint_md5="abc.dir")
+    tags = target_client(stores).get_model_version("surrogate", "1").tags
+    assert tags["checkpoint_dvc_md5"] == "abc.dir"
+    run_promote(checkpoint, stores, checkpoint_md5="def.dir")
+    tags = target_client(stores).get_model_version("surrogate", "1").tags
+    assert tags["checkpoint_dvc_md5"] == "def.dir"
