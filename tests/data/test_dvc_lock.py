@@ -20,9 +20,10 @@ that produced it recorded. `dvc repro` writes each stage's lock entry as the
 stage finishes, so when the `gate` stage fails, `train` and `evaluate` are
 already locked with the new checkpoint and scores while `gate` still holds
 the old ones; this catches a commit of that state. And the outputs kept in
-git (the metrics files) must be the ones the lock records, the gate's saying
-it passed: a commit is green only if the gate passed on exactly the
-committed model and scores.
+git (the metrics files) must be the ones the lock records, the gate's and
+serve parity's saying they passed: a commit is green only if the gate passed
+on exactly the committed model and scores, and the committed serving code
+served that model's own forecast.
 """
 
 import hashlib
@@ -137,3 +138,11 @@ def test_the_committed_canonical_model_passed_its_gate():
     verdict = json.loads((ROOT / gate).read_text())
 
     assert verdict["val"]["passed"] == 1, f"the canonical model failed its gate: {verdict}"
+
+
+@in_git_checkout
+def test_the_committed_serving_code_serves_the_canonical_models_forecast():
+    (parity,) = [path for path, stage in metrics_files().items() if stage == "serve_parity"]
+    verdict = json.loads((ROOT / parity).read_text())
+
+    assert verdict["val"]["passed"] == 1, f"the serving code failed serve parity: {verdict}"

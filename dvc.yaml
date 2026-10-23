@@ -229,3 +229,62 @@ stages:
     metrics:
       - models/hankel_dmd/gate.json:
           cache: false
+
+  # The serving code against the canonical model
+  # (src/mhd_surrogate/serving/parity.py): the checkpoint's validation
+  # forecast served through the forecast service in process must equal its
+  # offline forecast within `serving.parity_tolerance` of the truth's std.
+  # On the CPU, as the deployed pod forecasts (and deterministic there, so
+  # the verdict reproduces). Its deps are the serving code it runs, so a pull
+  # request that changes that code re-runs it (CI's dvc.lock check) and must
+  # pass; ~10 s.
+  serve_parity:
+    cmd: >-
+      JAX_PLATFORMS=cpu uv run scripts/serving/serve_parity.py
+      checkpoint=models/hankel_dmd/model export.dir=models/hankel_dmd
+    # Code deps: what serve_parity.py imports, transitively, plus the served
+    # model's modules (checked by tests/training/test_dvc_train_stage.py);
+    # all of serving/, which it runs.
+    deps:
+      - models/hankel_dmd/model
+      - data/processed/re16k_t400.zarr
+      - scripts/serving/serve_parity.py
+      - src/mhd_surrogate/__init__.py
+      - src/mhd_surrogate/serving
+      - src/mhd_surrogate/models/__init__.py
+      - src/mhd_surrogate/models/base.py
+      - src/mhd_surrogate/models/registry.py
+      - src/mhd_surrogate/models/snapshots.py
+      - src/mhd_surrogate/models/dmd.py
+      - src/mhd_surrogate/models/hankel_dmd.py
+      - src/mhd_surrogate/evaluation/__init__.py
+      - src/mhd_surrogate/evaluation/protocol.py
+      - src/mhd_surrogate/evaluation/quantities.py
+      - src/mhd_surrogate/evaluation/rollout.py
+      - src/mhd_surrogate/evaluation/stability.py
+      - src/mhd_surrogate/training/__init__.py
+      - src/mhd_surrogate/training/export.py
+      - src/mhd_surrogate/training/mlflow_utils.py
+      - src/mhd_surrogate/training/startup.py
+      - src/mhd_surrogate/training/tracking.py
+      - src/mhd_surrogate/data/__init__.py
+      - src/mhd_surrogate/data/normalization.py
+      - src/mhd_surrogate/data/versioning.py
+      - src/mhd_surrogate/analysis/__init__.py
+      - src/mhd_surrogate/analysis/fields.py
+      - src/mhd_surrogate/utils/__init__.py
+      - src/mhd_surrogate/utils/hydra_resolvers.py
+      - src/mhd_surrogate/utils/jax_cache.py
+      - src/mhd_surrogate/utils/jax_determinism.py
+      - src/mhd_surrogate/utils/logging_config.py
+      - src/mhd_surrogate/utils/parallel.py
+    params:
+      - configs/data/re16k.yaml:
+          - zarr_store
+          - val_dataset
+          - context_steps
+      - configs/serving/default.yaml:
+          - parity_tolerance
+    metrics:
+      - models/hankel_dmd/serve_parity.json:
+          cache: false

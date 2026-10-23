@@ -69,6 +69,12 @@ def test_the_exposition_names_the_model():
     assert b'mhd_model_info{checkpoint_sha256="s",model_id="m-1"' in content
 
 
+def test_a_model_without_a_version_is_served_with_an_empty_version_label():
+    content, _ = ServeMetrics({**MODEL, "version": None}, None).exposition()
+
+    assert b'version=""' in content
+
+
 def test_requests_are_counted_by_route_and_status_including_errors():
     metrics = ServeMetrics(MODEL, None)
     app = FastAPI()

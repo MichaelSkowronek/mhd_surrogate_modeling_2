@@ -438,8 +438,8 @@ uv run dvc metrics diff     # ... compared with the last commit
 ```
 
 DVC is more than data versioning: `dvc.yaml` is a pipeline of stages with
-declared dependencies, parameters and outputs, and three stages extend it
-from the data to the **canonical model** -- currently Hankel DMD at the delays and
+declared dependencies, parameters and outputs, and four stages extend it
+from the data to the **canonical model** and how it is served -- currently Hankel DMD at the delays and
 rank its validation sweep selected (see "Delay sweep"):
 
 - **`train`** fits the model (`train.py ... evaluation.final=false`) and
@@ -459,6 +459,10 @@ rank its validation sweep selected (see "Delay sweep"):
   `dvc repro` if it doesn't. It writes its verdict to `models/<model>/gate.json`
   (also DVC metrics, kept in git): the 3000-step rollout's stable steps and
   peak ratios, and `passed`.
+- **`serve_parity`** checks the serving code against that checkpoint
+  (`scripts/serving/serve_parity.py`, see "Serve parity" under Serving): the
+  forecast the service serves must be the model's own. It writes
+  `models/<model>/serve_parity.json`, kept in git, which must say `passed`.
 
 The split is about what a change costs. A new score or a fix in the
 diagnostics re-runs `evaluate` on the stored checkpoint (about a minute)
@@ -3172,10 +3176,48 @@ Measured on the CPU (Hankel DMD, compose on this machine): fetching (865 MB)
 and loading take ~20 s; a 3000-step forecast (3.5 GB) streams in ~11 s,
 with the server at ~1.1 GB. The served 837-step validation forecast equals
 the offline one to 5e-6 of the truth's standard deviation
-(`scripts/serving/check_parity.py`), the same difference as between
-streaming that forecast in 100-step blocks on the host and computing it in
-one call: the float rounding of computing it in blocks, not of the server
-or the image.
+(`scripts/serving/check_parity.py`, against a running service), the same
+difference as between streaming that forecast in 100-step blocks on the
+host and computing it in one call: the float rounding of computing it in
+blocks, not of the server or the image.
+
+### Serve parity
+
+The server loads the checkpoint with the image's code, so the gate, which
+checked the checkpoint with the training code, says nothing about the
+serving code: a change to the app, the stream or the client could serve
+another forecast than the model's while every check so far passed (CI's
+smoke deploy serves a toy model; the post-sync check only that the forecast
+is finite and shaped right). The DVC stage `serve_parity` checks it against
+the real model instead (`src/mhd_surrogate/serving/parity.py`): it runs the
+canonical checkpoint's validation forecast through the service in process
+-- the app with the deployment's defaults, the `.npy` stream, the client
+reading it back -- and compares it with the forecast of the evaluation
+protocol, the one the scores and the gate are of.
+
+- **The serving code is a dependency.** The stage's deps are what it runs
+  (all of `serving/`, plus what it imports; checked like the other stages'
+  by `tests/training/test_dvc_train_stage.py`), so a pull request that
+  changes them leaves the stage stale until `dvc repro serve_parity` (about
+  12 s) re-runs it, which CI's `dvc.lock` check enforces, and the committed
+  verdict must say `passed` (`tests/data/test_dvc_lock.py`). The serving code
+  is checked against the canonical model before it merges.
+- **On the CPU**, as the deployed pod forecasts (`JAX_PLATFORMS=cpu` in the
+  stage's command), where it is deterministic too: a re-run writes the
+  same bytes.
+- **The tolerance** is 1e-4 of the truth's standard deviation, anywhere in
+  the forecast (`configs/serving/default.yaml`, `parity_tolerance`): about
+  20 times the 5.2e-6 the service's 100-step blocks round differently from
+  one call, so a change to the block arithmetic passes and a change in what
+  is served doesn't. Measured: a serving change that scales every frame by
+  1.001 fails it at 3.9e-3.
+
+It replaced a different design: storing a reference forecast with each
+registered version and checking it when a pod starts. That would have
+caught a bad pair only after the merge, on a 20-step sample, at the cost of
+extra artifacts per version and a check at every start; the stage catches
+it before the merge, on the whole forecast, with the machinery that already
+guards the model.
 
 ### Image publishing
 
