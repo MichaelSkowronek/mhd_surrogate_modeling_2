@@ -28,7 +28,7 @@ configMapGenerator:
     namespace: mhd-serving
     literals:
       - MHD_MODEL_URI=models:/mhd-surrogate/1
-      - MHD_MODEL_CHECKPOINT_MD5=
+      - MHD_MODEL_CHECKPOINT_MD5=1b2c82643d30780cc4dce9e42436041f.dir
 patches:
   # The tracking server runs on the host (docker-compose.yml), published on
   # port 5000, and the host is the kind network's gateway
