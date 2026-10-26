@@ -75,6 +75,7 @@ def run_gate(cfg: DictConfig) -> GateResult:
         rollout.stable_steps,
         gate.rollout_steps,
         dict(gate.max_scores),
+        dict(gate.min_scores),
     )
     verdict = {
         "passed": float(not failures),

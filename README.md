@@ -687,7 +687,13 @@ invites gaming it): a candidate replaces the incumbent only if it is stable
 over the whole validation forecast and over a 3000-step rollout from the
 validation context (`check_rollout_stability.py`: no 100-step block over 2x
 the truth's largest energy or enstrophy block mean; a stable validation
-forecast alone can be luck, see "Input noise"), its energy and
+forecast alone can be luck, see "Input noise"), its stable fraction is at
+least 0.8 (at least 4 of the 5 validations nearest its kept epoch stable,
+so a refit for that many epochs likely is too; were each epoch stable with
+probability p, a p = 0.9 recipe passes 92% of the time where a limit of 1
+would reject it 41% of the time by chance, and a p = 0.5 one 19%; a
+closed-form fit scores 1 if stable, being the same model on every refit),
+its energy and
 enstrophy errors are no more than 0.03 worse and its x/y spectrum distances
 no more than 0.05 worse. Those tolerances are about the spread a different
 realization of the flow scores (energy <1%, enstrophy <3%, spectrum

@@ -52,8 +52,9 @@
 #   retrains it (src/mhd_surrogate/evaluation/gate.py, the `gate` stage):
 #   stable over the whole validation forecast and over a `rollout_steps`
 #   rollout from the validation context (the `stability` blocks and
-#   threshold), and every `max_scores` validation score at or below its
-#   limit. The limits are frozen when a model becomes canonical -- its
+#   threshold), every `max_scores` validation score at or below its limit
+#   and every `min_scores` one at or above it. The limits are frozen when a
+#   model becomes canonical -- its
 #   validation scores then plus the margins a replacement may be worse by
 #   (0.03 energy/enstrophy errors, 0.05 spectrum distances) -- and change
 #   only with the next switch. Current: Hankel DMD's (0.2635, 0.7276,
@@ -68,7 +69,14 @@
 #   conservation law. A drift beyond that band is a wrong bulk or
 #   cross-stream flow, which the energy error doesn't see (u_y's enters it
 #   squared; the U-Net baseline's 7% loss of bulk flow is offset by extra
-#   fluctuation energy, a 1% energy error).
+#   fluctuation energy, a 1% energy error). The stable fraction's limit is
+#   absolute too: stable_fraction >= 0.8, at least 4 of the 5 validations
+#   nearest the kept epoch stable (`stability`'s neighbors), so a refit for
+#   that many epochs is likely stable as well. Were each epoch stable with
+#   probability p, a p = 0.9 recipe would pass 92% of the time (a limit of
+#   1.0 would reject it 41% of the time by chance), a p = 0.5 one 19%. A
+#   closed-form fit (Hankel DMD) is the same model on every refit: 1.0 if
+#   its forecast is stable.
 #
 # train_datasets: train datasets also scored the same way, logged as
 #   `train.<name>.*` -- a sanity check of the fit and the train/val gap, not
@@ -95,4 +103,6 @@ gate:
     u_x_mean_std_ratio: 2.0
     u_y_mean_offset: 1.0
     u_y_mean_std_ratio: 2.0
+  min_scores:
+    stable_fraction: 0.8
 train_datasets: [re16k_t400_0]

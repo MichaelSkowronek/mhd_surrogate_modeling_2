@@ -4,8 +4,8 @@ Runs after the `evaluate` stage and fails (exit status 1, so `dvc repro`
 stops and leaves the stage stale) unless the checkpoint still meets the bar
 that made it canonical: stable over the whole validation forecast and over
 an `evaluation.gate.rollout_steps` rollout from the validation context, and
-its validation scores within `evaluation.gate.max_scores` (see
-src/mhd_surrogate/evaluation/gate.py). Writes the verdict to
+its validation scores within `evaluation.gate.max_scores` and
+`evaluation.gate.min_scores` (see src/mhd_surrogate/evaluation/gate.py). Writes the verdict to
 `<export.dir>/gate.json` either way.
 
 The test dataset is never opened (see configs/data/re16k.yaml).

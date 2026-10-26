@@ -20,7 +20,12 @@ from omegaconf import DictConfig, OmegaConf
 
 import mlflow
 from mhd_surrogate.data.grid import grid_spacing
-from mhd_surrogate.evaluation.evaluate import evaluate, train_eval_datasets
+from mhd_surrogate.evaluation.evaluate import (
+    Evaluation,
+    candidate_stable_fraction,
+    evaluate,
+    train_eval_datasets,
+)
 from mhd_surrogate.models.registry import load_model
 from mhd_surrogate.training.export import checkpoint_digest, write_metrics
 from mhd_surrogate.training.mlflow_utils import (
@@ -94,25 +99,33 @@ def score_and_log(
 
     Validation is what decisions are made on; the training dataset(s) are
     scored the same way as a sanity check (can the model fit at all, and how
-    big is the train/val gap)."""
+    big is the train/val gap). Validation also gets the model's
+    `stable_fraction` (`evaluate.candidate_stable_fraction`), left out if
+    unknown."""
     targets = [(cfg.data.val_dataset, "val")] + [
         (name, f"train.{name}")
         for name in train_eval_datasets(
             list(cfg.evaluation.train_datasets), list(cfg.data.train_datasets)
         )
     ]
-    return {
+    results = {
         prefix: _score_one(model, root[name], name, prefix, scale, cfg, model_id)
         for name, prefix in targets
     }
+    scores = {prefix: result.scores for prefix, result in results.items()}
+    fraction = candidate_stable_fraction(model, scores["val"], len(results["val"].rmse))
+    if fraction is not None:
+        scores["val"]["stable_fraction"] = fraction
+        mlflow.log_metric("val.stable_fraction", fraction, model_id=model_id)
+    return scores
 
 
 def _score_one(
     model, series, name: str, prefix: str, scale: np.ndarray, cfg: Any, model_id: str | None
-) -> dict[str, float]:
+) -> Evaluation:
     """Score `model` on one dataset under the forecast protocol and log the
     scalar scores as `<prefix>.*` metrics and the RMSE curve as `<prefix>.rmse`,
-    on the run and linked to the logged model `model_id`. Returns the scores."""
+    on the run and linked to the logged model `model_id`."""
     dx, dy = grid_spacing(series.shape[2], series.shape[3])
     start = time.perf_counter()
     result = evaluate(
@@ -157,4 +170,4 @@ def _score_one(
         prefix,
         "\n".join(f"  {k}: {v:.4g}" for k, v in sorted(result.scores.items())),
     )
-    return result.scores
+    return result

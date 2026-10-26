@@ -22,7 +22,7 @@ resources:
 images:
   - name: mhd-surrogate-serve
     newName: ghcr.io/michaelskowronek/mhd-surrogate-serve
-    newTag: "4f0ed27259db199d"
+    newTag: "e94f465702749877"
 configMapGenerator:
   - name: serving-model
     namespace: mhd-serving

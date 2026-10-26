@@ -27,6 +27,7 @@ VAL_SCORES = {
     "u_x_mean_std_ratio": 1.0,
     "u_y_mean_offset": 0.1,
     "u_y_mean_std_ratio": 1.0,
+    "stable_fraction": 1.0,
 }
 
 
@@ -93,6 +94,15 @@ def test_a_score_over_its_frozen_limit_fails_and_still_writes_the_verdict(worksp
     result = run_gate(config(workspace))
 
     assert result.failures == ["enstrophy_rel_error 3.6 over its limit 0.758"]
+    assert verdict(workspace)["passed"] == 0.0
+
+
+def test_a_stable_fraction_under_its_minimum_fails(workspace):
+    write_val_scores(workspace, {**VAL_SCORES, "stable_fraction": 0.6})
+
+    result = run_gate(config(workspace))
+
+    assert result.failures == ["stable_fraction 0.6 under its limit 0.8"]
     assert verdict(workspace)["passed"] == 0.0
 
 

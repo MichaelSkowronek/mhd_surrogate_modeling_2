@@ -183,6 +183,12 @@ def test_export_dir_gets_the_checkpoint_and_metrics(workspace):
 
     metrics = json.loads((workspace / "export" / "metrics.json").read_text())
     assert set(metrics) == {"val", "train.a"}
+    # A closed-form fit's stable fraction is whether its validation forecast is
+    # stable: whether no block strays over 2x the truth's (the peak ratios).
+    val = metrics["val"]
+    stable = max(val["energy_peak_ratio"], val["enstrophy_peak_ratio"]) <= 2.0
+    assert val["stable_fraction"] == float(stable)
+    assert "stable_fraction" not in metrics["train.a"]
     assert (workspace / "export" / "model" / "model.json").exists()
 
 

@@ -69,7 +69,9 @@ conventions below; it shifts which tools are worth reaching for at all.
   guardrails, not objectives: a candidate replaces the incumbent only if it
   is stable over the whole validation forecast and over a 3000-step rollout
   from the validation context (`scripts/evaluation/check_rollout_stability.py`,
-  no 100-step block over 2x the truth's energy or enstrophy), its energy and
+  no 100-step block over 2x the truth's energy or enstrophy), its stable
+  fraction is at least 0.8 (absolute; a closed-form fit's is 1 if it is
+  stable, being the same model on every refit), its energy and
   enstrophy errors are no more than 0.03 worse and its spectrum distances no
   more than 0.05 worse (about the spread a different realization scores),
   and its domain-mean velocity stays in the truth's band in both channels
@@ -79,8 +81,8 @@ conventions below; it shifts which tools are worth reaching for at all.
   since the incumbent Hankel DMD damps it and a relative limit would fail
   a perfect model).
 - When a model becomes canonical, freeze its validation scores plus those
-  margins (and the absolute drift limits) as the DVC `gate` stage's limits (`configs/evaluation/default.yaml`,
-  `gate.max_scores`). They change only with the next switch, never to match
+  margins (and the absolute drift and stable-fraction limits) as the DVC `gate` stage's limits (`configs/evaluation/default.yaml`,
+  `gate.max_scores` and `gate.min_scores`). They change only with the next switch, never to match
   a retrain: a retrain that fails the gate is a bad draw to investigate (or
   answer with several seeds selected on validation), not a reason to loosen
   the limits or to retry until it passes. The same pull request promotes and
