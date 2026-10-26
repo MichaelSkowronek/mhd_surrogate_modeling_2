@@ -139,8 +139,11 @@ def test_an_iterative_model_reports_every_validation_and_records_its_run(workspa
     assert len(reported) == 2
     assert {run_id for _, run_id in reported} == {run.info.run_id}
     assert "selection_score" in reported[0][0]
+    # With the run's best so far, judged with its neighbors (configs/evaluation).
+    assert {"best_selection_score", "best_epoch", "best_stable_fraction"} <= set(reported[-1][0])
     assert run.data.tags["sweep"] == "s1"
     assert "val_monitor.selection_score" in run.data.metrics
+    assert "fit.stable_fraction" in run.data.metrics
     record = json.loads((workspace / "out" / "training_state" / "mlflow_run.json").read_text())
     assert record["run_id"] == run.info.run_id
     assert "resume" not in record["config"]

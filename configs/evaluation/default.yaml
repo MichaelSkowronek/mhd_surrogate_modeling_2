@@ -21,6 +21,16 @@
 #   `stable_steps` counts the steps before the first failing block. The
 #   truth's own 100-step block means vary by ~5% (energy) and ~18%
 #   (enstrophy) on the validation dataset, so 2x is a blow-up, not noise.
+#   `neighbors`: early stopping and the search judge a validation with the
+#   2 * neighbors + 1 validations nearest it (shifted inward at the ends of
+#   the run), its `stable_fraction` being the share of them stable over
+#   their whole forecast (src/mhd_surrogate/evaluation/selection.py's
+#   RunSelection): a network stable at one epoch and not the next is a lucky
+#   draw a refit for the same epochs is unlikely to repeat. 2 (5 validations,
+#   a sixth of a 30-epoch schedule) separates a lone stable epoch (0.2) from
+#   a stable stretch (0.6-1.0) in the U-Net runs; 1 can't tell a lone one
+#   (0.33) from much, 3 spans enough of the learning-rate schedule that the
+#   neighbors are no longer much the same network.
 #
 # ensemble_size: members a stochastic (generative) model forecasts, seeds
 #   0..n-1, for the ensemble scores (CRPS, spread vs error; see
@@ -33,10 +43,10 @@
 #   what reproduces an ensemble's scores (a DVC param once a stochastic model
 #   is canonical; it can't change a deterministic model's).
 #
-# tie_break_lead: candidates are ranked by stable steps, then by skill
-#   horizon, ties broken by the RMSE at this lead (CLAUDE.md, "Data
-#   analysis"); early stopping and the hyperparameter search maximize the
-#   three combined (`selection_score`).
+# tie_break_lead: candidates are ranked by stable steps, then by stable
+#   fraction, then by skill horizon, ties broken by the RMSE at this lead
+#   (CLAUDE.md, "Data analysis"); early stopping and the hyperparameter
+#   search maximize the four combined (`selection_score`).
 #
 # gate: the bar the canonical model must still meet when the DVC pipeline
 #   retrains it (src/mhd_surrogate/evaluation/gate.py, the `gate` stage):
@@ -70,6 +80,7 @@ report_leads: [1, 10, 40, 100]
 stability:
   block_steps: 100
   max_ratio: 2.0
+  neighbors: 2
 ensemble_size: 8
 member_batch: 1
 tie_break_lead: 10

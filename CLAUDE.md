@@ -59,8 +59,10 @@ conventions below; it shifts which tools are worth reaching for at all.
   by one evaluation. Nothing is changed or
   chosen after seeing test scores.
 - Candidates are ranked by validation stable steps (how long the forecast
-  stays bounded, `evaluation/stability.py`), then skill horizon, ties broken
-  by RMSE at lead 10. Mean RMSE over all leads is not a selection metric: it
+  stays bounded, `evaluation/stability.py`), then, for an iterative run's
+  stable candidate, stable fraction (the share of the validations nearest
+  its epoch that are stable too, `evaluation/selection.py`'s
+  `RunSelection`), then skill horizon, ties broken by RMSE at lead 10. Mean RMSE over all leads is not a selection metric: it
   rewards forecasts that smooth toward the mean. The physics scores are
   guardrails, not objectives: a candidate replaces the incumbent only if it
   is stable over the whole validation forecast and over a 3000-step rollout

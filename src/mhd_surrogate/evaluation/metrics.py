@@ -38,13 +38,19 @@ def skill_horizon(curve: np.ndarray, threshold: float) -> int:
 
 
 def selection_score(
-    skill: float, rmse_at_tie_break_lead: float, stable_steps: float, n_steps: int
+    skill: float,
+    rmse_at_tie_break_lead: float,
+    stable_steps: float,
+    n_steps: int,
+    stable_fraction: float = 0.0,
+    n_forecasts: int = 1,
 ) -> float:
     """One number that ranks candidates like the selection rule (CLAUDE.md,
     "Data analysis"): by stable steps (how long the forecast stays bounded,
-    `evaluation.stability`), then by skill horizon, ties broken by the RMSE
-    at the tie-break lead. A higher score is a better candidate under the
-    rule; early stopping and the hyperparameter search maximize it.
+    `evaluation.stability`), then by stable fraction, then by skill horizon,
+    ties broken by the RMSE at the tie-break lead. A higher score is a
+    better candidate under the rule; early stopping and the hyperparameter
+    search maximize it.
 
     The RMSE term r / (1 + r) lies in [0, 1) and grows with r, so it orders
     equal skill horizons without ever outweighing one step of skill (an
@@ -53,12 +59,41 @@ def selection_score(
     weighting the stable steps by n_steps + 1 makes one more stable step
     outweigh any skill and RMSE (again tying at worst for an infinite RMSE).
     Scores are therefore comparable only between forecasts of the same
-    length, i.e. on the same dataset."""
+    length, i.e. on the same dataset.
+
+    `stable_fraction` is the share of stable forecasts among the at most
+    `n_forecasts` the candidate is judged with (`selection.RunSelection`:
+    the validations nearest it in its training run), and counts only for a
+    forecast stable over all `n_steps`: it orders candidates that are,
+    which the stable steps can't. The default 0 scores a forecast alone.
+    Distinct fractions of at most `n_forecasts` forecasts differ by at least
+    1 / n_forecasts^2, and a stable forecast's skill and RMSE terms span
+    n_steps + 1, so weighting the fraction by (n_steps + 1) n_forecasts^2
+    makes a larger one outweigh them (tying at worst); a stable forecast
+    with no bonus still scores at least any unstable one. Scores with a
+    fraction are comparable only for the same `n_forecasts` too."""
+    bonus = stable_fraction_bonus(stable_fraction, stable_steps, n_steps, n_forecasts)
     r = rmse_at_tie_break_lead
     if not r >= 0:  # also catches NaN
         return float("-inf")
     return (
         float(stable_steps) * (n_steps + 1)
+        + bonus
         + float(skill)
         - (1.0 if math.isinf(r) else r / (1.0 + r))
     )
+
+
+def stable_fraction_bonus(
+    stable_fraction: float, stable_steps: float, n_steps: int, n_forecasts: int
+) -> float:
+    """What `selection_score` adds for a stable fraction: the fraction times
+    (n_steps + 1) n_forecasts^2 for a forecast stable over all `n_steps`,
+    0 for one that isn't."""
+    if not 0.0 <= stable_fraction <= 1.0:
+        raise ValueError(f"stable_fraction must be in [0, 1], got {stable_fraction}")
+    if n_forecasts < 1:
+        raise ValueError(f"n_forecasts must be >= 1, got {n_forecasts}")
+    if stable_steps < n_steps:
+        return 0.0
+    return stable_fraction * (n_steps + 1) * n_forecasts**2

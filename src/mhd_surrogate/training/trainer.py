@@ -15,8 +15,14 @@ from the seed and the step count, so a resumed run draws the same ones.
   it's set short enough for early stopping and the hyperparameter search's
   pruning to see the curve.
 - Early stopping: `validate(network)` scores the network every `eval_every`
-  epochs; training stops after `patience` evaluations without a strictly
-  better `selection_score`, and the best network is returned, not the last.
+  epochs, and the validations are ranked by the selection rule, each judged
+  with its `hooks.neighbors` nearest validations either side
+  (`evaluation.selection.RunSelection`: a network stable at one epoch and
+  not at the next is a lucky draw). Training stops once the best validation
+  so far is `patience` validations old, and the best one's network is
+  returned, not the last. Until `neighbors` more validations follow a
+  validation its score can still change, so its network is kept until then,
+  along with the best one whose score is final.
 - Weight averaging (`ema_decay`, off by default): an exponential moving
   average of the weights, updated after every optimizer step, is what gets
   validated, early-stopped on, checkpointed and returned. The raw weights
@@ -54,6 +60,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 
+from mhd_surrogate.evaluation.selection import RunSelection
 from mhd_surrogate.models.base import FitHooks
 from mhd_surrogate.training.tracking import DivergenceError
 
@@ -72,7 +79,7 @@ class TrainerConfig:
     final_lr_fraction: float = 0.01  # the cosine decays to this fraction of learning_rate
     weight_decay: float = 1e-4
     grad_clip: float = 1.0
-    patience: int = 5  # evaluations without improvement before stopping
+    patience: int = 5  # validations after the best one so far before stopping
     eval_every: int = 1  # epochs
     log_every: int = 20  # optimizer steps
     max_loss: float = 100.0  # a loss above this (or non-finite) is divergence
@@ -166,7 +173,10 @@ class TrainingState:
     rng_state: dict[str, Any] = field(default_factory=dict)
     latest_file: str = ""
     ema_file: str = ""
-    best_file: str = ""
+    # Every validation's scores and epoch, and the files of the validated
+    # networks early stopping may still keep, by validation index.
+    validations: list[dict[str, float]] = field(default_factory=list)
+    candidate_files: dict[str, str] = field(default_factory=dict)
     fingerprint: dict[str, Any] = field(default_factory=dict)
 
 
@@ -209,11 +219,17 @@ def train(
     """Train `network` to minimize `loss_fn` over the sampler's batches.
 
     `validate` (None: no early stopping) scores a network; `hooks` gives the
-    metrics sink and the state directory. `fingerprint` (e.g. the model's
-    hyperparameters) is saved with the state, and a resume is refused if it
-    or `config` differ: the saved weights would belong to another run.
+    neighbors early stopping judges a validation with, where to report each
+    validation, the metrics sink and the state directory. `fingerprint`
+    (e.g. the model's hyperparameters) is saved with the state, and a resume
+    is refused if it, `config` or the neighbors differ: the saved weights
+    would belong to another run.
     """
-    fingerprint = {"trainer": asdict(config), "model": fingerprint or {}}
+    fingerprint = {
+        "trainer": asdict(config),
+        "model": fingerprint or {},
+        "neighbors": hooks.neighbors,
+    }
     steps_per_epoch = sampler.steps_per_epoch(config.batch_size, config.samples_per_epoch)
     if steps_per_epoch == 0:
         raise ValueError(
@@ -224,13 +240,14 @@ def train(
     opt_state = optimizer.init(_inexact(network))
     rng = np.random.default_rng(config.seed)
     state = TrainingState(fingerprint=fingerprint)
-    best = network
+    # Validated networks early stopping may still keep, by validation index.
+    candidates: dict[int, eqx.Module] = {}
     # The weight average starts at the initial weights.
     ema = network if config.ema_decay is not None else None
 
     state_dir = hooks.state_dir
     if state_dir is not None and (state_dir / STATE_FILE).exists():
-        state, network, opt_state, best, ema = _restore(
+        state, network, opt_state, candidates, ema = _restore(
             state_dir, fingerprint, network, opt_state, ema
         )
         rng.bit_generator.state = state.rng_state
@@ -243,6 +260,7 @@ def train(
             state.best_epoch,
         )
     resumed_at = state.epoch
+    selection = RunSelection(hooks.neighbors, state.validations)
 
     base_key = jax.random.key(config.seed)
 
@@ -297,20 +315,28 @@ def train(
         if validate is not None and (epoch % config.eval_every == 0 or epoch == config.max_epochs):
             scores = validate(current)
             epoch_metrics.update({f"val_monitor.{k}": v for k, v in scores.items()})
-            score = scores["selection_score"]
-            if score > state.best_score:
-                state.best_score, state.best_epoch, state.evals_since_best = score, epoch, 0
-                best = current
-            else:
-                state.evals_since_best += 1
-                state.stopped_early = state.evals_since_best >= config.patience
+            selection.add({**scores, "epoch": epoch})
+            state.validations = selection.history
+            candidates[len(selection) - 1] = current
+            _drop_settled_losers(selection, candidates)
+            best = selection.best()
+            run_best = _run_best(selection, best)
+            state.best_score = run_best["best_selection_score"]
+            state.best_epoch = int(run_best["best_epoch"])
+            state.evals_since_best = len(selection) - 1 - best
+            state.stopped_early = state.evals_since_best >= config.patience
+            epoch_metrics.update(run_best)
+            hooks.report({**scores, **run_best})
             log.info(
-                "epoch %d: loss %.4g, val %s (best score %.10g at epoch %d)",
+                "epoch %d: loss %.4g, val %s (best score %.10g at epoch %d%s)",
                 epoch,
                 epoch_metrics["epoch_loss"],
                 ", ".join(f"{k} {v:.4g}" for k, v in scores.items()),
                 state.best_score,
                 state.best_epoch,
+                f", stable fraction {run_best['best_stable_fraction']:.2f}"
+                if "best_stable_fraction" in run_best
+                else "",
             )
         else:
             log.info("epoch %d: loss %.4g", epoch, epoch_metrics["epoch_loss"])
@@ -318,12 +344,11 @@ def train(
 
         if state_dir is not None:
             state.rng_state = rng.bit_generator.state
-            _save(state_dir, state, network, opt_state, best, ema)
+            _save(state_dir, state, network, opt_state, candidates, ema)
         if state.stopped_early:
-            log.info("early stop: no improvement in %d evaluations", config.patience)
+            log.info("early stop: the best validation is %d validations old", config.patience)
 
     last = ema if ema is not None else network
-    result = best if validate is not None and state.best_epoch > 0 else last
     info = {
         "epochs": float(state.epoch),
         "steps": float(state.step),
@@ -331,9 +356,40 @@ def train(
         "stopped_early": float(state.stopped_early),
         "resumed_at_epoch": float(resumed_at),
     }
-    if state.best_epoch > 0:
-        info["best_selection_score"] = state.best_score
-    return TrainResult(network=result, info=info)
+    if validate is None or not len(selection):
+        return TrainResult(network=last, info=info)
+    # The run is over, so every validation's window is final.
+    best = selection.best()
+    run_best = _run_best(selection, best)
+    info["best_selection_score"] = run_best["best_selection_score"]
+    if "best_stable_fraction" in run_best:
+        info["stable_fraction"] = run_best["best_stable_fraction"]
+    return TrainResult(network=candidates[best], info=info)
+
+
+def _run_best(selection: RunSelection, best: int) -> dict[str, float]:
+    """The run's best validation so far, as reported and logged."""
+    out = {
+        "best_selection_score": selection.score(best),
+        "best_epoch": float(selection.history[best]["epoch"]),
+    }
+    if selection.neighbors > 0:
+        out["best_stable_fraction"] = selection.stable_fraction(best)
+    return out
+
+
+def _drop_settled_losers(selection: RunSelection, candidates: dict[int, Any]) -> None:
+    """Drop the networks early stopping can no longer keep: a validation
+    whose score is final (`RunSelection.settled`) but below the best final
+    one (or tied with it, later). Only a validation that is still
+    unsettled can overtake the best final one."""
+    settled = [i for i in candidates if selection.settled(i)]
+    if not settled:
+        return
+    top = max(settled, key=lambda i: (selection.score(i), -i))
+    for i in settled:
+        if i != top:
+            del candidates[i]
 
 
 def _check_loss(losses: list[jax.Array], max_loss: float, step: int) -> float:
@@ -353,7 +409,11 @@ def _average(ema, network, decay: float):
     return eqx.combine(averaged, ema)
 
 
-def _save(state_dir: Path, state: TrainingState, network, opt_state, best, ema=None) -> None:
+def _files(state: TrainingState) -> set[str]:
+    return {state.latest_file, state.ema_file, *state.candidate_files.values()} - {""}
+
+
+def _save(state_dir: Path, state: TrainingState, network, opt_state, candidates, ema=None) -> None:
     state_dir.mkdir(parents=True, exist_ok=True)
     old = _load_state(state_dir)
     state.latest_file = f"latest-epoch-{state.epoch:04d}.eqx"
@@ -361,17 +421,19 @@ def _save(state_dir: Path, state: TrainingState, network, opt_state, best, ema=N
     if ema is not None:
         state.ema_file = f"ema-epoch-{state.epoch:04d}.eqx"
         eqx.tree_serialise_leaves(state_dir / state.ema_file, ema)
-    if state.best_epoch > 0:
-        state.best_file = f"best-epoch-{state.best_epoch:04d}.eqx"
-        if not (state_dir / state.best_file).exists():
-            eqx.tree_serialise_leaves(state_dir / state.best_file, best)
+    state.candidate_files = {}
+    for index, candidate in candidates.items():
+        epoch = int(state.validations[index]["epoch"])
+        name = f"candidate-epoch-{epoch:04d}.eqx"
+        if not (state_dir / name).exists():
+            eqx.tree_serialise_leaves(state_dir / name, candidate)
+        state.candidate_files[str(index)] = name
     tmp = state_dir / (STATE_FILE + ".tmp")
     tmp.write_text(json.dumps(asdict(state), indent=2))
     os.replace(tmp, state_dir / STATE_FILE)
     # Only now are the previous epoch's files no longer referenced.
     if old is not None:
-        previous = {old.latest_file, old.ema_file, old.best_file}
-        for name in previous - {state.latest_file, state.ema_file, state.best_file, ""}:
+        for name in _files(old) - _files(state):
             (state_dir / name).unlink(missing_ok=True)
 
 
@@ -392,9 +454,10 @@ def _restore(state_dir: Path, fingerprint: dict, network, opt_state, ema=None):
     network, opt_state = eqx.tree_deserialise_leaves(
         state_dir / state.latest_file, (network, opt_state)
     )
-    best = network
-    if state.best_file:
-        best = eqx.tree_deserialise_leaves(state_dir / state.best_file, network)
+    candidates = {
+        int(index): eqx.tree_deserialise_leaves(state_dir / name, network)
+        for index, name in state.candidate_files.items()
+    }
     if ema is not None:
         ema = eqx.tree_deserialise_leaves(state_dir / state.ema_file, network)
-    return state, network, opt_state, best, ema
+    return state, network, opt_state, candidates, ema

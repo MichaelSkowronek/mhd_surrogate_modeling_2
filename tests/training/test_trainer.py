@@ -6,6 +6,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from mhd_surrogate.evaluation.metrics import selection_score
 from mhd_surrogate.models.base import FitHooks
 from mhd_surrogate.training.tracking import DivergenceError
 from mhd_surrogate.training.trainer import (
@@ -168,9 +169,22 @@ def test_prefetch_reraises_an_error_from_the_producer():
 # -- training -------------------------------------------------------------------
 
 
-def run(tmp_path=None, validate=None, network=None, loss=one_step_loss, **kwargs):
+def run(
+    tmp_path=None,
+    validate=None,
+    network=None,
+    loss=one_step_loss,
+    neighbors=0,
+    report=None,
+    **kwargs,
+):
     log = Recorder()
-    hooks = FitHooks(log_metrics=log, state_dir=tmp_path)
+    hooks = FitHooks(
+        log_metrics=log,
+        state_dir=tmp_path,
+        neighbors=neighbors,
+        **({"report": report} if report else {}),
+    )
     result = train(
         network or Gain(jnp.array(1.0)),
         loss,
@@ -214,6 +228,29 @@ class ScriptedValidation:
         return {"selection_score": self.script[len(self.gains) - 1], "skill_horizon": 1.0}
 
 
+class ScriptedStability:
+    """Scores like `selection_scores` for a 10-step forecast, from `script`'s
+    (stable, skill) pairs, one per call; remembers the gain it was shown."""
+
+    def __init__(self, script):
+        self.script = list(script)
+        self.gains = []
+
+    def __call__(self, network):
+        self.gains.append(float(network.gain))
+        stable, skill = self.script[len(self.gains) - 1]
+        steps = 10.0 if stable else 5.0
+        return {
+            "selection_score": selection_score(skill, 0.5, steps, 10),
+            "stable_steps": steps,
+            "forecast_steps": 10.0,
+        }
+
+
+# A lone stable epoch with the most skill (2), then a stable stretch (4-6).
+STRETCH = [(False, 1), (True, 9), (False, 1), (True, 2), (True, 2), (True, 3)]
+
+
 def test_early_stopping_returns_the_best_network_after_patience_runs_out():
     validate = ScriptedValidation([1.0, 2.0, 2.0, 1.5, 9.0])
 
@@ -226,6 +263,50 @@ def test_early_stopping_returns_the_best_network_after_patience_runs_out():
     assert result.info["best_selection_score"] == 2.0
     assert float(result.network.gain) == validate.gains[1]
     assert "val_monitor.selection_score" in log.keys()
+
+
+def test_early_stopping_keeps_a_stable_stretch_over_a_lone_stable_epoch():
+    alone, _ = run(validate=ScriptedStability(STRETCH), max_epochs=6, patience=10)
+    validate = ScriptedStability(STRETCH)
+    judged, log = run(validate=validate, max_epochs=6, patience=10, neighbors=1)
+
+    # Alone, epoch 2's skill wins; with its neighbors (1 of 3 stable) it loses
+    # to epoch 6 (3 of 3, its window shifted inward at the end of the run).
+    assert alone.info["best_epoch"] == 2
+    assert "stable_fraction" not in alone.info
+    assert judged.info["best_epoch"] == 6
+    assert judged.info["stable_fraction"] == 1.0
+    assert float(judged.network.gain) == validate.gains[5]
+    assert {"best_selection_score", "best_epoch", "best_stable_fraction"} <= log.keys()
+
+
+def test_every_validation_is_reported_with_the_runs_best_so_far():
+    reports = []
+
+    run(
+        validate=ScriptedStability(STRETCH[:3]),
+        max_epochs=3,
+        patience=10,
+        neighbors=1,
+        report=reports.append,
+    )
+
+    assert [r["best_epoch"] for r in reports] == [1, 2, 2]
+    # Epoch 2's window grows from epochs 1-2 to 1-3: provisional until then.
+    assert [r["best_stable_fraction"] for r in reports] == pytest.approx([0.0, 0.5, 1 / 3])
+    assert [r["stable_steps"] for r in reports] == [5.0, 10.0, 5.0]
+
+
+def test_early_stopping_counts_patience_from_the_best_validation_so_far():
+    validate = ScriptedStability([(True, 3), (True, 1), (False, 1), (False, 1), (True, 9)])
+
+    result, _ = run(validate=validate, max_epochs=5, patience=2, neighbors=1)
+
+    # Epoch 1 stays best (2 of its 2, then 3, nearest stable): stop at 3,
+    # before epoch 5's skill is ever seen.
+    assert len(validate.gains) == 3
+    assert result.info["stopped_early"] == 1.0
+    assert result.info["best_epoch"] == 1
 
 
 def test_validates_every_eval_every_epochs_and_after_the_last():
@@ -386,8 +467,54 @@ def test_state_dir_keeps_only_the_current_weights(tmp_path):
 
     state = json.loads((tmp_path / STATE_FILE).read_text())
     files = sorted(p.name for p in tmp_path.glob("*.eqx"))
-    assert files == ["best-epoch-0002.eqx", "latest-epoch-0003.eqx"]
-    assert {state["best_file"], state["latest_file"]} == set(files)
+    assert files == ["candidate-epoch-0002.eqx", "latest-epoch-0003.eqx"]
+    assert {*state["candidate_files"].values(), state["latest_file"]} == set(files)
+
+
+def test_state_dir_keeps_the_networks_whose_window_is_still_open(tmp_path):
+    run(tmp_path, validate=ScriptedStability(STRETCH[:4]), max_epochs=4, neighbors=1)
+
+    # Epochs 1-3 have their final windows, and 2 is the best of them; epoch 4
+    # would gain a neighbor from a 5th validation.
+    state = json.loads((tmp_path / STATE_FILE).read_text())
+    assert state["candidate_files"] == {
+        "1": "candidate-epoch-0002.eqx",
+        "3": "candidate-epoch-0004.eqx",
+    }
+    files = sorted(p.name for p in tmp_path.glob("*.eqx"))
+    assert files == [
+        "candidate-epoch-0002.eqx",
+        "candidate-epoch-0004.eqx",
+        "latest-epoch-0004.eqx",
+    ]
+
+
+def test_resume_keeps_a_network_whose_window_closes_after_the_interruption(tmp_path):
+    # Epoch 3 is best (3 of 3 stable around it), settled only by epoch 4.
+    script = [(False, 1), (True, 5), (True, 9), (True, 9), (False, 1)]
+    uninterrupted = ScriptedStability(script)
+    expected, _ = run(tmp_path / "a", validate=uninterrupted, max_epochs=5, neighbors=1)
+
+    def crash_at_epoch_4(network, calls=ScriptedStability(script)):  # noqa: B008
+        if len(calls.gains) == 3:
+            raise Interrupt
+        return calls(network)
+
+    with pytest.raises(Interrupt):
+        run(tmp_path / "b", validate=crash_at_epoch_4, max_epochs=5, neighbors=1)
+    resumed, _ = run(
+        tmp_path / "b", validate=ScriptedStability(script[3:]), max_epochs=5, neighbors=1
+    )
+
+    assert expected.info["best_epoch"] == resumed.info["best_epoch"] == 3
+    assert float(resumed.network.gain) == float(expected.network.gain) == uninterrupted.gains[2]
+
+
+def test_resume_refuses_different_neighbors(tmp_path):
+    run(tmp_path, max_epochs=1)
+
+    with pytest.raises(ValueError, match="different configuration"):
+        run(tmp_path, max_epochs=1, neighbors=1)
 
 
 def test_resume_refuses_a_different_configuration(tmp_path):
