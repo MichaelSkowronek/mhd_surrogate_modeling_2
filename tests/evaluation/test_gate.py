@@ -37,3 +37,16 @@ def test_a_missing_or_undefined_score_fails_its_check():
     assert gate_failures({}, 837, 3000, 3000, {}) == [
         "validation forecast stable for nan of its 837 steps"
     ]
+
+
+def test_a_score_under_its_minimum_fails_and_at_the_minimum_passes():
+    minimum = {"stable_fraction": 0.8}
+
+    assert gate_failures({**PASSING, "stable_fraction": 0.8}, 837, 3000, 3000, {}, minimum) == []
+    assert gate_failures({**PASSING, "stable_fraction": 0.6}, 837, 3000, 3000, {}, minimum) == [
+        "stable_fraction 0.6 under its limit 0.8"
+    ]
+    # A checkpoint without one (trained before it existed) fails too.
+    assert gate_failures(PASSING, 837, 3000, 3000, {}, minimum) == [
+        "stable_fraction nan under its limit 0.8"
+    ]

@@ -25,6 +25,20 @@ from mhd_surrogate.evaluation.protocol import (
 from mhd_surrogate.evaluation.stability import QUANTITIES, stability_scores
 
 
+def candidate_stable_fraction(model: ForecastModel, scores, n_steps: int) -> float | None:
+    """The stable fraction the selection rule's check reads (CLAUDE.md,
+    "Data analysis"), given the model's `scores` on its `n_steps`-step
+    validation forecast. An iteratively trained model's is its training
+    run's, around the epoch it kept (its `fit_info`, from
+    `evaluation.selection.RunSelection`); None if its checkpoint predates
+    it, which fails the check. A closed-form fit is the same model on
+    every refit, so its one forecast decides: 1 if stable, else 0."""
+    if getattr(model, "iterative", False):
+        fraction = getattr(model, "fit_info", {}).get("stable_fraction")
+        return None if fraction is None else float(fraction)
+    return float(scores["stable_steps"] >= n_steps)
+
+
 def train_eval_datasets(requested: list[str], train_datasets: list[str]) -> list[str]:
     """The training datasets to also score a model on, checked to really be
     training datasets: scoring "train" on anything else would mislabel a

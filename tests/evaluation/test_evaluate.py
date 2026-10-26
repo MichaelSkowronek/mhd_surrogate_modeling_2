@@ -3,7 +3,11 @@ import time
 import numpy as np
 import pytest
 
-from mhd_surrogate.evaluation.evaluate import evaluate, train_eval_datasets
+from mhd_surrogate.evaluation.evaluate import (
+    candidate_stable_fraction,
+    evaluate,
+    train_eval_datasets,
+)
 from mhd_surrogate.evaluation.metrics import selection_score
 from mhd_surrogate.evaluation.selection import selection_scores
 from mhd_surrogate.models.baselines import Persistence
@@ -324,3 +328,27 @@ def test_batching_members_changes_how_they_are_sampled_not_the_scores():
     assert model.batches == [[1, 2, 3, 4], [5]]  # seed 0 is the single `forecast`
     assert batched.scores == pytest.approx(alone.scores)
     np.testing.assert_allclose(batched.ensemble.crps, alone.ensemble.crps)
+
+
+class Trained:
+    """An iteratively trained model whose training recorded `fit_info`."""
+
+    iterative = True
+
+    def __init__(self, fit_info):
+        self.fit_info = fit_info
+
+
+def test_a_closed_form_models_stable_fraction_is_its_forecasts_stability():
+    model = Growing(make_series(), 10, 1.0)
+
+    assert candidate_stable_fraction(model, {"stable_steps": 20.0}, 20) == 1.0
+    assert candidate_stable_fraction(model, {"stable_steps": 15.0}, 20) == 0.0
+
+
+def test_an_iterative_models_stable_fraction_is_its_training_runs():
+    scores = {"stable_steps": 20.0}
+
+    assert candidate_stable_fraction(Trained({"stable_fraction": 0.6}), scores, 20) == 0.6
+    # A checkpoint from before the stable fraction: unknown, not its own forecast's.
+    assert candidate_stable_fraction(Trained({"best_epoch": 3.0}), scores, 20) is None

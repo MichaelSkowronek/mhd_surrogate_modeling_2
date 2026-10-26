@@ -294,8 +294,8 @@ stages:
       size: 1480
     - path: src/mhd_surrogate/evaluation
       hash: md5
-      md5: 85b2b86d5a7f85fa199b7c497d2bac62.dir
-      size: 55966
+      md5: 4ead40ef5d92d4e8464cc0cc88276d91.dir
+      size: 57113
       nfiles: 12
     - path: src/mhd_surrogate/models/__init__.py
       hash: md5
@@ -335,8 +335,8 @@ stages:
       size: 4221
     - path: src/mhd_surrogate/training/scoring.py
       hash: md5
-      md5: 77feb770a2ccbf17435f78e55055280a
-      size: 6610
+      md5: b8ddf896ba1ec0f23cc5bef68e5e6f74
+      size: 7101
     - path: src/mhd_surrogate/training/startup.py
       hash: md5
       md5: 6294a36299cccb2b3df42388eea29701
@@ -396,8 +396,8 @@ stages:
     outs:
     - path: models/hankel_dmd/metrics.json
       hash: md5
-      md5: e6fac0478aff3ea8cd425489d9f66e06
-      size: 1831
+      md5: db6f7df56cfb87cae65d0ebe6a6c1f44
+      size: 1859
   gate:
     cmd: uv run scripts/evaluation/gate_checkpoint.py 
       checkpoint=models/hankel_dmd/model export.dir=models/hankel_dmd 
@@ -414,8 +414,8 @@ stages:
       nfiles: 293
     - path: models/hankel_dmd/metrics.json
       hash: md5
-      md5: e6fac0478aff3ea8cd425489d9f66e06
-      size: 1831
+      md5: db6f7df56cfb87cae65d0ebe6a6c1f44
+      size: 1859
     - path: models/hankel_dmd/model
       hash: md5
       md5: 1b2c82643d30780cc4dce9e42436041f.dir
@@ -423,8 +423,8 @@ stages:
       nfiles: 2
     - path: scripts/evaluation/gate_checkpoint.py
       hash: md5
-      md5: 3230479fd6c253be824d81d25fe5c0b8
-      size: 1848
+      md5: 10bbb8e84441b535a16febdc057ac1f0
+      size: 1881
     - path: src/mhd_surrogate/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -459,8 +459,8 @@ stages:
       size: 0
     - path: src/mhd_surrogate/evaluation/gate.py
       hash: md5
-      md5: ebcef57620877e1b0a4df10f71f76206
-      size: 2356
+      md5: 15f9b1f41d30a44a9cddd1c43f35c4bc
+      size: 2694
     - path: src/mhd_surrogate/evaluation/protocol.py
       hash: md5
       md5: bcd0af22015e2e49ca36cd084a56b380
@@ -511,8 +511,8 @@ stages:
       size: 1929
     - path: src/mhd_surrogate/training/gating.py
       hash: md5
-      md5: d9cd98a8f1df89fec45dc171b3745481
-      size: 3062
+      md5: 932e5787ff6d3bb7f3a7bba251c186e0
+      size: 3093
     - path: src/mhd_surrogate/training/startup.py
       hash: md5
       md5: 6294a36299cccb2b3df42388eea29701
@@ -554,6 +554,8 @@ stages:
             u_x_mean_std_ratio: 2.0
             u_y_mean_offset: 1.0
             u_y_mean_std_ratio: 2.0
+          min_scores:
+            stable_fraction: 0.8
         stability:
           block_steps: 100
           max_ratio: 2.0

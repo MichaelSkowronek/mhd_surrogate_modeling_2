@@ -49,6 +49,7 @@
     "skill_horizon": 7.0,
     "spectrum_x_lsd": 2.62274,
     "spectrum_y_lsd": 2.09704,
+    "stable_fraction": 1.0,
     "stable_steps": 837.0,
     "temporal_u_x_lsd": 4.31485,
     "temporal_u_y_lsd": 4.04114,
