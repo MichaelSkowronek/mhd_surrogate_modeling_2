@@ -669,24 +669,33 @@ enstrophy errors are no more than 0.03 worse and its x/y spectrum distances
 no more than 0.05 worse. Those tolerances are about the spread a different
 realization of the flow scores (energy <1%, enstrophy <3%, spectrum
 0.01-0.03, see "Forecast evaluation"), so a candidate isn't rejected for a
-difference that is noise. Finally, its domain-mean `u_y` stays in the
-truth's band: `u_y_mean_offset` at most 1 and `u_y_mean_std_ratio` at most
-2. Those two limits are absolute, not relative to the incumbent: a
-limit relative to an incumbent that damps it (Hankel DMD: 0.07 and 0.41)
-would fail a model with the truth's own variability. They are in units of
-the truth's own variability over time, which is small: its domain-mean
-`u_y` stays at 0 +- 0.0055 (against a per-pixel std of 0.44), an
-empirical property of this flow -- the domain has an inlet and walls and
-is a slice of a 3D run, so no conservation law pins it -- whose
-fluctuation is the ~25-step oscillation the EDA found. A different
-realization scores at most 0.15 and 0.98-1.02, so the limits sit 7x and
-2x above that noise floor. On the scale of the field they are strict (1
-truth std is ~1.2% of a point's typical velocity, where the energy error
-tolerates tens of percent); the truth's band is the scale chosen because
-a drift beyond it swamps that oscillation, the one coherent temporal
-signal established in this flow. Outside the band a forecast carries a
-spurious net cross-stream flow (see "Input noise"); the limits are
-one-sided like the stability check, since a still mean is harmless. The
+difference that is noise. Finally, its domain-mean velocity stays in the
+truth's band, in each channel: `u_x_mean_offset` and `u_y_mean_offset` at
+most 1, `u_x_mean_std_ratio` and `u_y_mean_std_ratio` at most 2. Those
+limits are absolute, not relative to the incumbent: a limit relative to an
+incumbent that damps the domain mean (Hankel DMD: 0.19 and 0.17 on `u_x`,
+0.07 and 0.41 on `u_y`) would fail a model with the truth's own
+variability. They are in units of the truth's own variability over time,
+which is small: its domain-mean `u_x` stays at 1 +- 0.0042 and `u_y` at
+0 +- 0.0055 (against per-pixel stds of 0.82 and 0.44), an empirical
+property of this flow -- the domain has an inlet and walls and is a slice
+of a 3D run, so no conservation law pins them. `u_y`'s fluctuation is the
+~25-step oscillation the EDA found; `u_x`'s has no such peak, only a broad
+low-frequency bump, so an 837-step time mean of it is noisier. A different
+realization scores at most 0.15 and 0.98-1.02 on `u_y`, at most 0.33 and
+0.76-0.96 on `u_x` (all 7 train datasets against the validation truth),
+so the limits sit 3-7x and 2x above that noise floor. On the scale of the
+field they are strict (1 truth std is ~0.5% (`u_x`) and ~1.2% (`u_y`) of
+a point's typical velocity, where the energy error tolerates tens of
+percent); the truth's band is the scale chosen because a drift beyond it
+swamps the oscillation in `u_y`, the one coherent temporal signal
+established in this flow, and is a wrong bulk flow in `u_x`. The energy
+error sees neither: `u_y`'s mean enters it squared, and the U-Net baseline
+loses 7% of its bulk flow (domain-mean `u_x` 0.930, 17 truth stds low)
+with an energy error of 1%, the lost mean-flow energy made up by extra
+fluctuation energy. Outside the band a forecast carries a spurious net
+flow (see "Input noise"); the limits are one-sided like the stability
+check, since a still mean is harmless. The
 other oscillation scores are reported but not used to decide: on a single validation realization their noise (period error
 0.15-0.19 for perfect dynamics) is as large as the differences between
 models so far.
@@ -1825,9 +1834,10 @@ neither achievable nor the only thing worth measuring.
   That drift is measured directly: `u_y_mean_offset` is how far the time
   mean of the forecast's domain-mean `u_y` lies from the truth's, and
   `u_y_mean_std_ratio` how much it varies, both in units of the truth's own
-  variability over time (~0 and ~1 for a forecast on the truth's statistics).
-  Unlike the other oscillation scores they are guardrails (at most 1 and 2,
-  see "How candidates are ranked"). SPOD would give mode shapes rather than
+  variability over time (~0 and ~1 for a forecast on the truth's statistics);
+  `u_x_mean_offset` and `u_x_mean_std_ratio` do the same for the bulk
+  streamwise flow. Unlike the other oscillation scores they are guardrails
+  (at most 1 and 2, see "How candidates are ranked"). SPOD would give mode shapes rather than
   a score (it needs mode matching between prediction and truth and an
   eigendecomposition per frequency), so it stays a plotting diagnostic.
 
@@ -2843,6 +2853,9 @@ Neither fix makes the recipe more robust; both make it worse, and noise
 stds, std ratio 2.2-8; a different realization scores <= 0.15 and
 0.98-1.02, Hankel DMD 0.07 and 0.41): a spurious net cross-stream flow,
 now a guardrail (see "How candidates are ranked") that no U-Net passes.
+(The domain-mean `u_x`, measured later on the surviving baseline, drifts as
+far: its bulk flow ends up 17 truth stds low, so the guardrail covers both
+channels since.)
 
 **Decision: Hankel DMD stays canonical**, and the U-Net stays the neural
 baseline (noise 0.1, seed 0, run `2cbc89f9`; every other checkpoint of

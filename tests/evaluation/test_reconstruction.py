@@ -35,9 +35,16 @@ def test_a_perfect_reconstruction_scores_perfectly():
     scores = reconstruction_scores(Scaling(1.0), truth, np.array([1.0, 2.0]), DX, DY)
 
     assert scores["reconstruction_rmse"] == 0
-    for name in ("energy_rel_error", "enstrophy_rel_error", "spectrum_x_lsd", "u_y_mean_offset"):
+    for name in (
+        "energy_rel_error",
+        "enstrophy_rel_error",
+        "spectrum_x_lsd",
+        "u_x_mean_offset",
+        "u_y_mean_offset",
+    ):
         assert scores[name] == pytest.approx(0, abs=1e-6), name
     assert scores["divergence_ratio"] == pytest.approx(1)
+    assert scores["u_x_mean_std_ratio"] == pytest.approx(1)
     assert scores["u_y_mean_std_ratio"] == pytest.approx(1)
 
 
@@ -52,6 +59,7 @@ def test_a_halved_reconstruction_has_the_known_errors():
     assert scores["reconstruction_rmse"] == pytest.approx(expected, rel=1e-5)
     assert scores["energy_rel_error"] == pytest.approx(0.75, rel=1e-5)
     assert scores["enstrophy_rel_error"] == pytest.approx(0.75, rel=1e-5)
+    assert scores["u_x_mean_std_ratio"] == pytest.approx(0.5, rel=1e-5)
     assert scores["u_y_mean_std_ratio"] == pytest.approx(0.5, rel=1e-5)
 
 
