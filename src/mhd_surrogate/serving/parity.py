@@ -12,11 +12,16 @@ code is checked against the real model before it merges, where CI's smoke
 deploy only has a toy one.
 
 It forecasts on the CPU (the stage runs with JAX_PLATFORMS=cpu), as the
-deployed pod does. The service streams the forecast in blocks, so it differs
-from the one-call forecast by float rounding (5.2e-6 of the truth's
-standard deviation for Hankel DMD); the tolerance (1e-4,
+deployed pod does. The service streams the forecast in blocks, which for
+Hankel DMD round differently from the one-call forecast (5.2e-6 of the
+truth's standard deviation; every frame is computed from the starting
+state, so the rounding doesn't compound); the tolerance (1e-4,
 `configs/serving/default.yaml`) is about 20 times that, so a change to the
 block arithmetic passes and a change in what the service serves doesn't.
+A neural model's blocks carry its state exactly (`predict_blocks`) and match
+bit for bit (the U-Net baseline: 0), so one that fails here serves another
+forecast for real -- its chaotic rollout grows any difference at a block
+boundary -- and the fix is in its `predict_blocks`, not the tolerance.
 The test dataset is never opened.
 """
 
