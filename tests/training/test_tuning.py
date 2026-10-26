@@ -128,7 +128,9 @@ def test_trial_logging_writes_project_debug_records_to_the_file(tmp_path):
 # -- the trial ------------------------------------------------------------------
 
 
-def test_run_trial_trains_the_overridden_config_and_reports_each_validation(tmp_path, monkeypatch):
+def test_run_trial_trains_the_overridden_config_and_reports_each_validation_with_the_best_so_far(
+    tmp_path, monkeypatch
+):
     from ray import tune
 
     monkeypatch.chdir(tmp_path)  # run_trial changes directory; restore it after
@@ -138,7 +140,8 @@ def test_run_trial_trains_the_overridden_config_and_reports_each_validation(tmp_
 
     def fake_run_training(cfg, output_dir, log_file, run_name, tags, on_validation):
         calls.append((cfg, output_dir, log_file, run_name, tags))
-        on_validation({"selection_score": 2.5}, "run-1")
+        for score in (2.5, 1.0, 3.0):  # a dip after the first validation
+            on_validation({"selection_score": score}, "run-1")
 
     monkeypatch.setattr(run_module, "run_training", fake_run_training)
     base = {"model": {"name": "unet", "window": 4}}
@@ -164,7 +167,13 @@ def test_run_trial_trains_the_overridden_config_and_reports_each_validation(tmp_
     assert run_name == "unet model.window=2"
     assert tags == {"sweep": "s", "trial_id": "t1"}
     assert reports == [
-        {"selection_score": 2.5, "mlflow_run_id": "run-1", "trial_dir": str(output_dir)}
+        {
+            "selection_score": score,
+            "best_selection_score": best,
+            "mlflow_run_id": "run-1",
+            "trial_dir": str(output_dir),
+        }
+        for score, best in [(2.5, 2.5), (1.0, 2.5), (3.0, 3.0)]
     ]
 
 
@@ -248,7 +257,7 @@ def test_summary_rows_are_best_first_with_unscored_trials_last():
         result({"training_iteration": 1, "selection_score": 0.5}, config={"w": 1}, scores=[0.5]),
         result({}, error="boom", config={"w": 2}),
         result(
-            {"training_iteration": 3, "selection_score": 1.0},
+            {"training_iteration": 3, "selection_score": 1.0, "best_selection_score": 2.0},
             config={"w": 4},
             scores=[0.2, 2.0, 1.0],
         ),

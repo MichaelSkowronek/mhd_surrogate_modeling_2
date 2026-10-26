@@ -10,11 +10,17 @@ around it.
   MLflow run, nested under the search's parent run and tagged with the
   search's `sweep` name, with a checkpoint, logged model and full validation
   scores if it finishes.
-- After every validation the trial reports its selection scores to Tune.
-  The metric is `selection_score`: the selection rule (stable steps, then
-  skill horizon, ties broken by the RMSE at lead 10) as one number, the
-  same one early stopping maximizes, so the search optimizes what models
-  are chosen by.
+- After every validation the trial reports its selection scores to Tune,
+  plus the best `selection_score` it has reported so far,
+  `best_selection_score`, which is the metric. `selection_score` is the
+  selection rule (stable steps, then skill horizon, ties broken by the
+  RMSE at lead 10) as one number, the same one early stopping maximizes,
+  so the search optimizes what models are chosen by. The best so far, not
+  the latest, because a trial keeps its best epoch and its stable steps
+  flip between epochs: on the latest score ASHA would judge a trial by
+  whatever its validation at the rung happened to score, and Optuna would
+  learn each trial's final epoch (Ray hands it the last result), not the
+  epoch the trial keeps.
 - Optuna's TPE sampler proposes the next configuration from the finished
   and running ones; ASHA (asynchronous successive halving) stops trials
   whose score after `grace_period`, `grace_period * reduction_factor`, ...
@@ -35,6 +41,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import math
 import os
 from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
@@ -42,7 +49,10 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-METRIC = "selection_score"
+# One validation's score, as the trial reports it, and the metric Tune
+# compares trials by: the best of those so far.
+SCORE = "selection_score"
+METRIC = "best_selection_score"
 MODE = "max"
 TRIAL_LOG = "train.log"
 
@@ -160,8 +170,14 @@ def run_trial(
     setup_trial_logging(log_file)
     cfg = OmegaConf.create(apply_overrides(base_config, params))
 
+    # A trial starts fresh (its own directory, no `resume`), and so does its
+    # best score so far.
+    best = -math.inf
+
     def report(scores: dict[str, float], run_id: str) -> None:
-        tune.report({**scores, "mlflow_run_id": run_id, "trial_dir": str(trial_dir)})
+        nonlocal best
+        best = max(best, scores[SCORE])
+        tune.report({**scores, METRIC: best, "mlflow_run_id": run_id, "trial_dir": str(trial_dir)})
 
     run_training(
         cfg,
@@ -233,13 +249,13 @@ def summary_rows(results: Sequence[Any], params: Sequence[str]) -> list[dict[str
     for result in results:
         metrics = result.metrics or {}
         history = getattr(result, "metrics_dataframe", None)
-        scores = list(history[METRIC]) if history is not None and METRIC in history else []
+        scores = list(history[SCORE]) if history is not None and SCORE in history else []
         rows.append(
             {
                 **{p: (result.config or {}).get(p) for p in params},
                 "validations": metrics.get("training_iteration", 0),
                 "best_score": max(scores) if scores else None,
-                "last_score": metrics.get(METRIC),
+                "last_score": metrics.get(SCORE),
                 "error": result.error is not None,
             }
         )

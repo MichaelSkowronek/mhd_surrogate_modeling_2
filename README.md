@@ -2496,7 +2496,14 @@ Tune. Its root config, `configs/tune.yaml`, is `config.yaml` plus a
   to Tune after every validation, and the search maximizes
   `selection_score`: stable steps, then skill horizon with RMSE at lead 10
   as tie-break, the number early stopping already uses. The search optimizes what models are
-  chosen by, on validation only.
+  chosen by, on validation only. What Tune compares is a trial's best
+  `selection_score` so far (`best_selection_score`), not its latest: a
+  trial keeps its best epoch, and the score flips between epochs (stable
+  steps come in 100-step blocks). On the latest score, ASHA judged a trial
+  by whatever its validation at the rung happened to score (trial 5 of the
+  first search, below), and Optuna's TPE learned each trial's final epoch,
+  since Ray hands the searcher a trial's last result, not the epoch the
+  trial keeps. The best trial was already chosen by its best score.
 - **Optuna proposes, ASHA prunes.** Optuna's TPE sampler (seeded) models
   which regions of the space score well, from the trials so far, and samples
   the next configuration there instead of uniformly at random. ASHA
@@ -2640,6 +2647,9 @@ What the search shows:
 - **The validation score is noisy** (±2 between consecutive epochs of the
   same run), so early stopping and ASHA's rung comparisons decide partly on
   noise. Trial 5 was pruned at a rung where its score happened to dip.
+  *Since fixed:* Tune compares trials by their best score so far, so a dip
+  at the rung no longer prunes a trial whose earlier epoch was good (see
+  "One metric, the selection rule" above).
 - **Small and slow-learning won:** the best trial is the narrower network
   (width 16) with the lowest learning rate, so capacity isn't the
   bottleneck at this budget.

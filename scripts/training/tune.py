@@ -3,7 +3,7 @@
 Each trial is a full training run (`training/run.py`, as train.py does it)
 with hyperparameters sampled from `configs/search/<name>.yaml`'s space by
 Optuna's TPE sampler, reporting its validation selection score after every
-validation; ASHA stops the trials that fall behind (see
+validation; ASHA stops the trials whose best score so far falls behind (see
 `training/tuning.py`). Everything is decided on the validation dataset; the
 test dataset is never read.
 
@@ -42,6 +42,7 @@ from mhd_surrogate.training.tracking import tracked_run  # noqa: E402
 from mhd_surrogate.training.tuning import (  # noqa: E402
     METRIC,
     MODE,
+    SCORE,
     close_stopped_runs,
     default_point,
     recording_asha,
@@ -93,7 +94,7 @@ def main(cfg: DictConfig) -> None:
             return
         best = results.get_best_result(METRIC, MODE, scope="all")
         mlflow.log_params({f"best.{k}": v for k, v in best.config.items()})
-        mlflow.log_metric(f"best.{METRIC}", best.metrics_dataframe[METRIC].max())
+        mlflow.log_metric(f"best.{SCORE}", best.metrics_dataframe[SCORE].max())
         mlflow.set_tag("best_run_id", best.metrics["mlflow_run_id"])
         log.info("best trial: %s (MLflow run %s)", best.config, best.metrics["mlflow_run_id"])
 
