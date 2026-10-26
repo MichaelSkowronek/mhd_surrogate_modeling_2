@@ -2,7 +2,7 @@
 # Install the pinned Kubernetes and monitoring tools into ~/.local/bin (Linux x86-64), each
 # checked against its release's SHA-256 checksum. With arguments, only those
 # tools (CI's deploy-smoke job needs kind, kubectl and kubeconform, its
-# tests job promtool):
+# tests job promtool and amtool):
 #
 #   deploy/install-tools.sh                         # all of them
 #   deploy/install-tools.sh kind kubectl kubeconform
@@ -14,6 +14,7 @@ HELM=v4.3.1
 KUBECONFORM=v0.8.0
 ARGOCD=v3.5.6          # the version deploy/argocd/install installs
 PROMETHEUS=3.15.0      # promtool, of the Prometheus the monitoring stack runs
+ALERTMANAGER=0.34.1    # amtool, of the Alertmanager the monitoring stack runs
 
 BIN="$HOME/.local/bin"
 mkdir -p "$BIN"
@@ -73,7 +74,16 @@ install_promtool() {
   install -m 0755 "prometheus-$PROMETHEUS.linux-amd64/promtool" "$BIN/"
 }
 
-for tool in "${@:-kind kubectl helm kubeconform argocd promtool}"; do
+install_amtool() {
+  local base=https://github.com/prometheus/alertmanager/releases/download/v$ALERTMANAGER
+  local archive=alertmanager-$ALERTMANAGER.linux-amd64.tar.gz
+  curl -fsSLo alertmanager.tgz "$base/$archive"
+  check alertmanager.tgz "$(curl -fsSL "$base/sha256sums.txt" | awk -v a="$archive" '$2 == a {print $1}')"
+  tar -xzf alertmanager.tgz "alertmanager-$ALERTMANAGER.linux-amd64/amtool"
+  install -m 0755 "alertmanager-$ALERTMANAGER.linux-amd64/amtool" "$BIN/"
+}
+
+for tool in "${@:-kind kubectl helm kubeconform argocd promtool amtool}"; do
   for name in $tool; do
     "install_$name"
     echo "installed $name"

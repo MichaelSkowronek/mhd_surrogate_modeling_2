@@ -11,6 +11,8 @@ for workload in deployment/argocd-server deployment/argocd-repo-server \
   statefulset/argocd-application-controller; do
   kubectl -n argocd rollout status "$workload" --timeout=300s
 done
+# The one Secret not in git: Alertmanager's SMTP password.
+deploy/argocd/smtp-secret.sh
 kubectl apply -f deploy/argocd/root.yaml
 
 echo "Argo CD: http://localhost:8081, user admin, password:"

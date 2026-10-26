@@ -37,6 +37,43 @@ spec:
               requests:
                 cpu: 100m
                 memory: 512Mi
+        alertmanager:
+          # The forecast service's alerts (team: mhd-surrogate, set by its
+          # PrometheusRule) go out by email through Gmail's SMTP server; the
+          # chart's own stay in Alertmanager (kind trips several of them,
+          # e.g. KubePodNotReady for its static control-plane pods). The SMTP
+          # password is the Secret alertmanager-smtp, kept out of git
+          # (deploy/argocd/smtp-secret.sh) and mounted at
+          # /etc/alertmanager/secrets/alertmanager-smtp. Helm merges this
+          # with the chart's config: the inhibit rules and templates are the
+          # chart's, the routes and receivers these.
+          # tests/serving/test_alert_routing.py checks the routing (amtool).
+          alertmanagerSpec:
+            secrets:
+              - alertmanager-smtp
+          config:
+            global:
+              smtp_smarthost: smtp.gmail.com:587
+              smtp_from: michael.skowronek.91@gmail.com
+              smtp_auth_username: michael.skowronek.91@gmail.com
+              smtp_auth_password_file: /etc/alertmanager/secrets/alertmanager-smtp/password
+            route:
+              receiver: "null"
+              group_by: [alertname]
+              group_wait: 30s
+              group_interval: 5m
+              # A still-firing alert is mailed again twice a day.
+              repeat_interval: 12h
+              routes:
+                - receiver: email
+                  matchers:
+                    - team = "mhd-surrogate"
+            receivers:
+              - name: "null"
+              - name: email
+                email_configs:
+                  - to: michael.skowronek.91@gmail.com
+                    send_resolved: true
         grafana:
           # On localhost:8082 (deploy/kind/cluster.yaml); dashboards from
           # ConfigMaps labeled grafana_dashboard in any namespace.
