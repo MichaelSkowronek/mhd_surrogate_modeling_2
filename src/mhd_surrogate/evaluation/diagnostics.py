@@ -31,7 +31,9 @@ __all__ = ["DEFAULT_CHUNK_T", "enstrophy", "kinetic_energy"]  # re-exported
 # Welch segment length in steps, as in the EDA's temporal spectra
 # (scripts/analysis/check_spatial_mean_spectrum.py); overlap defaults to half.
 NPERSEG = 200
-# Channel order of the data; u_y carries the coherent oscillation.
+# Channel order of the data; u_x is the streamwise (bulk) flow, u_y carries
+# the coherent oscillation.
+U_X = 0
 U_Y = 1
 # Spectral power below this fraction of the true spectrum's peak counts as
 # zero. A relative floor (not an absolute epsilon) so a flat forecast, whose
@@ -99,13 +101,15 @@ def temporal_scores(
       read as 200 / 25.6 - 1 = 6.806 for every drifting U-Net).
     - `u_y_peak_power_ratio`: predicted over true power at that peak, below 1
       when the oscillation is damped.
-    - `u_y_mean_offset`: |time mean of the predicted domain-mean u_y minus
-      the truth's|, in units of the truth's own std over time -- how far the
-      forecast's net cross-stream flow has drifted (~0 for a forecast on the
-      truth's mean; the truth's coherent oscillation is 1 std).
-    - `u_y_mean_std_ratio`: the predicted domain-mean u_y's std over time
-      over the truth's: above 1 when it wanders more than the truth
-      oscillates, below 1 when the oscillation is damped.
+    - `u_x_mean_offset`, `u_y_mean_offset`: |time mean of the predicted
+      domain-mean velocity minus the truth's|, per channel, in units of the
+      truth's own std over time -- how far the forecast's bulk streamwise
+      flow (u_x) or net cross-stream flow (u_y) has drifted (~0 for a
+      forecast on the truth's mean; for u_y, the truth's coherent
+      oscillation is 1 std).
+    - `u_x_mean_std_ratio`, `u_y_mean_std_ratio`: the predicted domain-mean
+      velocity's std over time over the truth's: above 1 when it wanders
+      more than the truth varies, below 1 when it is damped.
     """
     noverlap = nperseg // 2 if noverlap is None else noverlap
     omega, pred_power = None, []
@@ -132,19 +136,20 @@ def temporal_scores(
         "temporal_u_y_lsd": log_spectral_distance(pred_power[U_Y:], true_power[U_Y:]),
         "u_y_period_error": period_error,
         "u_y_peak_power_ratio": float(pred_peak / true_peak),
-        **mean_drift_scores(predicted[:, U_Y], true[:, U_Y]),
+        **mean_drift_scores(predicted[:, U_X], true[:, U_X], "u_x"),
+        **mean_drift_scores(predicted[:, U_Y], true[:, U_Y], "u_y"),
     }
 
 
-def mean_drift_scores(predicted: np.ndarray, true: np.ndarray) -> dict[str, float]:
-    """`u_y_mean_offset` and `u_y_mean_std_ratio` (see `temporal_scores`) of
-    two (T,) domain-mean series."""
+def mean_drift_scores(predicted: np.ndarray, true: np.ndarray, channel: str) -> dict[str, float]:
+    """`<channel>_mean_offset` and `<channel>_mean_std_ratio` (see
+    `temporal_scores`) of two (T,) domain-mean series of `channel`."""
     predicted = np.asarray(predicted, dtype=np.float64)
     true = np.asarray(true, dtype=np.float64)
     scale = true.std()
     return {
-        "u_y_mean_offset": float(abs(predicted.mean() - true.mean()) / scale),
-        "u_y_mean_std_ratio": float(predicted.std() / scale),
+        f"{channel}_mean_offset": float(abs(predicted.mean() - true.mean()) / scale),
+        f"{channel}_mean_std_ratio": float(predicted.std() / scale),
     }
 
 

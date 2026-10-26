@@ -209,15 +209,36 @@ def test_a_drifting_forecast_has_no_period_and_its_drift_is_measured():
     assert np.isnan(scores["u_y_period_error"])
     assert scores["u_y_mean_offset"] > 5
     assert scores["u_y_mean_std_ratio"] > 5
+    # u_x is the truth's own, so its drift scores are perfect.
+    assert scores["u_x_mean_offset"] == 0
+    assert scores["u_x_mean_std_ratio"] == 1
+
+
+def test_a_lost_bulk_flow_is_measured_on_u_x_alone():
+    """A forecast whose domain-mean u_x sits 0.07 below the truth's (the
+    U-Net baseline's lost bulk flow) is 0.07 / (0.01 / sqrt(2)) truth stds
+    off: the truth's u_x is 1 + 0.01 cos, over 15 whole periods."""
+    t = np.arange(600, dtype=float)
+    u_x = 1.0 + 0.01 * np.cos(2 * np.pi * t / 40.0)
+    u_y = 0.01 * np.sin(2 * np.pi * t / 25.6)
+    true = np.stack([u_x, u_y], axis=1)
+    slower = np.stack([u_x - 0.07, u_y], axis=1)
+
+    scores = temporal_scores(slower, true, nperseg=200)
+
+    assert scores["u_x_mean_offset"] == pytest.approx(0.07 * np.sqrt(2) / 0.01)
+    assert scores["u_x_mean_std_ratio"] == pytest.approx(1.0)
+    assert scores["u_y_mean_offset"] == 0
+    assert scores["u_y_mean_std_ratio"] == 1
 
 
 def test_mean_drift_scores_are_in_units_of_the_truths_variability():
     rng = np.random.default_rng(0)
     true = rng.normal(0.0, 2.0, 100_000)
 
-    on_mean = mean_drift_scores(rng.normal(0.0, 2.0, 100_000), true)
-    offset = mean_drift_scores(true + 1.0, true)
-    damped = mean_drift_scores(0.5 * true, true)
+    on_mean = mean_drift_scores(rng.normal(0.0, 2.0, 100_000), true, "u_y")
+    offset = mean_drift_scores(true + 1.0, true, "u_y")
+    damped = mean_drift_scores(0.5 * true, true, "u_y")
 
     assert on_mean["u_y_mean_offset"] == pytest.approx(0.0, abs=0.02)
     assert on_mean["u_y_mean_std_ratio"] == pytest.approx(1.0, rel=0.02)

@@ -47,14 +47,18 @@
 #   validation scores then plus the margins a replacement may be worse by
 #   (0.03 energy/enstrophy errors, 0.05 spectrum distances) -- and change
 #   only with the next switch. Current: Hankel DMD's (0.2635, 0.7276,
-#   2.623, 2.097). The domain-mean u_y drift limits are absolute instead,
-#   the same for every model: the forecast's domain-mean u_y within one
-#   truth std of the truth's mean and varying at most 2x as much (a
-#   different realization scores <= 0.15 and 0.98-1.02). The truth's
-#   domain-mean u_y stays at 0 +- 0.0055 (a per-pixel std is 0.44): an
-#   empirical property of this flow, not a conservation law, whose
-#   fluctuation is the EDA's ~25-step oscillation; a drift beyond that
-#   band swamps it.
+#   2.623, 2.097). The domain-mean velocity drift limits are absolute
+#   instead, the same for every model: per channel, the forecast's
+#   domain-mean velocity within one truth std of the truth's mean and
+#   varying at most 2x as much (a different realization scores <= 0.33 and
+#   0.76-0.96 on u_x, <= 0.15 and 0.98-1.02 on u_y). The truth's domain
+#   means stay at 1 +- 0.0042 (u_x, the bulk flow) and 0 +- 0.0055 (u_y,
+#   whose fluctuation is the EDA's ~25-step oscillation), against per-pixel
+#   stds of 0.82 and 0.44: an empirical property of this flow, not a
+#   conservation law. A drift beyond that band is a wrong bulk or
+#   cross-stream flow, which the energy error doesn't see (u_y's enters it
+#   squared; the U-Net baseline's 7% loss of bulk flow is offset by extra
+#   fluctuation energy, a 1% energy error).
 #
 # train_datasets: train datasets also scored the same way, logged as
 #   `train.<name>.*` -- a sanity check of the fit and the train/val gap, not
@@ -76,6 +80,8 @@ gate:
     enstrophy_rel_error: 0.758
     spectrum_x_lsd: 2.673
     spectrum_y_lsd: 2.147
+    u_x_mean_offset: 1.0
+    u_x_mean_std_ratio: 2.0
     u_y_mean_offset: 1.0
     u_y_mean_std_ratio: 2.0
 train_datasets: [re16k_t400_0]

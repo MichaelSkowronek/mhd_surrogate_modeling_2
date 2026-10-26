@@ -68,11 +68,12 @@ conventions below; it shifts which tools are worth reaching for at all.
   no 100-step block over 2x the truth's energy or enstrophy), its energy and
   enstrophy errors are no more than 0.03 worse and its spectrum distances no
   more than 0.05 worse (about the spread a different realization scores),
-  and its domain-mean `u_y` stays in the truth's band (`u_y_mean_offset`
-  <= 1, `u_y_mean_std_ratio` <= 2, in units of the truth's small
-  variability over time, deliberately strict on the field's scale;
-  absolute limits, since the incumbent Hankel DMD damps it and a relative
-  limit would fail a perfect model).
+  and its domain-mean velocity stays in the truth's band in both channels
+  (`u_x_mean_offset` and `u_y_mean_offset` <= 1, `u_x_mean_std_ratio` and
+  `u_y_mean_std_ratio` <= 2, in units of the truth's small variability
+  over time, deliberately strict on the field's scale; absolute limits,
+  since the incumbent Hankel DMD damps it and a relative limit would fail
+  a perfect model).
 - When a model becomes canonical, freeze its validation scores plus those
   margins (and the absolute drift limits) as the DVC `gate` stage's limits (`configs/evaluation/default.yaml`,
   `gate.max_scores`). They change only with the next switch, never to match

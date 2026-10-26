@@ -293,8 +293,8 @@ stages:
       size: 1480
     - path: src/mhd_surrogate/evaluation
       hash: md5
-      md5: 64d3bbeed4f904bd34d5cdaf1a6ba7e5.dir
-      size: 48500
+      md5: e367c65e4498097208725c3be795993e.dir
+      size: 48778
       nfiles: 12
     - path: src/mhd_surrogate/models/__init__.py
       hash: md5
@@ -394,8 +394,8 @@ stages:
     outs:
     - path: models/hankel_dmd/metrics.json
       hash: md5
-      md5: c016bc876e166e1f1d3313c0ee4c1327
-      size: 1693
+      md5: e6fac0478aff3ea8cd425489d9f66e06
+      size: 1831
   gate:
     cmd: uv run scripts/evaluation/gate_checkpoint.py 
       checkpoint=models/hankel_dmd/model export.dir=models/hankel_dmd 
@@ -412,8 +412,8 @@ stages:
       nfiles: 293
     - path: models/hankel_dmd/metrics.json
       hash: md5
-      md5: c016bc876e166e1f1d3313c0ee4c1327
-      size: 1693
+      md5: e6fac0478aff3ea8cd425489d9f66e06
+      size: 1831
     - path: models/hankel_dmd/model
       hash: md5
       md5: 1b2c82643d30780cc4dce9e42436041f.dir
@@ -548,6 +548,8 @@ stages:
             enstrophy_rel_error: 0.758
             spectrum_x_lsd: 2.673
             spectrum_y_lsd: 2.147
+            u_x_mean_offset: 1.0
+            u_x_mean_std_ratio: 2.0
             u_y_mean_offset: 1.0
             u_y_mean_std_ratio: 2.0
         stability:
