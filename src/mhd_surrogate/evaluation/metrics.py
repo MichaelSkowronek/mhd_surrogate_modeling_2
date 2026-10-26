@@ -42,13 +42,15 @@ def selection_score(
     rmse_at_tie_break_lead: float,
     stable_steps: float,
     n_steps: int,
+    peak_ratio: float,
     stable_fraction: float = 0.0,
     n_forecasts: int = 1,
 ) -> float:
     """One number that ranks candidates like the selection rule (CLAUDE.md,
     "Data analysis"): by stable steps (how long the forecast stays bounded,
-    `evaluation.stability`), then by stable fraction, then by skill horizon,
-    ties broken by the RMSE at the tie-break lead. A higher score is a
+    `evaluation.stability`); then a stable forecast by stable fraction, by
+    skill horizon and, as a tie-break, by the RMSE at the tie-break lead,
+    and an unstable one by its peak ratio, lower first. A higher score is a
     better candidate under the rule; early stopping and the hyperparameter
     search maximize it.
 
@@ -60,6 +62,19 @@ def selection_score(
     outweigh any skill and RMSE (again tying at worst for an infinite RMSE).
     Scores are therefore comparable only between forecasts of the same
     length, i.e. on the same dataset.
+
+    `peak_ratio` is how far the forecast strayed: its largest block mean of
+    energy or enstrophy over the truth's (`stability.stability_scores`'
+    peak ratios, the larger of the two; NaN for a forecast that produced
+    NaN). An unstable forecast is ranked by it instead of by skill: the
+    stable steps of most unstable forecasts are 0 or 100 while their peaks
+    range over decades (3x to 60,000x in the U-Net runs), and a forecast
+    that strays 3x is far closer to a usable one than one that blows up
+    1000x, whatever its short-range skill. Its term (`peak_ratio_term`)
+    lies in [0, n_steps], so one more stable step still outweighs it, and
+    an unstable forecast never outscores a stable one (tying at worst). A
+    stable forecast's peak ratio isn't used: below the truth's range it
+    means damping, which the stability check deliberately doesn't reward.
 
     `stable_fraction` is the share of stable forecasts among the at most
     `n_forecasts` the candidate is judged with (`selection.RunSelection`:
@@ -76,12 +91,24 @@ def selection_score(
     r = rmse_at_tie_break_lead
     if not r >= 0:  # also catches NaN
         return float("-inf")
+    if stable_steps < n_steps:
+        return float(stable_steps) * (n_steps + 1) + peak_ratio_term(peak_ratio, n_steps)
     return (
         float(stable_steps) * (n_steps + 1)
         + bonus
         + float(skill)
         - (1.0 if math.isinf(r) else r / (1.0 + r))
     )
+
+
+def peak_ratio_term(peak_ratio: float, n_steps: int) -> float:
+    """What `selection_score` adds for an unstable forecast's peak ratio:
+    n_steps / (1 + log10 peak_ratio), in [0, n_steps] and decreasing as the
+    peak grows (a peak ratio at most 1 counts as 1); 0 for a NaN or
+    infinite one, the worst. Only its order matters, not its shape."""
+    if not math.isfinite(peak_ratio):
+        return 0.0
+    return n_steps / (1.0 + math.log10(max(peak_ratio, 1.0)))
 
 
 def stable_fraction_bonus(
