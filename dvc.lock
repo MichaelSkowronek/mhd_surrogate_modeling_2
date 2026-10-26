@@ -110,8 +110,8 @@ stages:
       size: 0
     - path: src/mhd_surrogate/evaluation/metrics.py
       hash: md5
-      md5: 4b8c8ead11bd0993f75f101c8fc5e6ae
-      size: 4370
+      md5: b2c51d18cbf84a352edee98bf6905e7b
+      size: 5944
     - path: src/mhd_surrogate/evaluation/protocol.py
       hash: md5
       md5: bcd0af22015e2e49ca36cd084a56b380
@@ -122,8 +122,8 @@ stages:
       size: 981
     - path: src/mhd_surrogate/evaluation/selection.py
       hash: md5
-      md5: c4968fd1d5ce797ee5df43cc33353524
-      size: 6326
+      md5: 007226aadffa76bb1e871ed1a34971d5
+      size: 6571
     - path: src/mhd_surrogate/evaluation/stability.py
       hash: md5
       md5: 6e1ff7f6cb92b1c673ca0807a25a0387
@@ -294,8 +294,8 @@ stages:
       size: 1480
     - path: src/mhd_surrogate/evaluation
       hash: md5
-      md5: f225dc56793cd03284325dfdc9ff7e5e.dir
-      size: 54147
+      md5: 85b2b86d5a7f85fa199b7c497d2bac62.dir
+      size: 55966
       nfiles: 12
     - path: src/mhd_surrogate/models/__init__.py
       hash: md5

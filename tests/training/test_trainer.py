@@ -241,7 +241,7 @@ class ScriptedStability:
         stable, skill = self.script[len(self.gains) - 1]
         steps = 10.0 if stable else 5.0
         return {
-            "selection_score": selection_score(skill, 0.5, steps, 10),
+            "selection_score": selection_score(skill, 0.5, steps, 10, 1.0 if stable else 5.0),
             "stable_steps": steps,
             "forecast_steps": 10.0,
         }

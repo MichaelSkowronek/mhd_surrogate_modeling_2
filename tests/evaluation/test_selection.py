@@ -10,7 +10,7 @@ def scores(stable: bool, skill: float = 1.0, rmse: float = 0.5) -> dict[str, flo
     """One validation's scores, as `selection_scores` gives them."""
     steps = float(N_STEPS if stable else N_STEPS // 2)
     return {
-        "selection_score": selection_score(skill, rmse, steps, N_STEPS),
+        "selection_score": selection_score(skill, rmse, steps, N_STEPS, 1.0 if stable else 5.0),
         "stable_steps": steps,
         "forecast_steps": float(N_STEPS),
     }
@@ -56,7 +56,7 @@ def test_the_score_is_the_selection_score_with_the_stable_fraction():
     selection = RunSelection(1, [scores(True, 4.0, 0.3), scores(True, 2.0), scores(False)])
 
     assert selection.score(0) == pytest.approx(
-        selection_score(4.0, 0.3, N_STEPS, N_STEPS, stable_fraction=2 / 3, n_forecasts=3)
+        selection_score(4.0, 0.3, N_STEPS, N_STEPS, 1.0, stable_fraction=2 / 3, n_forecasts=3)
     )
     # An unstable validation gets no bonus: its forecast's own score.
     assert selection.score(2) == selection.history[2]["selection_score"]

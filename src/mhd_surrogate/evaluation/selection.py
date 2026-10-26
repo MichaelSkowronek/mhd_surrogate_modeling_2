@@ -24,7 +24,11 @@ from mhd_surrogate.evaluation.metrics import (
 )
 from mhd_surrogate.evaluation.protocol import ForecastModel, forecast
 from mhd_surrogate.evaluation.quantities import DEFAULT_CHUNK_T
-from mhd_surrogate.evaluation.stability import energy_and_enstrophy, stability_scores
+from mhd_surrogate.evaluation.stability import (
+    QUANTITIES,
+    energy_and_enstrophy,
+    stability_scores,
+)
 
 
 def selection_scores(
@@ -69,7 +73,14 @@ def selection_scores(
         "skill_horizon": float(skill),
         f"rmse_lead_{tie_break_lead}": tie_break,
         **stability,
-        "selection_score": selection_score(skill, tie_break, stability["stable_steps"], len(rmse)),
+        "selection_score": selection_score(
+            skill,
+            tie_break,
+            stability["stable_steps"],
+            len(rmse),
+            # The larger of the two, NaN if either is: np.max propagates NaN.
+            float(np.max([stability[f"{q}_peak_ratio"] for q in QUANTITIES])),
+        ),
         "forecast_steps": float(len(rmse)),
     }
 

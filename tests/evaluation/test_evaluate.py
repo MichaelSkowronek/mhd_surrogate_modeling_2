@@ -185,7 +185,8 @@ def test_selection_scores_match_the_skill_horizon_and_the_tie_break_lead():
     # The offset adds o**2 to the energy (~1 for this noise): the third
     # block's mean (o = 1.1..1.5) is the first over 2x the truth's.
     assert scores["stable_steps"] == 10
-    assert scores["selection_score"] == pytest.approx(selection_score(5, 1.0, 10, 20))
+    peak = max(scores["energy_peak_ratio"], scores["enstrophy_peak_ratio"])
+    assert scores["selection_score"] == pytest.approx(selection_score(5, 1.0, 10, 20, peak))
 
 
 def test_selection_scores_use_the_last_lead_when_the_forecast_is_shorter():
@@ -224,6 +225,20 @@ def test_a_blowing_up_forecast_loses_its_stable_steps_and_ranks_below_a_stable_o
     assert stable_scores["stable_steps"] == 20
     assert unstable_scores["skill_horizon"] > stable_scores["skill_horizon"] == 0
     assert unstable_scores["selection_score"] < stable_scores["selection_score"]
+
+
+def test_of_two_forecasts_failing_at_the_same_block_the_lesser_blow_up_ranks_first():
+    series = make_series()
+    # Both block means first exceed 2x the truth's in the second 5-step block;
+    # by the end one is ~6x the truth's energy, the other ~30x.
+    slower, faster = (
+        select(Growing(series, 10, 1.05), series),
+        select(Growing(series, 10, 1.1), series),
+    )
+
+    assert slower["stable_steps"] == faster["stable_steps"] == 5
+    assert slower["energy_peak_ratio"] < faster["energy_peak_ratio"]
+    assert slower["selection_score"] > faster["selection_score"]
 
 
 def test_evaluate_and_selection_scores_agree_on_stability():

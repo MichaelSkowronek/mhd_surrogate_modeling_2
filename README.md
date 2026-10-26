@@ -658,8 +658,16 @@ U-Net search picked, by skill horizon alone, models whose energy is 1000x
 the truth's by the end of the validation forecast (see "First search").
 Among stable forecasts, which is what a usable candidate has to be, the
 rule is stable fraction, skill horizon and RMSE at lead 10; among unstable ones,
-lasting longer wins, so early stopping and the search are pushed toward
-stability even while nothing is stable yet. The stable fraction is there
+lasting longer wins, then straying less: the **peak ratio** (the
+forecast's largest 100-step block mean of energy or enstrophy over the
+truth's), lower first, in place of skill. Most unstable forecasts last 0
+or 100 steps (362 of the U-Net runs' 524 unstable validations) while
+their peaks range from 3x to 60,000x; skill can't tell a forecast that
+strays 3x from one that blows up 1000x, and optimizing it among unstable
+models is what picked the first search's blow-ups. So early stopping and
+the search are pushed toward stability even while nothing is stable yet.
+A stable forecast's peak ratio isn't used: below the truth's range it
+means damping, which the stability check is deliberately one-sided about. The stable fraction is there
 because a stable epoch is usually a lucky one: the median U-Net run was
 stable on the validation forecast at 2 of its 30 epochs, mostly isolated
 ones, and only 1 of 21 runs ended on a stable epoch. Keeping the best epoch
@@ -2375,7 +2383,9 @@ of the domain.
   at lead 10, folded into one `selection_score`,
   `(n + 1) * stable_steps + skill - r / (1 + r)` for an `n`-step forecast,
   which orders like the rule exactly (one more stable step outweighs any
-  skill, one more skill step any RMSE). The validations are then ranked by
+  skill, one more skill step any RMSE); an unstable forecast scores
+  `(n + 1) * stable_steps + n / (1 + log10 peak_ratio)` instead, so one
+  more stable step still outweighs any peak. The validations are then ranked by
   `evaluation.selection.RunSelection`, which judges each with its nearest
   validations: a stable one's score gains its stable fraction times
   `(n + 1) * m^2` for windows of `m` validations, enough for a larger
