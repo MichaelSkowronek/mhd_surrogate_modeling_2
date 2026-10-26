@@ -325,6 +325,10 @@ conventions below; it shifts which tools are worth reaching for at all.
   measured basis, never changed to silence an alert. Every alert has
   promtool cases (`tests/serving/test_alert_rules.py`) that it fires when
   it should and not otherwise.
+- Every alert rule carries `team: mhd-surrogate`, its only route to email
+  (`tests/serving/test_alert_routing.py` checks it). The SMTP password is
+  the one Secret outside git (`deploy/argocd/smtp-secret.sh`); a second
+  secret is the point to revisit Sealed Secrets.
 - See the README's "Serving" section for the full rationale.
 
 ## Code style
