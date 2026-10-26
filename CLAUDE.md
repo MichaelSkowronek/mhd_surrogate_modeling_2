@@ -305,6 +305,9 @@ conventions below; it shifts which tools are worth reaching for at all.
   `serving.parity_tolerance` (1e-4 of the truth's std). A pull request that
   changes serving code runs `dvc repro serve_parity` and commits `dvc.lock`
   and the verdict with it; a new serving module needs no dvc.yaml edit.
+  `parity_tolerance` is not loosened to pass a model: a neural model
+  matches exactly on the CPU (the U-Net baseline: 0), so a failure is a
+  real difference, fixed in the model's `predict_blocks`.
 - MLflow clients outside the compose network (the host, pods) set
   `MLFLOW_ENABLE_PROXY_MULTIPART_UPLOAD=false` and
   `MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD=false`: for artifacts of 500 MB or
