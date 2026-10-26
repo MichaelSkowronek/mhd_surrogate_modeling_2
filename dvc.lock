@@ -110,8 +110,8 @@ stages:
       size: 0
     - path: src/mhd_surrogate/evaluation/metrics.py
       hash: md5
-      md5: 870f966e65d1dc8fdbff20f8b2aa737a
-      size: 2728
+      md5: 4b8c8ead11bd0993f75f101c8fc5e6ae
+      size: 4370
     - path: src/mhd_surrogate/evaluation/protocol.py
       hash: md5
       md5: bcd0af22015e2e49ca36cd084a56b380
@@ -122,8 +122,8 @@ stages:
       size: 981
     - path: src/mhd_surrogate/evaluation/selection.py
       hash: md5
-      md5: c513aaf6e8eff37d2f3bc74392b11b4d
-      size: 2599
+      md5: c4968fd1d5ce797ee5df43cc33353524
+      size: 6326
     - path: src/mhd_surrogate/evaluation/stability.py
       hash: md5
       md5: 6e1ff7f6cb92b1c673ca0807a25a0387
@@ -134,8 +134,8 @@ stages:
       size: 0
     - path: src/mhd_surrogate/models/base.py
       hash: md5
-      md5: eb559baa18061af67b76c710d2589585
-      size: 5257
+      md5: 365e87e6b808c7bec468628184dffc9e
+      size: 5878
     - path: src/mhd_surrogate/models/dmd.py
       hash: md5
       md5: 9264ddb4fa9088b140d3dad6b523a6a9
@@ -170,8 +170,8 @@ stages:
       size: 4221
     - path: src/mhd_surrogate/training/run.py
       hash: md5
-      md5: 0bca622c0ac8116df30563306b63ed57
-      size: 7606
+      md5: ddc97b7f610bea66f63597611ff84df2
+      size: 7515
     - path: src/mhd_surrogate/training/startup.py
       hash: md5
       md5: 6294a36299cccb2b3df42388eea29701
@@ -218,6 +218,7 @@ stages:
         stability:
           block_steps: 100
           max_ratio: 2.0
+          neighbors: 2
         tie_break_lead: 10
       configs/model/hankel_dmd.yaml:
         delays: 4
@@ -293,8 +294,8 @@ stages:
       size: 1480
     - path: src/mhd_surrogate/evaluation
       hash: md5
-      md5: e367c65e4498097208725c3be795993e.dir
-      size: 48778
+      md5: f225dc56793cd03284325dfdc9ff7e5e.dir
+      size: 54147
       nfiles: 12
     - path: src/mhd_surrogate/models/__init__.py
       hash: md5
@@ -302,8 +303,8 @@ stages:
       size: 0
     - path: src/mhd_surrogate/models/base.py
       hash: md5
-      md5: eb559baa18061af67b76c710d2589585
-      size: 5257
+      md5: 365e87e6b808c7bec468628184dffc9e
+      size: 5878
     - path: src/mhd_surrogate/models/dmd.py
       hash: md5
       md5: 9264ddb4fa9088b140d3dad6b523a6a9
@@ -387,6 +388,7 @@ stages:
         stability:
           block_steps: 100
           max_ratio: 2.0
+          neighbors: 2
         train_datasets:
         - re16k_t400_0
       configs/normalization/per_channel.yaml:
@@ -481,8 +483,8 @@ stages:
       size: 0
     - path: src/mhd_surrogate/models/base.py
       hash: md5
-      md5: eb559baa18061af67b76c710d2589585
-      size: 5257
+      md5: 365e87e6b808c7bec468628184dffc9e
+      size: 5878
     - path: src/mhd_surrogate/models/dmd.py
       hash: md5
       md5: 9264ddb4fa9088b140d3dad6b523a6a9
@@ -555,6 +557,7 @@ stages:
         stability:
           block_steps: 100
           max_ratio: 2.0
+          neighbors: 2
     outs:
     - path: models/hankel_dmd/gate.json
       hash: md5
@@ -628,8 +631,8 @@ stages:
       size: 0
     - path: src/mhd_surrogate/models/base.py
       hash: md5
-      md5: eb559baa18061af67b76c710d2589585
-      size: 5257
+      md5: 365e87e6b808c7bec468628184dffc9e
+      size: 5878
     - path: src/mhd_surrogate/models/dmd.py
       hash: md5
       md5: 9264ddb4fa9088b140d3dad6b523a6a9

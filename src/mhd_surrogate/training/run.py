@@ -33,8 +33,8 @@ from mhd_surrogate.training.tracking import resumed_run_id, save_run_record, tra
 
 log = logging.getLogger(__name__)
 
-# Called with a validation's scores and the MLflow run id (e.g. to report
-# them to Ray Tune).
+# Called with a validation's scores plus the run's best so far
+# (`FitHooks.report`) and the MLflow run id (e.g. to report them to Ray Tune).
 OnValidation = Callable[[dict[str, float], str], None]
 
 
@@ -87,13 +87,15 @@ def run_training(
         if getattr(model, "iterative", False):
             if run_id is None:
                 save_run_record(state_dir, run.info.run_id, resolved)
-            validate = ValidationMonitor(root[cfg.data.val_dataset], scale, cfg)
+            report = {}
             if on_validation is not None:
-                validate = _reporting(validate, on_validation, run.info.run_id)
+                report["report"] = lambda scores: on_validation(scores, run.info.run_id)
             hooks = FitHooks(
-                validate=validate,
+                validate=ValidationMonitor(root[cfg.data.val_dataset], scale, cfg),
+                neighbors=cfg.evaluation.stability.neighbors,
                 log_metrics=lambda metrics, step: mlflow.log_metrics(metrics, step=step),
                 state_dir=state_dir,
+                **report,
             )
         elif run_id is not None:
             raise ValueError(f"resume: {model.name} isn't trained iteratively")
@@ -136,15 +138,6 @@ def run_training(
         if export_dir is not None:
             log.info("exported to %s", export_dir)
         return scores
-
-
-def _reporting(monitor, on_validation: OnValidation, run_id: str):
-    def validate(model) -> dict[str, float]:
-        scores = monitor(model)
-        on_validation(scores, run_id)
-        return scores
-
-    return validate
 
 
 class ValidationMonitor:

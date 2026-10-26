@@ -647,15 +647,30 @@ what would spoil the test set is going back to iterate after looking at it.
 forecast stays close to the truth, and only if it stays bounded after that.
 The primary criterion is the validation **stable steps**: how many leading
 steps of the forecast stay bounded (see "Forecast evaluation"; the whole
-837 for a stable forecast). Then the validation **skill horizon** (lead
+837 for a stable forecast). Then, for a stable candidate of an iterative
+(neural) training run, the **stable fraction**: the share of the 5
+validations nearest its epoch (2 either side, shifted inward at the ends
+of the run; `evaluation.stability.neighbors`) that are stable too. Then the
+validation **skill horizon** (lead
 steps with RMSE <= 0.5), ties broken by **RMSE at lead 10**. Stability comes
 first because the short-horizon scores can't see a blow-up: the first
 U-Net search picked, by skill horizon alone, models whose energy is 1000x
 the truth's by the end of the validation forecast (see "First search").
 Among stable forecasts, which is what a usable candidate has to be, the
-rule is skill horizon and RMSE at lead 10 as before; among unstable ones,
+rule is stable fraction, skill horizon and RMSE at lead 10; among unstable ones,
 lasting longer wins, so early stopping and the search are pushed toward
-stability even while nothing is stable yet. The mean RMSE over all leads is deliberately not used:
+stability even while nothing is stable yet. The stable fraction is there
+because a stable epoch is usually a lucky one: the median U-Net run was
+stable on the validation forecast at 2 of its 30 epochs, mostly isolated
+ones, and only 1 of 21 runs ended on a stable epoch. Keeping the best epoch
+picks such a draw, and the final refit (below) trains for that many epochs
+with no validation left to pick with, so it lands on whatever that epoch
+gives. The fraction around the kept epoch is how often its neighborhood
+gives a stable network. It does not predict long rollouts: of the U-Net
+checkpoints kept by stable steps and skill alone, seven isolated ones
+(fraction 0.2) passed the 3000-step rollout and three of the EMA runs'
+long stable stretches (0.6) didn't, so the rollout guardrail below stays.
+A closed-form fit (DMD) has no epochs: it is the same model on every refit. The mean RMSE over all leads is deliberately not used:
 after a few dozen steps every forecast of this chaotic flow has decorrelated,
 and from there pointwise error favors whatever sits closest to the mean -- in
 the DMD rank sweep it ranks the smoothest, lowest-rank model first. The
@@ -2356,16 +2371,23 @@ of the domain.
   hyperparameter search's pruning) can follow the curve.
 - *Early stopping on validation:* every `eval_every` epochs the model
   forecasts the whole validation dataset under the protocol, and is scored
-  with `evaluation.selection_scores`. That is the selection rule's three
-  numbers, stable steps, skill horizon and RMSE at lead 10, folded into one
-  `selection_score`: `(n + 1) * stable_steps + skill - r / (1 + r)` for an
-  `n`-step forecast, which orders like the rule exactly (one more stable
-  step outweighs any skill, one more skill step any RMSE). Training stops
-  after `patience` evaluations without a strictly better score, and the
-  best epoch's network is the result. These are the same scores models are
-  compared by, so early stopping is another decision made on validation.
-  The physics guardrails are left out because they're too slow to run
-  every epoch; the final model is scored in full like every model.
+  with `evaluation.selection_scores`: stable steps, skill horizon and RMSE
+  at lead 10, folded into one `selection_score`,
+  `(n + 1) * stable_steps + skill - r / (1 + r)` for an `n`-step forecast,
+  which orders like the rule exactly (one more stable step outweighs any
+  skill, one more skill step any RMSE). The validations are then ranked by
+  `evaluation.selection.RunSelection`, which judges each with its nearest
+  validations: a stable one's score gains its stable fraction times
+  `(n + 1) * m^2` for windows of `m` validations, enough for a larger
+  fraction to outweigh any skill and RMSE. A validation's score is
+  provisional until its 2 later neighbors are in, so its network is kept
+  until then (with the best one already final); a stable epoch can still
+  lose its lead to an unstable one after it. Training stops once the best
+  validation so far is `patience` validations old, and the best one's
+  network is the result. These are the same scores models are compared by,
+  so early stopping is another decision made on validation. The physics
+  guardrails are left out because they're too slow to run every epoch; the
+  final model is scored in full like every model.
 - *Divergence:* a non-finite loss, or one above `max_loss`, raises
   `DivergenceError`, so the run is tagged `diverged`.
 - *Speed:* `compute_dtype: bfloat16` runs the network in bf16 (parameters,
@@ -2379,12 +2401,14 @@ of the domain.
 **What's logged.** Training curves go to MLflow with the optimizer step as
 the step: `loss`, `grad_norm`, `lr` and `samples_per_second` every
 `log_every` steps, and `epoch_loss`, `epoch_seconds` and
-`val_monitor.{skill_horizon,rmse_lead_10,stable_steps,energy_peak_ratio,enstrophy_peak_ratio,selection_score}`
-every epoch. After
+`val_monitor.{skill_horizon,rmse_lead_10,stable_steps,energy_peak_ratio,enstrophy_peak_ratio,selection_score,forecast_steps}`
+every epoch, with the run's best validation so far (`best_epoch`,
+`best_selection_score`, `best_stable_fraction`). After
 training, the model is checkpointed, logged and scored like every model
-(`val.*`, `train.<dataset>.*`, `fit.*`, where `fit.best_epoch` and
-`fit.stopped_early` come from training), and `n_parameters` is the
-network's weights (runs before #68 logged it as `fit.parameters`).
+(`val.*`, `train.<dataset>.*`, `fit.*`, where `fit.best_epoch`,
+`fit.stable_fraction` and `fit.stopped_early` come from training), and
+`n_parameters` is the network's weights (runs before #68 logged it as
+`fit.parameters`).
 
 **Resuming.** Training state is saved after every epoch into the run's
 output directory, `training_state/`. It holds the network, the optimizer
@@ -2493,17 +2517,21 @@ Tune. Its root config, `configs/tune.yaml`, is `config.yaml` plus a
   (Code that runs on Ray workers has to be importable from `src/`, which is
   why the run body moved there.)
 - **One metric, the selection rule.** A trial reports its validation scores
-  to Tune after every validation, and the search maximizes
-  `selection_score`: stable steps, then skill horizon with RMSE at lead 10
-  as tie-break, the number early stopping already uses. The search optimizes what models are
-  chosen by, on validation only. What Tune compares is a trial's best
-  `selection_score` so far (`best_selection_score`), not its latest: a
+  to Tune after every validation, with its best validation so far as early
+  stopping ranks it (stable steps, then stable fraction, then skill horizon
+  with RMSE at lead 10 as tie-break), and the search maximizes that,
+  `best_selection_score`. The search optimizes what models are
+  chosen by, on validation only. A trial's best, not its latest score: a
   trial keeps its best epoch, and the score flips between epochs (stable
   steps come in 100-step blocks). On the latest score, ASHA judged a trial
   by whatever its validation at the rung happened to score (trial 5 of the
   first search, below), and Optuna's TPE learned each trial's final epoch,
   since Ray hands the searcher a trial's last result, not the epoch the
-  trial keeps. The best trial was already chosen by its best score.
+  trial keeps. With the stable fraction in it, the best can't be one lucky
+  epoch either; and since a later validation can still lower a best whose
+  neighbors aren't all in, a trial's result is its last report
+  (`get_best_result(scope="last")`), not its highest. The result table
+  shows each trial's best score and stable fraction.
 - **Optuna proposes, ASHA prunes.** Optuna's TPE sampler (seeded) models
   which regions of the space score well, from the trials so far, and samples
   the next configuration there instead of uniformly at random. ASHA

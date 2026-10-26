@@ -3,8 +3,8 @@
 Each trial is a full training run (`training/run.py`, as train.py does it)
 with hyperparameters sampled from `configs/search/<name>.yaml`'s space by
 Optuna's TPE sampler, reporting its validation selection score after every
-validation; ASHA stops the trials whose best score so far falls behind (see
-`training/tuning.py`). Everything is decided on the validation dataset; the
+validation; ASHA stops the trials whose best validation so far falls behind
+(see `training/tuning.py`). Everything is decided on the validation dataset; the
 test dataset is never read.
 
 MLflow: the search is a parent run (`<model> search`, holding the search
@@ -42,7 +42,7 @@ from mhd_surrogate.training.tracking import tracked_run  # noqa: E402
 from mhd_surrogate.training.tuning import (  # noqa: E402
     METRIC,
     MODE,
-    SCORE,
+    STABLE_FRACTION,
     close_stopped_runs,
     default_point,
     recording_asha,
@@ -92,9 +92,13 @@ def main(cfg: DictConfig) -> None:
         if not scored:
             log.warning("no trial reported a validation score")
             return
-        best = results.get_best_result(METRIC, MODE, scope="all")
+        # A trial's best validation is provisional until its neighbors are in
+        # (a later validation can lower it), so its result is its last report.
+        best = results.get_best_result(METRIC, MODE, scope="last")
         mlflow.log_params({f"best.{k}": v for k, v in best.config.items()})
-        mlflow.log_metric(f"best.{SCORE}", best.metrics_dataframe[SCORE].max())
+        mlflow.log_metric("best.selection_score", best.metrics[METRIC])
+        if STABLE_FRACTION in best.metrics:
+            mlflow.log_metric("best.stable_fraction", best.metrics[STABLE_FRACTION])
         mlflow.set_tag("best_run_id", best.metrics["mlflow_run_id"])
         log.info("best trial: %s (MLflow run %s)", best.config, best.metrics["mlflow_run_id"])
 

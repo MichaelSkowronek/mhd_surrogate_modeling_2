@@ -77,3 +77,31 @@ def test_selection_score_of_a_fully_stable_forecast_orders_like_skill_and_rmse()
 
 def test_selection_score_of_a_nan_rmse_is_the_worst_possible():
     assert selection_score(10, math.nan, 20, 20) == -math.inf
+
+
+def test_selection_score_ranks_a_stable_forecasts_fraction_above_any_skill_and_rmse():
+    n_steps, m = 20, 5
+
+    def score(fraction, skill, rmse):
+        return selection_score(skill, rmse, n_steps, n_steps, fraction, n_forecasts=m)
+
+    # Fractions of up to 5 forecasts: 2/3 and 3/5 are the closest distinct pair.
+    ranked = [(1.0, 0, 9.0), (0.8, 20, 0.0), (0.8, 3, 0.1), (2 / 3, 0, 9.0), (3 / 5, 20, 0.0)]
+    scores = [score(*candidate) for candidate in ranked]
+
+    assert scores == sorted(scores, reverse=True)
+    assert score(2 / 3, 0, math.inf) >= score(3 / 5, n_steps, 0.0)  # ties at worst
+
+
+def test_selection_score_ignores_the_fraction_of_an_unstable_forecast():
+    with_fraction = selection_score(7, 0.5, 19, 20, stable_fraction=1.0, n_forecasts=5)
+
+    assert with_fraction == selection_score(7, 0.5, 19, 20)
+    # A stable forecast without a bonus still scores at least any unstable one.
+    assert selection_score(0, math.inf, 20, 20) >= selection_score(20, 0.0, 19, 20)
+
+
+@pytest.mark.parametrize("fraction, n_forecasts", [(-0.1, 1), (1.1, 1), (0.5, 0)])
+def test_selection_score_rejects_an_impossible_fraction_or_count(fraction, n_forecasts):
+    with pytest.raises(ValueError):
+        selection_score(7, 0.5, 20, 20, stable_fraction=fraction, n_forecasts=n_forecasts)

@@ -90,14 +90,25 @@ def _discard(metrics: dict[str, float], step: int) -> None:
     pass
 
 
+def _ignore(scores: dict[str, float]) -> None:
+    pass
+
+
 @dataclass(frozen=True)
 class FitHooks:
     """What the training entry point gives an iterative model's `fit`.
 
     - `validate(model)`: scores the model in its current state on the
       validation data; must include `selection_score` (higher is better,
-      `evaluation.metrics.selection_score`), which early stopping maximizes.
+      `evaluation.metrics.selection_score`), and with `neighbors` above 0
+      also `stable_steps` and `forecast_steps`
+      (`evaluation.selection.selection_scores` gives them). Early stopping
+      keeps the validation `evaluation.selection.RunSelection` ranks best,
+      each judged with its `neighbors` nearest validations either side.
       None: no early stopping, the last state is kept.
+    - `report(scores)`: called after every validation with its scores plus
+      the run's best so far (`best_selection_score`, `best_epoch` and, with
+      `neighbors` above 0, `stable_fraction`), e.g. for Ray Tune.
     - `log_metrics(metrics, step)`: training curves (loss, learning rate,
       validation scores during training), e.g. `mlflow.log_metrics`.
     - `state_dir`: where resumable training state is kept; a `fit` that finds
@@ -105,6 +116,8 @@ class FitHooks:
     """
 
     validate: Callable[[Any], dict[str, float]] | None = None
+    neighbors: int = 0
+    report: Callable[[dict[str, float]], None] = _ignore
     log_metrics: Callable[[dict[str, float], int], None] = _discard
     state_dir: Path | None = None
 

@@ -1,7 +1,6 @@
 import logging
 from types import SimpleNamespace
 
-import pandas as pd
 import pytest
 
 import mlflow
@@ -128,9 +127,7 @@ def test_trial_logging_writes_project_debug_records_to_the_file(tmp_path):
 # -- the trial ------------------------------------------------------------------
 
 
-def test_run_trial_trains_the_overridden_config_and_reports_each_validation_with_the_best_so_far(
-    tmp_path, monkeypatch
-):
+def test_run_trial_trains_the_overridden_config_and_reports_each_validation(tmp_path, monkeypatch):
     from ray import tune
 
     monkeypatch.chdir(tmp_path)  # run_trial changes directory; restore it after
@@ -140,8 +137,7 @@ def test_run_trial_trains_the_overridden_config_and_reports_each_validation_with
 
     def fake_run_training(cfg, output_dir, log_file, run_name, tags, on_validation):
         calls.append((cfg, output_dir, log_file, run_name, tags))
-        for score in (2.5, 1.0, 3.0):  # a dip after the first validation
-            on_validation({"selection_score": score}, "run-1")
+        on_validation({"selection_score": 2.5, "best_selection_score": 3.0}, "run-1")
 
     monkeypatch.setattr(run_module, "run_training", fake_run_training)
     base = {"model": {"name": "unet", "window": 4}}
@@ -168,12 +164,11 @@ def test_run_trial_trains_the_overridden_config_and_reports_each_validation_with
     assert tags == {"sweep": "s", "trial_id": "t1"}
     assert reports == [
         {
-            "selection_score": score,
-            "best_selection_score": best,
+            "selection_score": 2.5,
+            "best_selection_score": 3.0,
             "mlflow_run_id": "run-1",
             "trial_dir": str(output_dir),
         }
-        for score, best in [(2.5, 2.5), (1.0, 2.5), (3.0, 3.0)]
     ]
 
 
@@ -195,9 +190,8 @@ def open_run(status=None):
     return run.info.run_id
 
 
-def result(metrics, error=None, config=None, scores=None):
-    history = None if scores is None else pd.DataFrame({"selection_score": scores})
-    return SimpleNamespace(metrics=metrics, error=error, config=config, metrics_dataframe=history)
+def result(metrics, error=None, config=None):
+    return SimpleNamespace(metrics=metrics, error=error, config=config)
 
 
 def test_recording_asha_records_the_trials_it_stops():
@@ -254,12 +248,24 @@ def test_close_stopped_runs_kills_only_unfinished_runs_of_trials_without_error(u
 
 def test_summary_rows_are_best_first_with_unscored_trials_last():
     results = [
-        result({"training_iteration": 1, "selection_score": 0.5}, config={"w": 1}, scores=[0.5]),
+        result(
+            {
+                "training_iteration": 1,
+                "selection_score": 0.5,
+                "best_selection_score": 0.5,
+                "best_stable_fraction": 0.0,
+            },
+            config={"w": 1},
+        ),
         result({}, error="boom", config={"w": 2}),
         result(
-            {"training_iteration": 3, "selection_score": 1.0, "best_selection_score": 2.0},
+            {
+                "training_iteration": 3,
+                "selection_score": 1.0,
+                "best_selection_score": 2.0,
+                "best_stable_fraction": 0.6,
+            },
             config={"w": 4},
-            scores=[0.2, 2.0, 1.0],
         ),
     ]
 
@@ -270,6 +276,7 @@ def test_summary_rows_are_best_first_with_unscored_trials_last():
         "w": 4,
         "validations": 3,
         "best_score": 2.0,
+        "stable_fraction": 0.6,
         "last_score": 1.0,
         "error": False,
     }

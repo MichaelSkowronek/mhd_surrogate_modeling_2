@@ -11,16 +11,20 @@ around it.
   search's `sweep` name, with a checkpoint, logged model and full validation
   scores if it finishes.
 - After every validation the trial reports its selection scores to Tune,
-  plus the best `selection_score` it has reported so far,
-  `best_selection_score`, which is the metric. `selection_score` is the
-  selection rule (stable steps, then skill horizon, ties broken by the
-  RMSE at lead 10) as one number, the same one early stopping maximizes,
-  so the search optimizes what models are chosen by. The best so far, not
-  the latest, because a trial keeps its best epoch and its stable steps
-  flip between epochs: on the latest score ASHA would judge a trial by
-  whatever its validation at the rung happened to score, and Optuna would
-  learn each trial's final epoch (Ray hands it the last result), not the
-  epoch the trial keeps.
+  plus its best validation so far as early stopping ranks it
+  (`FitHooks.report`): `best_selection_score`, which is the metric, and
+  `best_stable_fraction`. That is the selection rule (stable steps, then
+  stable fraction, then skill horizon, ties broken by the RMSE at lead 10)
+  as one number, judging each validation with its nearest neighbors
+  (`evaluation.selection.RunSelection`), so the search optimizes what
+  models are chosen by. The run's best, not the latest validation's score,
+  because a trial keeps its best epoch and its stable steps flip between
+  epochs: on the latest score ASHA would judge a trial by whatever its
+  validation at the rung happened to score, and Optuna would learn each
+  trial's final epoch (Ray hands it the last result), not the epoch the
+  trial keeps. The best is provisional until its neighbors are in, so a
+  later validation can lower it: a trial's result is its last report, not
+  its highest.
 - Optuna's TPE sampler proposes the next configuration from the finished
   and running ones; ASHA (asynchronous successive halving) stops trials
   whose score after `grace_period`, `grace_period * reduction_factor`, ...
@@ -41,7 +45,6 @@ from __future__ import annotations
 
 import copy
 import logging
-import math
 import os
 from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
@@ -49,10 +52,11 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-# One validation's score, as the trial reports it, and the metric Tune
-# compares trials by: the best of those so far.
+# One validation's score of its forecast alone, and the metric Tune compares
+# trials by: the trial's best validation so far, with its stable fraction.
 SCORE = "selection_score"
 METRIC = "best_selection_score"
+STABLE_FRACTION = "best_stable_fraction"
 MODE = "max"
 TRIAL_LOG = "train.log"
 
@@ -170,14 +174,8 @@ def run_trial(
     setup_trial_logging(log_file)
     cfg = OmegaConf.create(apply_overrides(base_config, params))
 
-    # A trial starts fresh (its own directory, no `resume`), and so does its
-    # best score so far.
-    best = -math.inf
-
     def report(scores: dict[str, float], run_id: str) -> None:
-        nonlocal best
-        best = max(best, scores[SCORE])
-        tune.report({**scores, METRIC: best, "mlflow_run_id": run_id, "trial_dir": str(trial_dir)})
+        tune.report({**scores, "mlflow_run_id": run_id, "trial_dir": str(trial_dir)})
 
     run_training(
         cfg,
@@ -242,19 +240,19 @@ def close_stopped_runs(
 
 def summary_rows(results: Sequence[Any], params: Sequence[str]) -> list[dict[str, Any]]:
     """One row per trial, best first: its sampled `params`, how many
-    validations it reported, its best and last selection score, and whether
-    it ended with an error. Results without a reported score (failed before
-    the first validation) come last."""
+    validations it reported, the score and stable fraction of its best
+    validation (as of its last report), its last validation's score, and
+    whether it ended with an error. Results without a reported score
+    (failed before the first validation) come last."""
     rows = []
     for result in results:
         metrics = result.metrics or {}
-        history = getattr(result, "metrics_dataframe", None)
-        scores = list(history[SCORE]) if history is not None and SCORE in history else []
         rows.append(
             {
                 **{p: (result.config or {}).get(p) for p in params},
                 "validations": metrics.get("training_iteration", 0),
-                "best_score": max(scores) if scores else None,
+                "best_score": metrics.get(METRIC),
+                "stable_fraction": metrics.get(STABLE_FRACTION),
                 "last_score": metrics.get(SCORE),
                 "error": result.error is not None,
             }
