@@ -646,8 +646,8 @@ stages:
       size: 6419
     - path: src/mhd_surrogate/serving
       hash: md5
-      md5: a9ec144997a0a9d943137ab4f703e4ee.dir
-      size: 56274
+      md5: aaba1348679620c01c66f68bb326b3a6.dir
+      size: 56645
       nfiles: 9
     - path: src/mhd_surrogate/training/__init__.py
       hash: md5

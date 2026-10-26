@@ -3207,10 +3207,27 @@ protocol, the one the scores and the gate are of.
   same bytes.
 - **The tolerance** is 1e-4 of the truth's standard deviation, anywhere in
   the forecast (`configs/serving/default.yaml`, `parity_tolerance`): about
-  20 times the 5.2e-6 the service's 100-step blocks round differently from
-  one call, so a change to the block arithmetic passes and a change in what
-  is served doesn't. Measured: a serving change that scales every frame by
-  1.001 fails it at 3.9e-3.
+  20 times the 5.2e-6 by which Hankel DMD's forecast in the service's
+  100-step blocks rounds differently from one call (each block's matrix
+  product has another row count; every frame is computed from the starting
+  state, so the rounding doesn't compound), so a change to the block
+  arithmetic passes and a change in what is served doesn't. Measured: a
+  serving change that scales every frame by 1.001 fails it at 3.9e-3.
+- **A neural model matches exactly.** Its rollout is chaotic, so a rounding
+  difference at a block boundary would grow over the forecast's hundreds of
+  steps, but there is none: its `predict_blocks` hands the next block the
+  window as the network sees it (normalized and padded), and on the CPU a
+  step's result doesn't depend on the block length. Measured on the U-Net
+  baseline: a largest difference of exactly 0 over the 837 steps. A neural
+  model that fails the stage serves another forecast for real (one
+  restarted from its own output frames at every boundary would, late in a
+  long forecast), to fix in its `predict_blocks`, not by loosening the
+  tolerance. What a switch to a neural model does need to revisit is the
+  time: the U-Net's check took 1 h 20 min on the CPU (two 837-step
+  forecasts, about 2.9 s a step), and a CPU pod would take as long per
+  request. Where such a model is served decides where the stage runs; on a
+  GPU, which compiles each block length separately and doesn't reproduce
+  bits across compiles, exact parity would have to be measured again.
 
 It replaced a different design: storing a reference forecast with each
 registered version and checking it when a pod starts. That would have
