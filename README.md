@@ -3270,7 +3270,7 @@ from forks don't push: they get no token that can.
 ### Kubernetes
 
 ```bash
-deploy/install-tools.sh          # kind, kubectl, helm, kubeconform, argocd, promtool: pinned, checksummed
+deploy/install-tools.sh          # kind, kubectl, helm, kubeconform, argocd, promtool, amtool: pinned, checksummed
 docker compose up -d             # the tracking server the cluster fetches models from
 deploy/kind/create-cluster.sh    # the kind cluster `mhd`
 deploy/argocd/bootstrap.sh       # Argo CD; from then on the cluster follows main
@@ -3400,6 +3400,11 @@ open http://localhost:8082        # Grafana: "MHD surrogate: forecast service", 
 kubectl -n monitoring get secret monitoring-grafana -o jsonpath='{.data.admin-password}' | base64 -d
 kubectl -n monitoring port-forward svc/monitoring-kube-prometheus-prometheus 9090   # Prometheus
 curl -s localhost:8080/metrics    # what the service exposes
+install -D -m 600 /dev/null ~/.config/mhd-surrogate/smtp-password   # paste a Gmail app password into it
+deploy/argocd/smtp-secret.sh      # Alertmanager's SMTP password, from that file (bootstrap.sh runs it too)
+kubectl -n monitoring exec alertmanager-monitoring-kube-prometheus-alertmanager-0 -c alertmanager -- \
+  amtool alert add TestEmail team=mhd-surrogate --end="$(date -u -d '+5 min' +%FT%TZ)" \
+  --alertmanager.url=http://localhost:9093   # a test email
 ```
 
 The service exposes Prometheus metrics at `/metrics`
@@ -3460,8 +3465,23 @@ labeled ConfigMap.
   quiet otherwise (a threshold moved from 2x to 3x fails it); CI installs
   promtool, of the Prometheus version the stack runs. Live, on the cluster,
   Prometheus loads all seven, healthy and quiet under real validation
-  traffic. Alertmanager receives them, with no receiver configured to
-  notify yet.
+  traffic.
+- **Notifications.** Alertmanager mails the service's alerts through
+  Gmail's SMTP server: every rule carries `team: mhd-surrogate`, the one
+  route to the `email` receiver (`deploy/argocd/apps/monitoring.yaml`),
+  grouped by alert, sent again every 12 h while it fires and once more when
+  it resolves. The chart's own alerts reach no receiver: kind trips several
+  of them (`KubePodNotReady` for its static control-plane pods after a
+  restart), and an outage of the service is `ForecastServiceDown`'s. The
+  SMTP password, a Gmail app password, is the one Secret not in git
+  (`alertmanager-smtp`, created by `deploy/argocd/smtp-secret.sh` from
+  `~/.config/mhd-surrogate/smtp-password`; `bootstrap.sh` runs it, so a
+  rebuilt cluster has it again). Sealed Secrets or External Secrets would
+  keep it in git encrypted, but their key would be one more secret outside
+  git for every rebuilt cluster to restore: worth it for several secrets,
+  not for one. `tests/serving/test_alert_routing.py` checks the config with
+  amtool: every rule reaches email, the chart's alerts don't, and the
+  password is read from the mounted Secret, never written inline.
 - **kind specifics.** The chart's scrapes of etcd, the controller manager,
   the scheduler and kube-proxy are off: kind runs those bound to localhost,
   where Prometheus can't reach them, and they would only fail. Prometheus

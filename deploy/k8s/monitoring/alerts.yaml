@@ -3,6 +3,8 @@
 # with their measured basis (train and validation data only), reviewed
 # like the selection rule's guardrails; tests/serving/test_alert_rules.py
 # checks each fires when it should and not otherwise (promtool test rules).
+# Every rule carries `team: mhd-surrogate`, which Alertmanager routes to
+# email (deploy/argocd/apps/monitoring.yaml).
 # Synced even before the monitoring stack's CRDs exist: Argo CD then retries
 # it (SkipDryRunOnMissingResource).
 apiVersion: monitoring.coreos.com/v1
@@ -19,12 +21,14 @@ spec:
           expr: absent(up{namespace="mhd-serving", job="serve"} == 1)
           for: 5m
           labels:
+            team: mhd-surrogate
             severity: critical
           annotations:
             summary: No forecast server has answered a scrape for 5 minutes.
         - alert: ForecastsFailing
           expr: sum(increase(mhd_forecasts_failed_total[15m])) > 0
           labels:
+            team: mhd-surrogate
             severity: warning
           annotations:
             summary: A forecast failed after its response had started.
@@ -36,6 +40,7 @@ spec:
             sum(rate(mhd_serve_requests_total{route="/v1/forecast", status="503"}[15m]))
             / sum(rate(mhd_serve_requests_total{route="/v1/forecast"}[15m])) > 0.2
           labels:
+            team: mhd-surrogate
             severity: warning
           annotations:
             summary: Over 20% of forecast requests were refused as busy in 15 minutes.
@@ -47,6 +52,7 @@ spec:
             sum(increase(mhd_forecast_energy_ratio_bucket{le="+Inf"}[15m]))
             - sum(increase(mhd_forecast_energy_ratio_bucket{le="2.0"}[15m])) > 0
           labels:
+            team: mhd-surrogate
             severity: critical
           annotations:
             summary: A forecast block had over twice its context's kinetic energy.
@@ -59,6 +65,7 @@ spec:
             histogram_quantile(0.5, sum by (le) (rate(mhd_forecast_energy_ratio_bucket[1h])))
             < 0.5
           labels:
+            team: mhd-surrogate
             severity: warning
           annotations:
             summary: Forecasts' median block energy fell below half their context's in 1 hour.
@@ -73,6 +80,7 @@ spec:
             histogram_quantile(0.05, sum by (le, channel) (rate(mhd_context_mean_shift_bucket[1h])))
             < -0.1
           labels:
+            team: mhd-surrogate
             severity: warning
           annotations:
             summary: Contexts' channel means moved beyond 0.1 training stds in 1 hour.
@@ -87,6 +95,7 @@ spec:
             histogram_quantile(0.05, sum by (le, channel) (rate(mhd_context_std_ratio_bucket[1h])))
             < 0.7
           labels:
+            team: mhd-surrogate
             severity: warning
           annotations:
             summary: Contexts' channel stds left 0.7-1.5 times the training std in 1 hour.

@@ -22,9 +22,10 @@ jobs:
       # parallel-backend tests start a local Ray runtime).
       - run: uv sync --extra ray
 
-      # promtool, for the alert rules' unit tests (tests/serving/test_alert_rules.py).
+      # promtool and amtool, for the alert rules' and the alert routing's unit
+      # tests (tests/serving/test_alert_rules.py, test_alert_routing.py).
       - run: |
-          deploy/install-tools.sh promtool
+          deploy/install-tools.sh promtool amtool
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       # Coverage (src/mhd_surrogate/ only, gated at 95% -- see pyproject.toml's
