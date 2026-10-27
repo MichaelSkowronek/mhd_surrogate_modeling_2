@@ -164,7 +164,10 @@ conventions below; it shifts which tools are worth reaching for at all.
   it permanently purges every deleted logged model in the store (including
   the pruned ones' records). To delete a run outright, delete its logged
   model as above, then `MlflowClient.delete_run` (a soft delete) and remove
-  its artifact directory.
+  its artifact directory. A soft delete doesn't unlink the metrics a run
+  logged to another run's logged model (an evaluate run's `model_id=`
+  metrics stay on the trained model, attributed to the deleted run, and
+  MLflow has no API to remove them), so say so before deleting such a run.
 - Smoke runs (checking that code works, not producing results) log to a
   dated experiment, `mlflow.experiment_name=smoke-tests-<YYYY-MM-DD>`, not
   the main `mhd-surrogate` one. Delete them as above once the change is
@@ -175,6 +178,14 @@ conventions below; it shifts which tools are worth reaching for at all.
   stage's metrics/outputs (e.g. `Evaluation.scores`, which becomes
   `metrics.json`): they differ run to run, and DVC outputs must reproduce
   byte-identically.
+- A logged score keeps its meaning: when what a metric measures changes
+  (not just a threshold, which is a run param), it gets a new name in
+  MLflow and `metrics.json`, and the README says so. The RMSE-based
+  `skill_horizon` became the CRPS-based `crps_skill_horizon` this way
+  (#101): runs before and after can't be compared silently, and no old run
+  needs re-scoring or tagging. `selection_score` is the deliberate
+  exception: it is the current selection rule as one number, compared only
+  within a run or a search.
 - To re-run a stage from a git worktree (e.g. `.claude/worktrees/<name>`),
   don't regenerate the data there: point it at the main checkout's cache
   (`uv run dvc cache dir --local <main>/.dvc/cache`, which writes the
