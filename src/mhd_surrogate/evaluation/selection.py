@@ -6,7 +6,7 @@ Early stopping and the hyperparameter search score a model in training by
 module of its own (with `metrics`, `protocol`, `stability` and
 `quantities`), so that training -- and the DVC `train` stage's
 dependencies -- reach only this part of the evaluation code: a change to
-the diagnostics or the ensemble scores re-runs the `evaluate` stage on the
+the diagnostics or the ensemble's spread re-runs the `evaluate` stage on the
 stored checkpoint instead of retraining the model.
 """
 
@@ -17,12 +17,18 @@ from collections.abc import Iterable, Mapping
 import numpy as np
 
 from mhd_surrogate.evaluation.metrics import (
-    rmse_per_step,
+    CrpsAccumulator,
+    member_median,
     selection_score,
     skill_horizon,
     stable_fraction_bonus,
 )
-from mhd_surrogate.evaluation.protocol import ForecastModel, forecast
+from mhd_surrogate.evaluation.protocol import (
+    ForecastModel,
+    ensemble_size,
+    forecast_members,
+    split_context,
+)
 from mhd_surrogate.evaluation.quantities import DEFAULT_CHUNK_T
 from mhd_surrogate.evaluation.stability import (
     QUANTITIES,
@@ -42,46 +48,56 @@ def selection_scores(
     dy: float,
     block_steps: int,
     max_ratio: float,
+    members: int = 1,
+    member_batch: int = 1,
     chunk_t: int = DEFAULT_CHUNK_T,
 ) -> dict[str, float]:
     """The scores the selection rule ranks by, without the physics
-    guardrails: `skill_horizon`, `rmse_lead_<tie_break_lead>`, the stability
-    scores (`stable_steps` and the peak ratios), their combination
-    `selection_score` (of this forecast alone; `RunSelection` adds the
-    stable fraction) and the forecast's length, `forecast_steps`. Cheap
-    enough to run during training (early stopping, the hyperparameter
-    search; the stability check adds ~3 s to an 837-step validation
-    forecast); `evaluate` scores the final model in full."""
-    prediction, targets = forecast(model, series, context_steps)
-    # A chunk of lead times at a time: the per-step float64 error of a whole
-    # ~840-step forecast would take ~6 GB of temporaries, at every validation.
-    rmse = np.concatenate(
-        [
-            rmse_per_step(prediction[t : t + chunk_t], targets[t : t + chunk_t], scale)
-            for t in range(0, len(targets), chunk_t)
-        ]
-    )
-    skill = skill_horizon(rmse, skill_threshold)
-    tie_break = float(rmse[min(tie_break_lead, len(rmse)) - 1])
-    stability = stability_scores(
-        energy_and_enstrophy(prediction, dx, dy, chunk_t),
-        energy_and_enstrophy(targets, dx, dy, chunk_t),
-        block_steps,
-        max_ratio,
-    )
+    guardrails: `crps_skill_horizon` and `crps_lead_<tie_break_lead>`, the
+    stability scores (`stable_steps` and the peak ratios), their
+    combination `selection_score` (of this forecast alone; `RunSelection`
+    adds the stable fraction) and the forecast's length, `forecast_steps`.
+    Cheap enough to run during training (early stopping, the
+    hyperparameter search; the stability check adds ~3 s to an 837-step
+    validation forecast); `evaluate` scores the final model in full.
+
+    A stochastic model is scored as an ensemble of `members` (seeds 0, 1,
+    ..., the same at every validation; a deterministic model has one
+    member, whatever `members`), sampled `member_batch` per call where the
+    model can (`protocol.forecast_members`): the skill horizon and
+    tie-break on the ensemble's CRPS, each stability score the median over
+    the members (`metrics.member_median`), and `members` and
+    `stable_members` (how many are stable over the whole forecast), which
+    `RunSelection` pools into the stable fraction."""
+    _, targets = split_context(series, context_steps)
+    targets = np.asarray(targets)
+    truth = energy_and_enstrophy(targets, dx, dy, chunk_t)
+    crps = CrpsAccumulator(targets, scale, chunk_t)
+    stability = []
+    seeds = range(ensemble_size(model, members))
+    for member in forecast_members(model, series, context_steps, seeds, member_batch):
+        crps.add(member)
+        stability.append(
+            stability_scores(
+                energy_and_enstrophy(member, dx, dy, chunk_t), truth, block_steps, max_ratio
+            )
+        )
+    curve = crps.crps()
+    n_steps = len(curve)
+    skill = skill_horizon(curve, skill_threshold)
+    tie_break = float(curve[min(tie_break_lead, n_steps) - 1])
+    scores = {key: member_median([s[key] for s in stability]) for key in stability[0]}
+    # A member's peak ratio is the larger of its two, NaN if either is
+    # (np.max propagates NaN).
+    peak = member_median([np.max([s[f"{q}_peak_ratio"] for q in QUANTITIES]) for s in stability])
     return {
-        "skill_horizon": float(skill),
-        f"rmse_lead_{tie_break_lead}": tie_break,
-        **stability,
-        "selection_score": selection_score(
-            skill,
-            tie_break,
-            stability["stable_steps"],
-            len(rmse),
-            # The larger of the two, NaN if either is: np.max propagates NaN.
-            float(np.max([stability[f"{q}_peak_ratio"] for q in QUANTITIES])),
-        ),
-        "forecast_steps": float(len(rmse)),
+        "crps_skill_horizon": float(skill),
+        f"crps_lead_{tie_break_lead}": tie_break,
+        **scores,
+        "selection_score": selection_score(skill, tie_break, scores["stable_steps"], n_steps, peak),
+        "forecast_steps": float(n_steps),
+        "members": float(len(stability)),
+        "stable_members": float(sum(s["stable_steps"] >= n_steps for s in stability)),
     }
 
 
@@ -95,12 +111,16 @@ class RunSelection:
     one. So a validation is judged with the `2 * neighbors + 1` validations
     nearest it (itself included), shifted inward at the ends of the run so
     that every validation is judged with as many (fewer only while the run
-    has fewer): its `stable_fraction` is the share of them stable over their
-    whole forecast, and its score is `metrics.selection_score` with that
-    fraction, which ranks it right after the stable steps. With `neighbors`
-    0 a validation is judged alone, and only its `selection_score` is
-    needed; otherwise each validation's scores also need `stable_steps` and
-    `forecast_steps` (`selection_scores` gives all three).
+    has fewer): its `stable_fraction` is the share of their forecasts stable
+    over their whole length -- for a stochastic model the members of all of
+    them, pooled (a stable sample is a lucky draw too) -- and its score is
+    `metrics.selection_score` with that fraction, which ranks it right after
+    the stable steps. With `neighbors` 0 a validation is judged alone, and
+    only its `selection_score` is needed; otherwise each validation's scores
+    also need `stable_steps`, `forecast_steps`, `members` and
+    `stable_members` (`selection_scores` gives them all; a validation
+    without the last two counts as one member, stable if its
+    `stable_steps` are).
 
     A validation's window settles once `neighbors` more validations follow
     it (and the run has a full window); until then a later validation can
@@ -136,13 +156,16 @@ class RunSelection:
         """Whether `index`'s window (so its score) is final."""
         return len(self) >= max(self.size, index + self.neighbors + 1)
 
-    def stable(self, index: int) -> bool:
+    def members(self, index: int) -> tuple[float, float]:
+        """(stable members, members) of validation `index`."""
         scores = self.history[index]
-        return scores["stable_steps"] >= scores["forecast_steps"]
+        if "members" in scores:
+            return scores["stable_members"], scores["members"]
+        return float(scores["stable_steps"] >= scores["forecast_steps"]), 1.0
 
     def stable_fraction(self, index: int) -> float:
-        window = self.window(index)
-        return sum(self.stable(i) for i in window) / len(window)
+        counts = [self.members(i) for i in self.window(index)]
+        return sum(stable for stable, _ in counts) / sum(total for _, total in counts)
 
     def score(self, index: int) -> float:
         """The validation's `selection_score` with its stable fraction."""
@@ -153,7 +176,9 @@ class RunSelection:
             self.stable_fraction(index),
             scores["stable_steps"],
             int(scores["forecast_steps"]),
-            self.size,
+            # Forecasts in a full window: the run's members per validation
+            # are fixed.
+            self.size * int(self.members(index)[1]),
         )
 
     def best(self) -> int:

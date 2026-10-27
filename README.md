@@ -491,8 +491,12 @@ stage applies the selection rule's guardrails to the canonical model itself
 (`evaluation/gate.py`): it must be stable over the whole validation forecast
 and over a 3000-step rollout from the validation context (the same 100-step
 blocks and 2x threshold), and its energy and enstrophy errors and spectrum
-distances must stay within limits and its domain-mean `u_y` within the
-truth's band (`configs/evaluation/default.yaml`, `gate`). When it fails, the command exits non-zero: `dvc repro` stops and
+distances must stay within limits and its domain-mean velocity within the
+truth's band (`configs/evaluation/default.yaml`, `gate`). A generative
+model must pass the stability and drift checks with at least 80% of its
+members, each passing all of them (`gate.min_member_fraction`; its
+members' own scores are in `metrics.json`), and the others with its median
+member (see "How candidates are ranked"). When it fails, the command exits non-zero: `dvc repro` stops and
 the stage stays stale in `dvc status`, while `gate.json` and the printed
 failures say what went wrong. That alone doesn't keep the failed model out
 of a commit: DVC locks each stage as it finishes, so `train` and `evaluate`
@@ -667,13 +671,13 @@ steps of the forecast stay bounded (see "Forecast evaluation"; the whole
 (neural) training run, the **stable fraction**: the share of the 5
 validations nearest its epoch (2 either side, shifted inward at the ends
 of the run; `evaluation.stability.neighbors`) that are stable too. Then the
-validation **skill horizon** (lead
-steps with RMSE <= 0.5), ties broken by **RMSE at lead 10**. Stability comes
+validation **skill horizon** (lead steps with CRPS <= 0.32), ties broken by
+**CRPS at lead 10**. Stability comes
 first because the short-horizon scores can't see a blow-up: the first
 U-Net search picked, by skill horizon alone, models whose energy is 1000x
 the truth's by the end of the validation forecast (see "First search").
 Among stable forecasts, which is what a usable candidate has to be, the
-rule is stable fraction, skill horizon and RMSE at lead 10; among unstable ones,
+rule is stable fraction, skill horizon and CRPS at lead 10; among unstable ones,
 lasting longer wins, then straying less: the **peak ratio** (the
 forecast's largest 100-step block mean of energy or enstrophy over the
 truth's), lower first, in place of skill. Most unstable forecasts last 0
@@ -694,7 +698,60 @@ gives a stable network. It does not predict long rollouts: of the U-Net
 checkpoints kept by stable steps and skill alone, seven isolated ones
 (fraction 0.2) passed the 3000-step rollout and three of the EMA runs'
 long stable stretches (0.6) didn't, so the rollout guardrail below stays.
-A closed-form fit (DMD) has no epochs: it is the same model on every refit. The mean RMSE over all leads is deliberately not used:
+A closed-form fit (DMD) has no epochs: it is the same model on every refit.
+
+The skill is measured on the **CRPS** (2026-10-27; it was the RMSE
+before, `<= 0.5`, and the skill horizons in the result tables further down
+that predate it are RMSE ones). The two never share a name in MLflow: runs
+before the change logged the RMSE one as `skill_horizon`, runs since log
+`crps_skill_horizon`, so a comparison across the change can't happen
+silently (the threshold is a run param too, `evaluation.skill_threshold`).
+Older runs with a logged `crps` curve (the U-Net runs since the ensemble
+scores) can be compared from it; others need re-scoring. For a deterministic model the CRPS is the
+absolute error; for a generative one it scores the ensemble. Pointwise
+error penalizes a realistic forecast twice once it has lost the truth's
+phase -- for missing the truth's features and for placing its own where
+the truth has none -- while a forecast smoothed toward the mean pays once:
+the U-Net's RMSE saturates at ~1.45, Hankel DMD's damped forecast's at
+~0.82. A member's RMSE would rank a generative model's realistic samples
+below the smooth forecasts they're meant to beat; the CRPS is proper, its
+spread term credits an ensemble whose members disagree as much as they
+miss, and two members estimate it without bias. 0.32 is half the mean
+field's CRPS (0.64 over the first 40 leads), as RMSE 0.5 was about half its
+RMSE (0.9). The absolute error of the logged U-Net and Hankel DMD runs is
+0.51-0.65x their RMSE at their RMSE horizon, so at 0.32 Hankel DMD keeps
+its horizon of 7 and the U-Nets gain 0 to 3 steps (their sharper forecasts
+have heavier-tailed errors, which the RMSE squares). Persistence now has
+one step of skill (CRPS 0.28 at lead 1, RMSE 0.51), the mean field none.
+
+A **generative** model is judged as an ensemble, by the same rule. Its
+skill horizon and tie-break are its ensemble's CRPS. The absolute
+guardrails -- stable over the validation forecast, stable over the
+3000-step rollout, the domain-mean velocity in the truth's band -- must
+all hold for at least 80% of its members, 7 of 8 when it is scored
+(`evaluation.gate.min_member_fraction`, the stable fraction's floor): a
+member that fails any of them is a broken forecast, served to whoever asks
+for its seed, so a member counts only if it passes all three (counted
+check by check, one member blowing up and another drifting would leave 6
+usable forecasts of 8). Were each member broken with probability q, a q = 0.05
+model would pass 94% of the time (requiring all 8 would fail it a third of
+the time), q = 0.2 50%, q = 0.375 14%; the median member, 5 of 8, would
+let that last one pass 65% of the time. Every other per-member score --
+stable steps and peak ratio for ranking, the relative guardrails (energy,
+enstrophy, spectra, a typical member against the incumbent) -- is the
+median over its members, so no single member, lucky or blown up, decides.
+Its stable fraction pools the members of the validations around its epoch
+(a stable sample is as much a lucky draw as a stable epoch). During
+training each validation forecasts 2 members
+(`evaluation.monitor_members`, seeds 0 and 1 at every validation, so
+epochs differ only by the network), the fewest the CRPS is unbiased from,
+at twice a single forecast's cost; the stable fraction then counts 10
+forecasts, and 0.8 means 8 of them. A closed-form generative fit's stable
+fraction is the share of its members stable. The evaluation writes each
+member's own validation scores as `val.member_<seed>` (in MLflow and
+`metrics.json`), which the gate checks member by member.
+
+The mean RMSE over all leads is deliberately not used:
 after a few dozen steps every forecast of this chaotic flow has decorrelated,
 and from there pointwise error favors whatever sits closest to the mean -- in
 the DMD rank sweep it ranks the smoothest, lowest-rank model first. The
@@ -1838,10 +1895,12 @@ once, for the final evaluation.
 saturates after some lead time for *any* model, so a low final-step error is
 neither achievable nor the only thing worth measuring.
 
-- *Short horizon* (`metrics.py`): RMSE per lead time, optionally scaled per
-  channel by the training std, and the skill horizon (how many steps stay under
-  an error threshold; a NaN error counts as over it, so a forecast that blows
-  up loses its skill there instead of scoring the whole length).
+- *Short horizon* (`metrics.py`): RMSE and CRPS per lead time, optionally
+  scaled per channel by the training std, and the skill horizon: how many
+  steps the CRPS stays under a threshold (0.32), the CRPS of a deterministic
+  model being its absolute error (see "Ensembles" below and "How candidates
+  are ranked"). A NaN error counts as over it, so a forecast that blows up
+  loses its skill there instead of scoring the whole length.
 - *Long horizon* (`diagnostics.py`): does the forecast stay on the attractor?
   Relative error of the time-averaged kinetic energy and enstrophy, the ratio
   of RMS divergence to the true field's (the DNS field is only approximately
@@ -1893,7 +1952,10 @@ The check rolls a model out for `--steps` steps (1500 by default) from the
 dataset's context, one block at a time (only one block in memory), and
 prints each block's mean energy and enstrophy and their ratio to the
 truth's largest block mean -- the selection rule's reference, so its first
-blocks reproduce `stable_steps`:
+blocks reproduce `stable_steps`. A stochastic model is rolled out once per
+member (`--members`, the evaluation's 8 by default), a summary line per
+member; at least 80% of them (7 of 8) must stay stable, and pass the other
+absolute guardrails as well:
 
 ```bash
 uv run scripts/evaluation/check_rollout_stability.py --checkpoint models/hankel_dmd/model
@@ -1928,15 +1990,19 @@ ready for it without changing anything for the others: a model with
 `stochastic = True` takes `predict(context, n_steps, seed=...)` and returns
 its sample for that seed, an ensemble is the samples for seeds 0, 1, ...,
 `evaluation.ensemble_size` (8), and a deterministic model is a one-member
-ensemble. Every score above is the seed-0 member's (one trajectory, as
-`predict` gives it; the ensemble *mean* would be smooth and fail the
-physics), and the ensemble adds:
+ensemble. Every score of a trajectory above -- RMSE, the long-horizon and
+temporal scores, stability -- is the median over the members (each one
+trajectory, as `predict` gives it; the ensemble *mean* would be smooth and
+fail the physics), a member that produced NaN counting as the worst, and
+each member's own scores are kept too: the absolute guardrails count the
+members that pass (see "How candidates are ranked"). The ensemble adds:
 
 - *CRPS* per lead time (`crps_mean`, `crps_lead_<n>`): E|X - y| - E|X -
   X'|/2 over members X, X' and truth y, per pixel. A proper score -- it is
-  minimized by forecasting the true distribution -- so unlike the RMSE it
-  doesn't reward collapsing toward the mean. For one member it *is* the
-  absolute error, so deterministic and generative models share a score.
+  minimized by forecasting the true distribution -- so unlike a member's
+  own error it doesn't reward collapsing toward the mean. For one member it
+  *is* the absolute error, so deterministic and generative models share a
+  score, and the skill horizon is measured on it.
 - *Spread vs error* (`spread_skill_lead_<n>`, more than one member):
   sqrt((M + 1) / M) times the ensemble's spread over the RMSE of its mean,
   ~1 for a calibrated ensemble of M members (Fortin et al. 2014), below 1
@@ -1952,13 +2018,18 @@ the batch shape, so the batch size is part of what reproduces an
 ensemble's scores. A model without it gets one call per member.
 
 Members are streamed one at a time (an 837-step member is ~1 GB): the
-pairwise terms use consecutive members only, each an independent pair, so
-they're unbiased like all M (M - 1) / 2 pairs, with some more variance.
-MLflow gets the per-lead `crps` curve (and `spread`, `ensemble_mean_rmse`
-for an ensemble), and the logged pyfunc model takes `seed` as a parameter
-next to `n_steps`, so a server can sample an ensemble one call per seed.
-How the ensemble scores enter the selection rule is decided when the first
-generative model exists; until then the rule is unchanged.
+pairwise terms use the cycle of members, consecutive pairs plus the one
+from the last back to the first, each an independent pair, so they're
+unbiased like all M (M - 1) / 2 pairs, with some more variance. Like all
+pairs, and unlike the consecutive ones alone, the cycle keeps the CRPS from
+going negative: each member is in two pairs, and |X - X'| <= |X - y| +
+|X' - y|. With consecutive pairs only, one blown-up member among 8 would
+drive the CRPS far below 0 at every lead after it, and a broken ensemble
+would look skillful. MLflow gets the per-lead `crps` curve (and `spread`,
+`ensemble_mean_rmse` for an ensemble), and the logged pyfunc model takes
+`seed` as a parameter next to `n_steps`, so a server can sample an ensemble
+one call per seed. How an ensemble is ranked is in "How candidates are
+ranked".
 
 **How big a score is "perfect"?** Scoring a different realization of the same
 flow (train datasets 0 and 10 against the validation targets) -- right
@@ -2022,6 +2093,7 @@ training std):
 |---|---|---|---|
 | RMSE at lead 1 / 10 / 40 | 0.51 / 1.40 / 1.23 | 0.91 / 0.90 / 0.89 | -- |
 | RMSE, mean over all leads | 1.24 | 0.96 | -- |
+| CRPS (absolute error) at lead 1 / 10 / 40 | 0.28 / 0.98 / 0.84 | 0.64 / 0.64 / 0.65 | -- |
 | energy / enstrophy error | 2% / 11% | 29% / 76% | <1% / <3% |
 | divergence ratio | 1.14 | 0.16 | ~1 |
 | spatial spectrum distance (x / y) | 0.08 / 0.05 | 3.9 / 2.6 | 0.02-0.03 / 0.01-0.03 |
@@ -2053,8 +2125,9 @@ The mean field, which averages over this dataset among the 7, is only
 marginally better on it, and persistence, which has nothing to fit, scores
 the same on both: neither has anything to memorize, so neither has a gap.
 
-Neither baseline has any skill at the 0.5 threshold (persistence is already
-at 0.51 one step ahead). Persistence beats the mean field only at lead 1 and
+Neither baseline had any skill at the RMSE threshold of 0.5 (persistence
+was already at 0.51 one step ahead); on the CRPS, at 0.32, persistence has
+one step (0.28) and the mean field none. Persistence beats the mean field only at lead 1 and
 keeps realistic snapshot statistics but no dynamics; the mean field has the
 lower pointwise error from lead ~2 on but no small scales, almost no
 divergence and no oscillation. A useful surrogate has to beat persistence
@@ -2401,17 +2474,17 @@ of the domain.
   hyperparameter search's pruning) can follow the curve.
 - *Early stopping on validation:* every `eval_every` epochs the model
   forecasts the whole validation dataset under the protocol, and is scored
-  with `evaluation.selection_scores`: stable steps, skill horizon and RMSE
+  with `evaluation.selection_scores`: stable steps, skill horizon and CRPS
   at lead 10, folded into one `selection_score`,
-  `(n + 1) * stable_steps + skill - r / (1 + r)` for an `n`-step forecast,
+  `(n + 1) * stable_steps + skill - c / (1 + c)` for an `n`-step forecast,
   which orders like the rule exactly (one more stable step outweighs any
-  skill, one more skill step any RMSE); an unstable forecast scores
+  skill, one more skill step any CRPS); an unstable forecast scores
   `(n + 1) * stable_steps + n / (1 + log10 peak_ratio)` instead, so one
   more stable step still outweighs any peak. The validations are then ranked by
   `evaluation.selection.RunSelection`, which judges each with its nearest
   validations: a stable one's score gains its stable fraction times
-  `(n + 1) * m^2` for windows of `m` validations, enough for a larger
-  fraction to outweigh any skill and RMSE. A validation's score is
+  `(n + 1) * m^2` for windows of `m` forecasts, enough for a larger
+  fraction to outweigh any skill and CRPS. A validation's score is
   provisional until its 2 later neighbors are in, so its network is kept
   until then (with the best one already final); a stable epoch can still
   lose its lead to an unstable one after it. Training stops once the best
@@ -2433,7 +2506,7 @@ of the domain.
 **What's logged.** Training curves go to MLflow with the optimizer step as
 the step: `loss`, `grad_norm`, `lr` and `samples_per_second` every
 `log_every` steps, and `epoch_loss`, `epoch_seconds` and
-`val_monitor.{skill_horizon,rmse_lead_10,stable_steps,energy_peak_ratio,enstrophy_peak_ratio,selection_score,forecast_steps}`
+`val_monitor.{crps_skill_horizon,crps_lead_10,stable_steps,energy_peak_ratio,enstrophy_peak_ratio,selection_score,forecast_steps,members,stable_members}`
 every epoch, with the run's best validation so far (`best_epoch`,
 `best_selection_score`, `best_stable_fraction`). After
 training, the model is checkpointed, logged and scored like every model
@@ -2551,7 +2624,7 @@ Tune. Its root config, `configs/tune.yaml`, is `config.yaml` plus a
 - **One metric, the selection rule.** A trial reports its validation scores
   to Tune after every validation, with its best validation so far as early
   stopping ranks it (stable steps, then stable fraction, then skill horizon
-  with RMSE at lead 10 as tie-break), and the search maximizes that,
+  with CRPS at lead 10 as tie-break), and the search maximizes that,
   `best_selection_score`. The search optimizes what models are
   chosen by, on validation only. A trial's best, not its latest score: a
   trial keeps its best epoch, and the score flips between epochs (stable

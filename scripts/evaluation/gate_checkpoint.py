@@ -3,10 +3,12 @@
 Runs after the `evaluate` stage and fails (exit status 1, so `dvc repro`
 stops and leaves the stage stale) unless the checkpoint still meets the bar
 that made it canonical: stable over the whole validation forecast and over
-an `evaluation.gate.rollout_steps` rollout from the validation context, and
-its validation scores within `evaluation.gate.max_scores` and
-`evaluation.gate.min_scores` (see src/mhd_surrogate/evaluation/gate.py). Writes the verdict to
-`<export.dir>/gate.json` either way.
+an `evaluation.gate.rollout_steps` rollout from the validation context, its
+domain-mean drift within `evaluation.gate.member_max_scores` (each for at
+least `evaluation.gate.min_member_fraction` of a stochastic model's
+members), and its validation scores within `evaluation.gate.max_scores`
+and `evaluation.gate.min_scores` (see src/mhd_surrogate/evaluation/gate.py).
+Writes the verdict to `<export.dir>/gate.json` either way.
 
 The test dataset is never opened (see configs/data/re16k.yaml).
 
@@ -38,9 +40,15 @@ log = logging.getLogger(__name__)
 @hydra.main(config_path="../../configs", config_name="config")
 def main(cfg: DictConfig) -> None:
     result = run_gate(cfg)
-    scores = result.rollout.scores()
+    scores, n_members = result.rollout_scores, len(result.rollouts)
     print(
-        f"{result.rollout.n_steps}-step rollout: stable for {scores['stable_steps']:g} steps, "
+        f"{result.rollouts[0].n_steps}-step rollout"
+        + (
+            f", {scores['stable_fraction']:.0%} of {n_members} members stable, median"
+            if n_members > 1
+            else ""
+        )
+        + f": stable for {scores['stable_steps']:g} steps, "
         f"peak energy {scores['energy_peak_ratio']:.3g}x, "
         f"peak enstrophy {scores['enstrophy_peak_ratio']:.3g}x the truth's"
     )

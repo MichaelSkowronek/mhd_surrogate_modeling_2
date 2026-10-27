@@ -91,7 +91,9 @@ stages:
     # The keys that change the fitted model: its own, the data it's fitted
     # on, and what early stopping scores on (the validation dataset and the
     # selection rule) for a model trained iteratively. Performance knobs
-    # (chunk sizes) are left out so tuning them doesn't retrain.
+    # (chunk sizes) are left out so tuning them doesn't retrain, and so are
+    # monitor_members and member_batch while the canonical model is
+    # deterministic (they can't change its fit).
     params:
       - configs/model/hankel_dmd.yaml:
           - rank
@@ -199,6 +201,7 @@ stages:
       - src/mhd_surrogate/models/hankel_dmd.py
       - src/mhd_surrogate/evaluation/__init__.py
       - src/mhd_surrogate/evaluation/gate.py
+      - src/mhd_surrogate/evaluation/metrics.py
       - src/mhd_surrogate/evaluation/protocol.py
       - src/mhd_surrogate/evaluation/quantities.py
       - src/mhd_surrogate/evaluation/rollout.py
@@ -223,6 +226,8 @@ stages:
           - zarr_store
           - val_dataset
           - context_steps
+      # ensemble_size is left out while the canonical model is
+      # deterministic, as for `evaluate`.
       - configs/evaluation/default.yaml:
           - stability
           - gate

@@ -89,6 +89,16 @@ def test_a_stochastic_rollout_by_default_is_the_member_for_seed_0():
     assert model.seeds == [block_seed(0, k) for k in range(3)]
 
 
+def test_a_stochastic_rollout_is_the_member_for_the_seed_asked():
+    model = Sampler()
+
+    rollout_stability(
+        model, np.zeros((3, 2, 4, 4)), np.ones((6, 2, 4, 4)), 5, 2, 2.0, DX, DY, seed=3
+    )
+
+    assert model.seeds == [block_seed(3, k) for k in range(3)]
+
+
 class Clock:
     """A model with a hidden state: frame k of a forecast is k + 1, whatever
     the context, so restarting it at a block starts the count over."""

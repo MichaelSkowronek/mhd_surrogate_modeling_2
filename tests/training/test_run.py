@@ -15,7 +15,7 @@ import mlflow
 from mhd_surrogate.data.normalization import compute_normalization_stats
 from mhd_surrogate.training import startup
 from mhd_surrogate.training.export import checkpoint_digest
-from mhd_surrogate.training.run import run_training
+from mhd_surrogate.training.run import ValidationMonitor, run_training
 from mhd_surrogate.training.scoring import run_evaluation
 from mlflow import MlflowClient
 
@@ -102,7 +102,7 @@ def test_a_closed_form_model_is_fitted_scored_and_tracked(workspace):
     run, client = only_run(workspace)
     assert run.info.run_name == "persistence"
     assert run.data.params["data_version.raw"] == "stub"
-    assert "val.skill_horizon" in run.data.metrics
+    assert "val.crps_skill_horizon" in run.data.metrics
     assert run.data.metrics["n_parameters"] == 0
     assert not (workspace / "out" / "training_state").exists()
     assert (workspace / "out" / "model" / "model.json").exists()
@@ -148,6 +148,50 @@ def test_an_iterative_model_reports_every_validation_and_records_its_run(workspa
     assert record["run_id"] == run.info.run_id
     assert "resume" not in record["config"]
     assert np.isfinite(scores["val"]["rmse_lead_1"])
+
+
+class Noisy:
+    """A stochastic model: the last context frame plus noise from `seed`."""
+
+    window = 1
+    stochastic = True
+
+    def __init__(self):
+        self.seeds = []
+
+    def predict(self, context, n_steps, seed=0):
+        self.seeds.append(seed)
+        noise = np.random.default_rng(seed).normal(size=(n_steps, *context.shape[1:]))
+        return context[-1] + 0.01 * noise
+
+
+def test_the_validation_monitor_scores_a_stochastic_model_on_its_monitor_members(workspace):
+    model = Noisy()
+    monitor = ValidationMonitor(wave(30, 2.0), np.ones(2), config(workspace))
+
+    scores = monitor(model)
+
+    assert model.seeds == [0, 1]  # configs/evaluation: monitor_members
+    assert scores["members"] == 2
+
+
+def test_an_ensembles_members_are_scored_one_group_each_on_validation(workspace):
+    from mhd_surrogate.training.scoring import score_and_log
+
+    cfg = config(workspace, "evaluation.ensemble_size=3")
+    root = zarr.open_group(store=str(workspace / "data.zarr"), mode="r")
+    mlflow.set_tracking_uri(cfg.mlflow.tracking_uri)
+    mlflow.set_experiment(cfg.mlflow.experiment_name)
+    with mlflow.start_run():
+        scores = score_and_log(Noisy(), root, cfg, np.ones(2), None)
+
+    members = ["val.member_0", "val.member_1", "val.member_2"]
+    assert [group for group in scores if ".member_" in group] == members
+    assert scores["val"]["rmse_mean"] == pytest.approx(
+        np.median([scores[group]["rmse_mean"] for group in members])
+    )
+    assert scores["val"]["ensemble_size"] == 3
+    assert "ensemble_size" not in scores["val.member_0"]
 
 
 def test_resume_continues_the_recorded_run(workspace):
@@ -227,7 +271,7 @@ def test_a_rerun_with_an_identical_checkpoint_reuses_its_logged_model(workspace)
     assert model.source_run_id == first.info.run_id
     assert second.data.tags["reused_logged_model"] == model.model_id
     linked = {m.key for m in client.get_logged_model(model.model_id).metrics}
-    assert "val.skill_horizon" in linked
+    assert "val.crps_skill_horizon" in linked
     assert any(
         m.run_id == second.info.run_id for m in client.get_logged_model(model.model_id).metrics
     )
@@ -255,7 +299,7 @@ def test_evaluating_a_stored_checkpoint_scores_it_like_the_end_of_a_run(workspac
     (model,) = client.search_logged_models([experiment])
     assert evaluation[0].info.run_name == "evaluate persistence"
     assert evaluation[0].data.tags["evaluates_model_id"] == model.model_id
-    assert "val.skill_horizon" in evaluation[0].data.metrics
+    assert "val.crps_skill_horizon" in evaluation[0].data.metrics
     assert "model.name" not in evaluation[0].data.params  # the checkpoint's, not the config's
 
 

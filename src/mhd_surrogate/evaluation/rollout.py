@@ -7,7 +7,9 @@ checks here, and for a served forecast. The selection rule's stability check
 (`stability.py`) only sees the scored forecast, 837 steps of the validation
 dataset; `rollout_stability` rolls a model out for any number of steps from
 a dataset's context and rates each block against the truth with the same
-blocks and threshold. Used by the canonical model's gate (`gate.py`) and
+blocks and threshold (a stochastic model one member at a time: the rule
+takes the median over them, like every per-member score). Used by the
+canonical model's gate (`gate.py`) and
 `scripts/evaluation/check_rollout_stability.py`; kept out of
 `stability.py`, which early stopping imports, so the DVC `train` stage
 doesn't depend on it.
@@ -90,13 +92,14 @@ def rollout_block_means(
     dx: float,
     dy: float,
     chunk_t: int = DEFAULT_CHUNK_T,
+    seed: int = 0,
 ) -> dict[str, np.ndarray]:
     """Block means of the energy and enstrophy of an `n_steps` rollout from
-    `context` (`rollout_blocks`; a stochastic model's sample for seed 0),
+    `context` (`rollout_blocks`; a stochastic model's sample for `seed`),
     one value per `block_steps`-step block (the last may be shorter), for
     rollouts longer than a dataset."""
     means = {q: [] for q in QUANTITIES}
-    for block in rollout_blocks(model, context, n_steps, block_steps):
+    for block in rollout_blocks(model, context, n_steps, block_steps, seed=seed):
         for quantity, values in energy_and_enstrophy(block, dx, dy, chunk_t).items():
             means[quantity].append(values.mean())
     return {q: np.array(values) for q, values in means.items()}
@@ -146,13 +149,14 @@ def rollout_stability(
     dx: float,
     dy: float,
     chunk_t: int = DEFAULT_CHUNK_T,
+    seed: int = 0,
 ) -> RolloutStability:
-    """Roll `model` out for `n_steps` from `context` (`rollout_block_means`)
-    and compare its block means with those of `targets`, the scored steps
-    that follow the context."""
+    """Roll `model` out for `n_steps` from `context` (`rollout_block_means`;
+    a stochastic model's sample for `seed`) and compare its block means
+    with those of `targets`, the scored steps that follow the context."""
     truth = energy_and_enstrophy(targets, dx, dy, chunk_t)
     return RolloutStability(
-        blocks=rollout_block_means(model, context, n_steps, block_steps, dx, dy, chunk_t),
+        blocks=rollout_block_means(model, context, n_steps, block_steps, dx, dy, chunk_t, seed),
         reference={q: block_means(truth[q], block_steps) for q in QUANTITIES},
         n_steps=n_steps,
         block_steps=block_steps,

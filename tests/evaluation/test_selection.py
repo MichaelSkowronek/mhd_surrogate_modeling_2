@@ -69,6 +69,39 @@ def test_a_stable_stretch_beats_a_lone_stable_validation_with_more_skill():
     assert run(".S.SSS", neighbors=0, skills=[1, 9, 1, 2, 2, 3]).best() == 1
 
 
+def ensemble(stable_members: int, members: int = 2, skill: float = 1.0) -> dict[str, float]:
+    """A stochastic model's validation: `stable_members` of its `members`
+    stable, and stable itself (by the median) if all of them are."""
+    scores_ = scores(stable_members == members, skill)
+    return {**scores_, "members": float(members), "stable_members": float(stable_members)}
+
+
+def test_a_stochastic_models_stable_fraction_pools_the_members_of_the_window():
+    selection = RunSelection(1, [ensemble(k) for k in (2, 2, 0, 1, 2)])
+
+    # Windows of 3 validations, shifted inward at the ends: 6 members each.
+    assert [selection.stable_fraction(i) for i in range(5)] == pytest.approx(
+        [4 / 6, 4 / 6, 3 / 6, 3 / 6, 3 / 6]
+    )
+
+
+def test_a_pooled_fraction_is_weighted_for_every_forecast_of_a_full_window():
+    selection = RunSelection(1, [ensemble(2, skill=4.0), ensemble(1), ensemble(2)])
+
+    assert selection.score(0) == pytest.approx(
+        selection.history[0]["selection_score"]
+        + selection_score(4.0, 0.5, N_STEPS, N_STEPS, 1.0, 5 / 6, n_forecasts=6)
+        - selection_score(4.0, 0.5, N_STEPS, N_STEPS, 1.0)
+    )
+
+
+def test_a_validation_recorded_without_members_counts_as_one_forecast():
+    """E.g. a run resumed from training state saved before ensembles."""
+    selection = RunSelection(1, [scores(True), ensemble(1), scores(False)])
+
+    assert selection.stable_fraction(1) == pytest.approx(2 / 4)
+
+
 def test_without_neighbors_only_the_selection_score_is_needed():
     selection = RunSelection(0, [{"selection_score": 1.0}, {"selection_score": 3.0}])
 

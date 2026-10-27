@@ -225,7 +225,7 @@ class ScriptedValidation:
 
     def __call__(self, network):
         self.gains.append(float(network.gain))
-        return {"selection_score": self.script[len(self.gains) - 1], "skill_horizon": 1.0}
+        return {"selection_score": self.script[len(self.gains) - 1], "crps_skill_horizon": 1.0}
 
 
 class ScriptedStability:

@@ -113,7 +113,7 @@ def test_the_promotion_run_logs_the_scores_params_and_records(stores, logged_che
     promotion = run_promote(
         checkpoint,
         stores,
-        scores={"val.skill_horizon": 7.0, "gate.passed": 1.0},
+        scores={"val.crps_skill_horizon": 7.0, "gate.passed": 1.0},
         params={"zarr_md5": "abc.dir"},
         records=[record],
         run_tags={"mlflow.source.git.commit": "1234"},
@@ -121,7 +121,10 @@ def test_the_promotion_run_logs_the_scores_params_and_records(stores, logged_che
 
     client = target_client(stores)
     copy = client.get_logged_model(promotion.model_id)
-    assert {m.key: m.value for m in copy.metrics} == {"val.skill_horizon": 7.0, "gate.passed": 1.0}
+    assert {m.key: m.value for m in copy.metrics} == {
+        "val.crps_skill_horizon": 7.0,
+        "gate.passed": 1.0,
+    }
     run = client.get_run(copy.source_run_id)
     assert run.info.status == "FINISHED"
     assert run.data.params == {"zarr_md5": "abc.dir"}

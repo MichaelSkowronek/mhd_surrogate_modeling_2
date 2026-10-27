@@ -110,8 +110,8 @@ stages:
       size: 0
     - path: src/mhd_surrogate/evaluation/metrics.py
       hash: md5
-      md5: b2c51d18cbf84a352edee98bf6905e7b
-      size: 5944
+      md5: 296993523f2c9fe62357bde0782238e1
+      size: 11560
     - path: src/mhd_surrogate/evaluation/protocol.py
       hash: md5
       md5: bcd0af22015e2e49ca36cd084a56b380
@@ -122,11 +122,11 @@ stages:
       size: 981
     - path: src/mhd_surrogate/evaluation/selection.py
       hash: md5
-      md5: 007226aadffa76bb1e871ed1a34971d5
-      size: 6571
+      md5: cceb76e72620f1e17bcf5a58790e95c9
+      size: 8058
     - path: src/mhd_surrogate/evaluation/stability.py
       hash: md5
-      md5: 6e1ff7f6cb92b1c673ca0807a25a0387
+      md5: 86aefb39c51afbccd0a9fb9d6f17ca8a
       size: 4415
     - path: src/mhd_surrogate/models/__init__.py
       hash: md5
@@ -170,8 +170,8 @@ stages:
       size: 4221
     - path: src/mhd_surrogate/training/run.py
       hash: md5
-      md5: ddc97b7f610bea66f63597611ff84df2
-      size: 7515
+      md5: 02e71dfe4f9086d18b325c121578b191
+      size: 7769
     - path: src/mhd_surrogate/training/startup.py
       hash: md5
       md5: 6294a36299cccb2b3df42388eea29701
@@ -214,7 +214,7 @@ stages:
         val_dataset: re16k_t400_6
         zarr_store: data/processed/re16k_t400.zarr
       configs/evaluation/default.yaml:
-        skill_threshold: 0.5
+        skill_threshold: 0.32
         stability:
           block_steps: 100
           max_ratio: 2.0
@@ -294,8 +294,8 @@ stages:
       size: 1480
     - path: src/mhd_surrogate/evaluation
       hash: md5
-      md5: 4ead40ef5d92d4e8464cc0cc88276d91.dir
-      size: 57113
+      md5: fed0506c23402adea7e9bf3fa28ad47b.dir
+      size: 67642
       nfiles: 12
     - path: src/mhd_surrogate/models/__init__.py
       hash: md5
@@ -335,8 +335,8 @@ stages:
       size: 4221
     - path: src/mhd_surrogate/training/scoring.py
       hash: md5
-      md5: b8ddf896ba1ec0f23cc5bef68e5e6f74
-      size: 7101
+      md5: 25c7379bed6a3f9480543670493ec571
+      size: 7649
     - path: src/mhd_surrogate/training/startup.py
       hash: md5
       md5: 6294a36299cccb2b3df42388eea29701
@@ -384,7 +384,7 @@ stages:
         - 10
         - 40
         - 100
-        skill_threshold: 0.5
+        skill_threshold: 0.32
         stability:
           block_steps: 100
           max_ratio: 2.0
@@ -396,8 +396,8 @@ stages:
     outs:
     - path: models/hankel_dmd/metrics.json
       hash: md5
-      md5: db6f7df56cfb87cae65d0ebe6a6c1f44
-      size: 1859
+      md5: 5b13f15ec02593768a0fbf2a8724a46e
+      size: 1869
   gate:
     cmd: uv run scripts/evaluation/gate_checkpoint.py 
       checkpoint=models/hankel_dmd/model export.dir=models/hankel_dmd 
@@ -414,8 +414,8 @@ stages:
       nfiles: 293
     - path: models/hankel_dmd/metrics.json
       hash: md5
-      md5: db6f7df56cfb87cae65d0ebe6a6c1f44
-      size: 1859
+      md5: 5b13f15ec02593768a0fbf2a8724a46e
+      size: 1869
     - path: models/hankel_dmd/model
       hash: md5
       md5: 1b2c82643d30780cc4dce9e42436041f.dir
@@ -423,8 +423,8 @@ stages:
       nfiles: 2
     - path: scripts/evaluation/gate_checkpoint.py
       hash: md5
-      md5: 10bbb8e84441b535a16febdc057ac1f0
-      size: 1881
+      md5: caa1fcc18da1942b22cbd432f54e00c0
+      size: 2244
     - path: src/mhd_surrogate/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -459,8 +459,12 @@ stages:
       size: 0
     - path: src/mhd_surrogate/evaluation/gate.py
       hash: md5
-      md5: 15f9b1f41d30a44a9cddd1c43f35c4bc
-      size: 2694
+      md5: d1467fdc18498b84b4066e68f6de77e6
+      size: 5809
+    - path: src/mhd_surrogate/evaluation/metrics.py
+      hash: md5
+      md5: 296993523f2c9fe62357bde0782238e1
+      size: 11560
     - path: src/mhd_surrogate/evaluation/protocol.py
       hash: md5
       md5: bcd0af22015e2e49ca36cd084a56b380
@@ -471,11 +475,11 @@ stages:
       size: 981
     - path: src/mhd_surrogate/evaluation/rollout.py
       hash: md5
-      md5: 0b4383c114fb07a5000cf31d752427a0
-      size: 6454
+      md5: 3b64885a7bf3f5cd7873fc5a0128c9e5
+      size: 6657
     - path: src/mhd_surrogate/evaluation/stability.py
       hash: md5
-      md5: 6e1ff7f6cb92b1c673ca0807a25a0387
+      md5: 86aefb39c51afbccd0a9fb9d6f17ca8a
       size: 4415
     - path: src/mhd_surrogate/models/__init__.py
       hash: md5
@@ -511,8 +515,8 @@ stages:
       size: 1929
     - path: src/mhd_surrogate/training/gating.py
       hash: md5
-      md5: 932e5787ff6d3bb7f3a7bba251c186e0
-      size: 3093
+      md5: bc04ced2c09e35908abd5b53a5f35a69
+      size: 4268
     - path: src/mhd_surrogate/training/startup.py
       hash: md5
       md5: 6294a36299cccb2b3df42388eea29701
@@ -545,11 +549,13 @@ stages:
       configs/evaluation/default.yaml:
         gate:
           rollout_steps: 3000
+          min_member_fraction: 0.8
           max_scores:
             energy_rel_error: 0.294
             enstrophy_rel_error: 0.758
             spectrum_x_lsd: 2.673
             spectrum_y_lsd: 2.147
+          member_max_scores:
             u_x_mean_offset: 1.0
             u_x_mean_std_ratio: 2.0
             u_y_mean_offset: 1.0
@@ -563,8 +569,8 @@ stages:
     outs:
     - path: models/hankel_dmd/gate.json
       hash: md5
-      md5: 7f3380e45681cbaea37bfb00603b2c69
-      size: 191
+      md5: c1eaa6438b4a282cc977111d5580e303
+      size: 227
   serve_parity:
     cmd: JAX_PLATFORMS=cpu uv run scripts/serving/serve_parity.py 
       checkpoint=models/hankel_dmd/model export.dir=models/hankel_dmd
@@ -621,11 +627,11 @@ stages:
       size: 981
     - path: src/mhd_surrogate/evaluation/rollout.py
       hash: md5
-      md5: 0b4383c114fb07a5000cf31d752427a0
-      size: 6454
+      md5: 3b64885a7bf3f5cd7873fc5a0128c9e5
+      size: 6657
     - path: src/mhd_surrogate/evaluation/stability.py
       hash: md5
-      md5: 6e1ff7f6cb92b1c673ca0807a25a0387
+      md5: 86aefb39c51afbccd0a9fb9d6f17ca8a
       size: 4415
     - path: src/mhd_surrogate/models/__init__.py
       hash: md5

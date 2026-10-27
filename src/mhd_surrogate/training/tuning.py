@@ -14,7 +14,7 @@ around it.
   plus its best validation so far as early stopping ranks it
   (`FitHooks.report`): `best_selection_score`, which is the metric, and
   `best_stable_fraction`. That is the selection rule (stable steps, then
-  stable fraction, then skill horizon, ties broken by the RMSE at lead 10)
+  stable fraction, then skill horizon, ties broken by the CRPS at lead 10)
   as one number, judging each validation with its nearest neighbors
   (`evaluation.selection.RunSelection`), so the search optimizes what
   models are chosen by. The run's best, not the latest validation's score,

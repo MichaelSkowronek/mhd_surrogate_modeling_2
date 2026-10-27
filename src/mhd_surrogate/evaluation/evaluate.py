@@ -14,7 +14,7 @@ from mhd_surrogate.evaluation.diagnostics import (
     series_summary,
 )
 from mhd_surrogate.evaluation.ensemble import EnsembleAccumulator, EnsembleScores
-from mhd_surrogate.evaluation.metrics import rmse_per_step, skill_horizon
+from mhd_surrogate.evaluation.metrics import member_median, rmse_per_step, skill_horizon
 from mhd_surrogate.evaluation.protocol import (
     ForecastModel,
     ensemble_size,
@@ -25,18 +25,20 @@ from mhd_surrogate.evaluation.protocol import (
 from mhd_surrogate.evaluation.stability import QUANTITIES, stability_scores
 
 
-def candidate_stable_fraction(model: ForecastModel, scores, n_steps: int) -> float | None:
+def candidate_stable_fraction(model: ForecastModel, evaluation: Evaluation) -> float | None:
     """The stable fraction the selection rule's check reads (CLAUDE.md,
-    "Data analysis"), given the model's `scores` on its `n_steps`-step
-    validation forecast. An iteratively trained model's is its training
-    run's, around the epoch it kept (its `fit_info`, from
+    "Data analysis"), given the model's `evaluation` on the validation
+    dataset. An iteratively trained model's is its training run's, around
+    the epoch it kept (its `fit_info`, from
     `evaluation.selection.RunSelection`); None if its checkpoint predates
     it, which fails the check. A closed-form fit is the same model on
-    every refit, so its one forecast decides: 1 if stable, else 0."""
+    every refit, so its forecast decides: the share of its members stable
+    (1 or 0 for a deterministic model)."""
     if getattr(model, "iterative", False):
         fraction = getattr(model, "fit_info", {}).get("stable_fraction")
         return None if fraction is None else float(fraction)
-    return float(scores["stable_steps"] >= n_steps)
+    n_steps = len(evaluation.rmse)
+    return float(np.mean([s["stable_steps"] >= n_steps for s in evaluation.members]))
 
 
 def train_eval_datasets(requested: list[str], train_datasets: list[str]) -> list[str]:
@@ -52,13 +54,15 @@ def train_eval_datasets(requested: list[str], train_datasets: list[str]) -> list
 @dataclass(frozen=True)
 class Evaluation:
     """`scores` are scalars (ready for `mlflow.log_metrics`); `rmse` is the
-    per-step error curve, index 0 = lead time 1, and `ensemble` the
+    per-step error curve (the median over the members), index 0 = lead time
+    1, `members` each member's own scores (by seed) and `ensemble` the
     ensemble's per-step curves (CRPS, spread). `predict_seconds` is the wall
     time of one member's forecast alone (no data reading or scoring); it's
     kept out of `scores`, which must be reproducible."""
 
     scores: dict[str, float]
     rmse: np.ndarray
+    members: list[dict[str, float]]
     ensemble: EnsembleScores
     predict_seconds: float
 
@@ -105,59 +109,74 @@ def evaluate(
 ) -> Evaluation:
     """Forecast `series` under the protocol and compute every metric.
 
-    RMSE is scaled per channel by `scale` (the training std), so 1.0 means an
-    error as large as the flow's own variability. `report_leads` (1-based) are
-    also reported as scalars, `rmse_lead_<n>`; leads past the forecast are
-    skipped. `block_steps` and `max_ratio` configure the stability check
-    (`stability.stability_scores`).
+    RMSE and CRPS are scaled per channel by `scale` (the training std), so
+    1.0 means an error as large as the flow's own variability. The skill
+    horizon is measured on the CRPS (`crps_skill_horizon`, at most
+    `skill_threshold`; named for it, since until 2026-10-27 runs logged an
+    RMSE one as `skill_horizon`). `report_leads`
+    (1-based) are also reported as scalars, `rmse_lead_<n>` and
+    `crps_lead_<n>`; leads past the forecast are skipped. `block_steps` and
+    `max_ratio` configure the stability check (`stability.stability_scores`).
 
     A stochastic model forecasts an ensemble of `n_members` (seeds 0, 1,
-    ...; a deterministic model has one member, whatever `n_members`). Every
-    score above is the seed-0 member's, the single trajectory `predict`
-    gives; the ensemble adds `crps_mean`, `crps_lead_<n>`,
-    `ensemble_size` and, for more than one member, `spread_skill_lead_<n>`
-    (`ensemble.EnsembleScores`). For one member the CRPS is the absolute
-    error, so deterministic and generative models share that score.
-    `member_batch` members are sampled per call where the model can
-    (`protocol.forecast_members`).
+    ...; a deterministic model has one member, whatever `n_members`),
+    sampled `member_batch` per call where the model can
+    (`protocol.forecast_members`). Every score of a trajectory -- the RMSE,
+    the diagnostics, the stability scores -- is the median over the members
+    (`metrics.member_median`; each member is one trajectory, as `predict`
+    gives it: the ensemble *mean* would be smooth and fail the physics). The
+    ensemble adds `crps_mean`, `crps_lead_<n>`, `ensemble_size` and, for
+    more than one member, `spread_skill_lead_<n>` (`ensemble.EnsembleScores`).
+    For one member the CRPS is the absolute error, so deterministic and
+    generative models share that score, and the skill horizon.
     """
     timed = _TimedModel(model)
     prediction, targets = forecast(timed, series, context_steps)
-    rmse = rmse_per_step(prediction, targets, scale)
-    scores = {
-        "rmse_mean": float(rmse.mean()),
-        "skill_horizon": float(skill_horizon(rmse, skill_threshold)),
-    }
-    for lead in report_leads:
-        if 1 <= lead <= len(rmse):
-            scores[f"rmse_lead_{lead}"] = float(rmse[lead - 1])
-    pred = series_summary(prediction, dx, dy, chunk_t)
     true = series_summary(targets, dx, dy, chunk_t)
-    scores.update(compare_summaries(pred, true, nperseg))
-    scores.update(
-        stability_scores(
-            {q: pred[q] for q in QUANTITIES},
-            {q: true[q] for q in QUANTITIES},
-            block_steps,
-            max_ratio,
-        )
-    )
+    accumulator = EnsembleAccumulator(targets, scale, chunk_t)
+    rmse_curves, members = [], []
 
-    members = EnsembleAccumulator(targets, scale, chunk_t)
-    members.add(prediction)
+    def score(member: np.ndarray) -> None:
+        rmse = rmse_per_step(member, targets, scale)
+        scores = {"rmse_mean": float(rmse.mean())}
+        for lead in report_leads:
+            if 1 <= lead <= len(rmse):
+                scores[f"rmse_lead_{lead}"] = float(rmse[lead - 1])
+        pred = series_summary(member, dx, dy, chunk_t)
+        scores.update(compare_summaries(pred, true, nperseg))
+        scores.update(
+            stability_scores(
+                {q: pred[q] for q in QUANTITIES},
+                {q: true[q] for q in QUANTITIES},
+                block_steps,
+                max_ratio,
+            )
+        )
+        rmse_curves.append(rmse)
+        members.append(scores)
+        accumulator.add(member)
+
+    score(prediction)
     del prediction  # one member at a time from here on (~1 GB each)
     size = ensemble_size(model, n_members)
-    members_after_0 = forecast_members(
+    for member in forecast_members(
         model, series, context_steps, range(1, size), batch_size=member_batch
-    )
-    for member in members_after_0:
-        members.add(member)
-    ensemble = members.scores()
+    ):
+        score(member)
+    ensemble = accumulator.scores()
+    scores = {key: member_median([s[key] for s in members]) for key in members[0]}
+    scores["crps_skill_horizon"] = float(skill_horizon(ensemble.crps, skill_threshold))
     scores["ensemble_size"] = float(ensemble.size)
     scores["crps_mean"] = float(ensemble.crps.mean())
     for lead in report_leads:
-        if 1 <= lead <= len(rmse):
+        if 1 <= lead <= len(ensemble.crps):
             scores[f"crps_lead_{lead}"] = float(ensemble.crps[lead - 1])
             if ensemble.size > 1:
                 scores[f"spread_skill_lead_{lead}"] = float(ensemble.spread_skill[lead - 1])
-    return Evaluation(scores=scores, rmse=rmse, ensemble=ensemble, predict_seconds=timed.seconds)
+    return Evaluation(
+        scores=scores,
+        rmse=member_median(rmse_curves),
+        members=members,
+        ensemble=ensemble,
+        predict_seconds=timed.seconds,
+    )
