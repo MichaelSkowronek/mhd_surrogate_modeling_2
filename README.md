@@ -628,8 +628,18 @@ read once, at the end:
 1. Freeze the finalists: the baselines plus the learned models chosen on
    validation.
 2. Refit each on train + val. A refit can't early-stop (there is no held-out
-   data left), so it uses the epoch count from its tuned run, scaled for the
-   extra data if warranted. The normalization stats are recomputed over
+   data left), so it uses the epoch count from its tuned run, unscaled: the
+   stable fraction that vouches for that epoch count was measured per epoch,
+   and the validation dataset lengthens an epoch by only 13% (917 frames on
+   7115). An iteratively trained finalist is refit five times, with seeds
+   0-4, fixed before any test score exists. One refit is one draw, and a
+   stable validation epoch is often a lucky one (see the stable fraction
+   below): the U-Net baseline's is 0.2, so a single refit of it would come
+   out stable about one time in five, and on that draw the table would show
+   it beating Hankel DMD against all the validation evidence; on the others,
+   a rerun with another seed would be choosing after seeing test. A
+   closed-form fit (DMD, the mean field) is the same model on every refit,
+   so it is fit once. The normalization stats are recomputed over
    train + val as well: normalization is just the first step of fitting a
    model, and fitting it on less data than the rest of the model would need a
    reason of its own. (During development they stay train-only, as the
@@ -637,8 +647,14 @@ read once, at the end:
    separate output when the final evaluation is built.) The baselines are
    refit too (the mean field over all 8 datasets), so the comparison stays
    fair.
-3. Score all of them on test in one evaluation, and report that table.
-   Nothing is changed or chosen after seeing it.
+3. Score all of them on test in one evaluation, and report that table. For
+   an iterative finalist it gives the share of its seeds stable on test
+   (beside its validation stable fraction, the prediction) and each score's
+   median over the seeds, every seed's scores listed with it; a mean would
+   be meaningless once one seed's energy error is in the hundreds. No seed
+   is picked. A generative finalist's seeds are training seeds; each
+   refit's ensemble is scored as on validation. Nothing is changed or chosen
+   after seeing it.
 
 Reporting every finalist's test score side by side is the point of step 3;
 what would spoil the test set is going back to iterate after looking at it.
@@ -671,9 +687,9 @@ means damping, which the stability check is deliberately one-sided about. The st
 because a stable epoch is usually a lucky one: the median U-Net run was
 stable on the validation forecast at 2 of its 30 epochs, mostly isolated
 ones, and only 1 of 21 runs ended on a stable epoch. Keeping the best epoch
-picks such a draw, and the final refit (below) trains for that many epochs
-with no validation left to pick with, so it lands on whatever that epoch
-gives. The fraction around the kept epoch is how often its neighborhood
+picks such a draw, and the final refit (above) trains for that many epochs
+with no validation left to pick with, so each of its seeds lands on
+whatever that epoch gives. The fraction around the kept epoch is how often its neighborhood
 gives a stable network. It does not predict long rollouts: of the U-Net
 checkpoints kept by stable steps and skill alone, seven isolated ones
 (fraction 0.2) passed the 3000-step rollout and three of the EMA runs'
@@ -2977,8 +2993,8 @@ that space and back is a **codec** (`src/mhd_surrogate/models/codec.py`): an
   can't be loaded as a model by mistake.
 - **The final refit includes the codec.** The codec is part of fitting, so
   the final train + val refit refits it too (its epoch count, for an
-  iterative one, fixed from its tuned run) before the latent model is refit
-  on it.
+  iterative one, fixed from its tuned run; with each of the latent model's
+  seeds) before the latent model is refit on it.
 
 **POD codec** (`models/pod_codec.py`, name `pod`): a frame's latent is its
 coefficients in the leading `rank` POD modes of the training frames -- of all
