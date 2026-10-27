@@ -292,9 +292,11 @@ conventions below; it shifts which tools are worth reaching for at all.
   source-commit tag from that build arg (`tracked_run`); without it they're
   untagged. Don't add git or mount `.git` instead: the checkout's current
   commit needn't be the one the image was built from.
-- The compose tracking stack has no restart policy: after a reboot, start it
-  (`docker compose up -d`) before anything that needs the registry -- the
-  kind cluster's pods fetch their model from it.
+- The compose tracking stack restarts with Docker (`restart:
+  unless-stopped`), after a reboot too: the kind cluster's pods fetch their
+  model from it. Once stopped on purpose (`docker compose stop`/`down`), it
+  stays down until `docker compose up -d`; start it before anything that
+  needs the registry.
 - See the README's "Docker" section for the full rationale and the
   tracking-stack architecture.
 

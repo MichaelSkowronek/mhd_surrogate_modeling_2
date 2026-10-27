@@ -3755,6 +3755,17 @@ This is the layout MLflow recommends for real deployments, run locally:
 `sudo` to manage. Delete `mlflow/postgres/*` and `mlflow/seaweedfs/*` to
 reset tracking.
 
+**Restarts.** Postgres, SeaweedFS and the MLflow server have `restart:
+unless-stopped`: they come back with the Docker daemon, after a reboot too,
+unless they were stopped on purpose (`docker compose stop`/`down`, then
+`docker compose up -d` again). The kind cluster's serving pods fetch their
+model from the registry when they start, so a reboot that left it down
+would leave them stuck in their init container (it did once: serving was
+down for 6 hours until the stack was started by hand). Docker doesn't honor
+`depends_on` when it restarts containers itself; the MLflow server retries
+its database until Postgres is up, and the one-shot `s3-init` isn't needed
+again (the buckets persist in `mlflow/seaweedfs/`).
+
 **Configuration.** Credentials default to local-development values in
 `docker-compose.yml`; copy `.env.example` to `.env` to override them. They
 are not meant for anything reachable beyond your machine.
