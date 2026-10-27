@@ -67,10 +67,21 @@ conventions below; it shifts which tools are worth reaching for at all.
   stays bounded, `evaluation/stability.py`), then, for an iterative run's
   stable candidate, stable fraction (the share of the validations nearest
   its epoch that are stable too, `evaluation/selection.py`'s
-  `RunSelection`), then skill horizon, ties broken by RMSE at lead 10; an
+  `RunSelection`), then skill horizon, ties broken by CRPS at lead 10 (both
+  on the CRPS, which for a deterministic model is its absolute error); an
   unstable candidate by stable steps, then by its peak ratio (how far its
-  energy or enstrophy strayed, lower first) instead of skill. Mean RMSE over all leads is not a selection metric: it
-  rewards forecasts that smooth toward the mean. The physics scores are
+  energy or enstrophy strayed, lower first) instead of skill. A generative
+  model is judged as an ensemble (8 members when scored, 2 at each
+  validation during training): skill on the ensemble's CRPS; the absolute
+  guardrails below (stable over the validation forecast and the 3000-step
+  rollout, the domain-mean velocity in the truth's band) must all hold for
+  at least 80% of its members (7 of 8; a member failing any of them is a
+  broken forecast, served to whoever asks for its seed); every other
+  per-member score (stable steps and peak ratio for ranking, the relative
+  physics guardrails) is the median over its members; and its stable
+  fraction pools the members of the validations around its epoch. Mean
+  RMSE over all leads is not a selection metric: it rewards forecasts that
+  smooth toward the mean. The physics scores are
   guardrails, not objectives: a candidate replaces the incumbent only if it
   is stable over the whole validation forecast and over a 3000-step rollout
   from the validation context (`scripts/evaluation/check_rollout_stability.py`,
@@ -87,7 +98,7 @@ conventions below; it shifts which tools are worth reaching for at all.
   a perfect model).
 - When a model becomes canonical, freeze its validation scores plus those
   margins (and the absolute drift and stable-fraction limits) as the DVC `gate` stage's limits (`configs/evaluation/default.yaml`,
-  `gate.max_scores` and `gate.min_scores`). They change only with the next switch, never to match
+  `gate.max_scores`, `gate.member_max_scores` and `gate.min_scores`). They change only with the next switch, never to match
   a retrain: a retrain that fails the gate is a bad draw to investigate (or
   answer with several seeds selected on validation), not a reason to loosen
   the limits or to retry until it passes. The same pull request promotes and
@@ -226,8 +237,8 @@ conventions below; it shifts which tools are worth reaching for at all.
   `tests/training/test_dvc_train_stage.py`, which does the same for the
   `evaluate`, `gate` and `serve_parity` stages' entry points). Code
   early stopping needs goes in `evaluation/selection.py` (and what it
-  imports); evaluation-only code (diagnostics, ensemble scores) must stay
-  out of `train.py`'s imports -- `run.py` reaches the final scoring
+  imports); evaluation-only code (diagnostics, the ensemble's spread) must
+  stay out of `train.py`'s imports -- `run.py` reaches the final scoring
   (`training/scoring.py`) only by name -- so changing it re-scores the
   stored checkpoint instead of retraining.
 - JAX entry points call `utils/jax_cache.py`'s `enable_compilation_cache`

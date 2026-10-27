@@ -46,8 +46,11 @@ def workspace(tmp_path, monkeypatch):
     return tmp_path
 
 
-def write_val_scores(workspace, scores):
-    (workspace / "export" / "metrics.json").write_text(json.dumps({"val": scores}))
+def write_val_scores(workspace, scores, members=()):
+    """metrics.json with the validation scores and, for an ensemble, each
+    member's own."""
+    groups = {f"val.member_{seed}": member for seed, member in enumerate(members)}
+    (workspace / "export" / "metrics.json").write_text(json.dumps({"val": scores, **groups}))
 
 
 def config(workspace, *overrides):
@@ -78,11 +81,12 @@ def test_a_stable_model_within_its_limits_passes(workspace):
     result = run_gate(config(workspace))
 
     assert result.passed
-    assert result.rollout.n_steps == 30
+    assert [rollout.n_steps for rollout in result.rollouts] == [30]
     assert verdict(workspace) == {
         "passed": 1.0,
         "rollout_steps": 30.0,
         "rollout_stable_steps": 30.0,
+        "rollout_stable_fraction": 1.0,
         "rollout_energy_peak_ratio": pytest.approx(1.0),
         "rollout_enstrophy_peak_ratio": pytest.approx(1.0),
     }
@@ -118,6 +122,64 @@ def test_a_rollout_that_blows_up_fails(workspace, monkeypatch):
     # Energy grows 1.21x per step: its 5-step block from step 5 is over 2x.
     assert result.failures == ["rollout stable for 5 of its 30 steps"]
     assert verdict(workspace)["rollout_stable_steps"] == 5.0
+
+
+class Members(Persistence):
+    """A stochastic model whose member for seed k grows `growth[k]`-fold per
+    step, streamed so each block knows its member."""
+
+    stochastic = True
+
+    def __init__(self, *growth):
+        self.growth = growth
+
+    def predict(self, context, n_steps, seed=0):
+        return np.stack([context[-1] * self.growth[seed] ** (k + 1) for k in range(n_steps)])
+
+    def predict_blocks(self, context, n_steps, block_steps, seed=0):
+        whole = self.predict(context, n_steps, seed)
+        for start in range(0, n_steps, block_steps):
+            yield whole[start : start + block_steps]
+
+
+def test_a_stochastic_models_rollout_needs_80_percent_of_its_members_stable(workspace, monkeypatch):
+    monkeypatch.setattr(gating, "load_model", lambda path: Members(1.0, 1.1, 1.0, 1.0, 1.0))
+    write_val_scores(workspace, VAL_SCORES, [VAL_SCORES] * 5)
+
+    five = run_gate(config(workspace, "evaluation.ensemble_size=5"))
+
+    # One of five blows up: 4 of 5 is 80%.
+    assert [rollout.stable_steps for rollout in five.rollouts] == [30, 5, 30, 30, 30]
+    assert five.passed
+    assert verdict(workspace)["rollout_stable_fraction"] == 0.8
+    assert verdict(workspace)["rollout_stable_steps"] == 30.0  # the median
+
+    write_val_scores(workspace, VAL_SCORES, [VAL_SCORES] * 3)
+    three = run_gate(config(workspace, "evaluation.ensemble_size=3"))
+
+    # Two of three is under 80%, though the median member is stable.
+    assert three.failures == [
+        "2 of 3 members pass every absolute check, under 80% of them: "
+        "seed 1: rollout stable for 5 of its 30 steps"
+    ]
+    assert verdict(workspace)["passed"] == 0.0
+
+
+def test_the_members_own_validation_scores_are_checked_one_by_one(workspace, monkeypatch):
+    monkeypatch.setattr(gating, "load_model", lambda path: Members(*[1.0] * 5))
+    drifting = {**VAL_SCORES, "u_y_mean_offset": 1.5}
+    write_val_scores(workspace, VAL_SCORES, [VAL_SCORES] * 5)
+
+    assert run_gate(config(workspace, "evaluation.ensemble_size=5")).passed
+
+    write_val_scores(
+        workspace, VAL_SCORES, [drifting, VAL_SCORES, VAL_SCORES, drifting, VAL_SCORES]
+    )
+
+    assert run_gate(config(workspace, "evaluation.ensemble_size=5")).failures == [
+        "3 of 5 members pass every absolute check, under 80% of them: "
+        "seed 0: u_y_mean_offset 1.5 over its limit 1; seed 3: u_y_mean_offset 1.5 over its limit 1"
+    ]
 
 
 def test_the_test_dataset_is_refused(workspace):

@@ -2,7 +2,7 @@
 
 An autoregressive model can track the flow closely for tens of steps and
 then blow up, its energy growing without bound, while the short-horizon
-scores (skill horizon, RMSE at lead 10) never notice. This check catches it
+scores (skill horizon, CRPS at lead 10) never notice. This check catches it
 from the scored forecast itself: the forecast is cut into consecutive blocks
 of `block_steps` steps, and a block fails when its mean kinetic energy or
 enstrophy exceeds `max_ratio` times the truth's largest block mean of the

@@ -8,9 +8,22 @@
 #   it.
 # The context length is part of the data protocol: data.context_steps.
 #
-# skill_threshold: RMSE in units of the training std; the skill horizon is how
-#   many lead steps stay at or below it. Persistence is already at ~0.5 one
-#   step ahead and the mean field at ~0.85, so a model with skill beats both.
+# skill_threshold: CRPS in units of the training std (for a deterministic
+#   model, a one-member ensemble, its absolute error); the skill horizon is
+#   how many lead steps stay at or below it. On the CRPS rather than a
+#   member's RMSE because pointwise error penalizes a realistic forecast twice
+#   once it has lost the truth's phase -- for missing the truth's features and
+#   for placing its own where the truth has none -- and so favors forecasts
+#   that smooth toward the mean (the U-Net's RMSE saturates at ~1.45, Hankel
+#   DMD's damped forecast's at ~0.82); the CRPS is proper, credits an
+#   ensemble's spread, and is unbiased from two members on. 0.32 is half the
+#   mean field's CRPS (0.64 over the first 40 leads), as RMSE 0.5 was about
+#   half the mean field's RMSE (0.9). A member's absolute error is 0.51-0.65x
+#   its RMSE at the RMSE horizon (the logged U-Net and Hankel DMD runs), so
+#   0.32 keeps Hankel DMD's horizon at 7 and moves the U-Nets' by 0 to +3
+#   (sharper forecasts have heavier-tailed errors, less of them squared).
+#   Persistence stays under it for one step (0.28 at lead 1; an RMSE of 0.51
+#   was just over 0.5), the mean field for none.
 # report_leads: lead times (1-based) also logged as scalars, besides the full
 #   per-step curve; 40 is the longest characteristic period found in the EDA.
 #
@@ -23,28 +36,44 @@
 #   (enstrophy) on the validation dataset, so 2x is a blow-up, not noise.
 #   `neighbors`: early stopping and the search judge a validation with the
 #   2 * neighbors + 1 validations nearest it (shifted inward at the ends of
-#   the run), its `stable_fraction` being the share of them stable over
-#   their whole forecast (src/mhd_surrogate/evaluation/selection.py's
-#   RunSelection): a network stable at one epoch and not the next is a lucky
-#   draw a refit for the same epochs is unlikely to repeat. 2 (5 validations,
-#   a sixth of a 30-epoch schedule) separates a lone stable epoch (0.2) from
-#   a stable stretch (0.6-1.0) in the U-Net runs; 1 can't tell a lone one
-#   (0.33) from much, 3 spans enough of the learning-rate schedule that the
-#   neighbors are no longer much the same network.
+#   the run), its `stable_fraction` being the share of their forecasts
+#   stable over their whole length -- a stochastic model's members of all of
+#   them, pooled (src/mhd_surrogate/evaluation/selection.py's RunSelection):
+#   a network stable at one epoch and not the next is a lucky draw a refit
+#   for the same epochs is unlikely to repeat, and so is a stable sample.
+#   2 (5 validations, a sixth of a 30-epoch schedule) separates a lone
+#   stable epoch (0.2) from a stable stretch (0.6-1.0) in the U-Net runs; 1
+#   can't tell a lone one (0.33) from much, 3 spans enough of the
+#   learning-rate schedule that the neighbors are no longer much the same
+#   network.
 #
-# ensemble_size: members a stochastic (generative) model forecasts, seeds
-#   0..n-1, for the ensemble scores (CRPS, spread vs error; see
-#   src/mhd_surrogate/evaluation/ensemble.py). A deterministic model has a
-#   single member whatever this says, so it doesn't change their scores.
-#   Every other score is the seed-0 member's.
+# ensemble_size: members a stochastic (generative) model forecasts when it
+#   is scored, seeds 0..n-1. The skill horizon and the ensemble scores (CRPS,
+#   spread vs error; see src/mhd_surrogate/evaluation/ensemble.py) are the
+#   ensemble's, and every score of a single trajectory -- RMSE, physics,
+#   drift, stability -- is the median over its members: each member is one
+#   trajectory as `predict` gives it (the ensemble mean would be smooth and
+#   fail the physics), and no single member, lucky or blown up, decides.
+#   Each member's own validation scores are kept too (`val.member_<seed>`):
+#   the gate's absolute checks count the members that pass them
+#   (`gate.min_member_fraction`). A deterministic model has a single member
+#   whatever this says, so it doesn't change their scores.
+# monitor_members: members a stochastic model forecasts at every validation
+#   during training (src/mhd_surrogate/training/run.py's ValidationMonitor:
+#   early stopping, the search), seeds 0..n-1, the same at every validation,
+#   scored like the ensemble above. 2, the fewest the CRPS is unbiased from,
+#   at twice a single forecast's cost; the stable fraction pools them (2
+#   members x 5 validations).
 # member_batch: members sampled per call by a model that can batch them
-#   (`predict_members`): throughput on a GPU with room to spare, 1 = one
-#   member per call. Batching can change float rounding, so it is part of
-#   what reproduces an ensemble's scores (a DVC param once a stochastic model
-#   is canonical; it can't change a deterministic model's).
+#   (`predict_members`), in the scoring and in the validations: throughput
+#   on a GPU with room to spare, 1 = one member per call. Batching can
+#   change float rounding, so it is part of what reproduces an ensemble's
+#   scores (a DVC param once a stochastic model is canonical, like
+#   ensemble_size and monitor_members; none can change a deterministic
+#   model's).
 #
 # tie_break_lead: candidates are ranked by stable steps, then by stable
-#   fraction, then by skill horizon, ties broken by the RMSE at this lead
+#   fraction, then by skill horizon, ties broken by the CRPS at this lead
 #   (CLAUDE.md, "Data analysis"); early stopping and the hyperparameter
 #   search maximize the four combined (`selection_score`).
 #
@@ -52,17 +81,27 @@
 #   retrains it (src/mhd_surrogate/evaluation/gate.py, the `gate` stage):
 #   stable over the whole validation forecast and over a `rollout_steps`
 #   rollout from the validation context (the `stability` blocks and
-#   threshold), every `max_scores` validation score at or below its limit
-#   and every `min_scores` one at or above it. The limits are frozen when a
-#   model becomes canonical -- its
-#   validation scores then plus the margins a replacement may be worse by
-#   (0.03 energy/enstrophy errors, 0.05 spectrum distances) -- and change
-#   only with the next switch. Current: Hankel DMD's (0.2635, 0.7276,
-#   2.623, 2.097). The domain-mean velocity drift limits are absolute
-#   instead, the same for every model: per channel, the forecast's
-#   domain-mean velocity within one truth std of the truth's mean and
-#   varying at most 2x as much (a different realization scores <= 0.33 and
-#   0.76-0.96 on u_x, <= 0.15 and 0.98-1.02 on u_y). The truth's domain
+#   threshold), every `member_max_scores` validation score at or below its
+#   limit -- these three passed all at once by at least `min_member_fraction`
+#   of a stochastic model's `ensemble_size` members -- every `max_scores`
+#   validation score (for a stochastic model the median over its members) at
+#   or below its limit and every `min_scores` one at or above it. The first
+#   three are absolute: a member that blows up or drifts is a broken
+#   forecast, served to whoever asks for its seed, whichever check it fails.
+#   0.8 is the stable fraction's floor, 7 of 8 members: were each member
+#   broken with probability q, a q = 0.05 model
+#   would pass 94% of the time (all 8 would fail it a third of the time),
+#   q = 0.2 50%, q = 0.375 14% (the median member, 5 of 8, would pass that
+#   one 65% of the time). The `max_scores` limits are relative, a typical
+#   member against the canonical model: frozen when a model becomes
+#   canonical -- its validation scores then plus the margins a replacement
+#   may be worse by (0.03 energy/enstrophy errors, 0.05 spectrum distances)
+#   -- and changed only with the next switch. Current: Hankel DMD's (0.2635,
+#   0.7276, 2.623, 2.097). The domain-mean velocity drift limits
+#   (`member_max_scores`) are absolute, the same for every model: per
+#   channel, the forecast's domain-mean velocity within one truth std of the
+#   truth's mean and varying at most 2x as much (a different realization
+#   scores <= 0.33 and 0.76-0.96 on u_x, <= 0.15 and 0.98-1.02 on u_y). The truth's domain
 #   means stay at 1 +- 0.0042 (u_x, the bulk flow) and 0 +- 0.0055 (u_y,
 #   whose fluctuation is the EDA's ~25-step oscillation), against per-pixel
 #   stds of 0.82 and 0.44: an empirical property of this flow, not a
@@ -71,34 +110,38 @@
 #   squared; the U-Net baseline's 7% loss of bulk flow is offset by extra
 #   fluctuation energy, a 1% energy error). The stable fraction's limit is
 #   absolute too: stable_fraction >= 0.8, at least 4 of the 5 validations
-#   nearest the kept epoch stable (`stability`'s neighbors), so a refit for
-#   that many epochs is likely stable as well. Were each epoch stable with
+#   nearest the kept epoch stable (`stability`'s neighbors; for a stochastic
+#   model 8 of their 10 members), so a refit for that many epochs is likely
+#   stable as well. Were each epoch stable with
 #   probability p, a p = 0.9 recipe would pass 92% of the time (a limit of
 #   1.0 would reject it 41% of the time by chance), a p = 0.5 one 19%. A
 #   closed-form fit (Hankel DMD) is the same model on every refit: 1.0 if
-#   its forecast is stable.
+#   its forecast is stable (a stochastic one's: the share of its members).
 #
 # train_datasets: train datasets also scored the same way, logged as
 #   `train.<name>.*` -- a sanity check of the fit and the train/val gap, not
 #   a basis for decisions. One by default (~35 s each); must be a subset of
 #   data.train_datasets.
 final: true
-skill_threshold: 0.5
+skill_threshold: 0.32
 report_leads: [1, 10, 40, 100]
 stability:
   block_steps: 100
   max_ratio: 2.0
   neighbors: 2
 ensemble_size: 8
+monitor_members: 2
 member_batch: 1
 tie_break_lead: 10
 gate:
   rollout_steps: 3000
+  min_member_fraction: 0.8
   max_scores:
     energy_rel_error: 0.294
     enstrophy_rel_error: 0.758
     spectrum_x_lsd: 2.673
     spectrum_y_lsd: 2.147
+  member_max_scores:
     u_x_mean_offset: 1.0
     u_x_mean_std_ratio: 2.0
     u_y_mean_offset: 1.0

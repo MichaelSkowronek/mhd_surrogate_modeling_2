@@ -26,6 +26,7 @@ from mhd_surrogate.evaluation.evaluate import (
     evaluate,
     train_eval_datasets,
 )
+from mhd_surrogate.evaluation.gate import member_group
 from mhd_surrogate.models.registry import load_model
 from mhd_surrogate.training.export import checkpoint_digest, write_metrics
 from mhd_surrogate.training.mlflow_utils import (
@@ -101,7 +102,9 @@ def score_and_log(
     scored the same way as a sanity check (can the model fit at all, and how
     big is the train/val gap). Validation also gets the model's
     `stable_fraction` (`evaluate.candidate_stable_fraction`), left out if
-    unknown."""
+    unknown, and, for an ensemble of more than one member, each member's own
+    scores (`val.member_<seed>`, `evaluation.gate.member_group`): the
+    absolute guardrails are checked member by member."""
     targets = [(cfg.data.val_dataset, "val")] + [
         (name, f"train.{name}")
         for name in train_eval_datasets(
@@ -113,10 +116,16 @@ def score_and_log(
         for name, prefix in targets
     }
     scores = {prefix: result.scores for prefix, result in results.items()}
-    fraction = candidate_stable_fraction(model, scores["val"], len(results["val"].rmse))
+    fraction = candidate_stable_fraction(model, results["val"])
     if fraction is not None:
         scores["val"]["stable_fraction"] = fraction
         mlflow.log_metric("val.stable_fraction", fraction, model_id=model_id)
+    if results["val"].ensemble.size > 1:
+        for seed, member in enumerate(results["val"].members):
+            group = member_group("val", seed)
+            scores[group] = member
+            finite, _ = finite_metrics(member)
+            mlflow.log_metrics({f"{group}.{k}": v for k, v in finite.items()}, model_id=model_id)
     return scores
 
 

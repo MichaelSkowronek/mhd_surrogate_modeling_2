@@ -142,8 +142,9 @@ def run_training(
 
 class ValidationMonitor:
     """`FitHooks.validate` for an iterative model: its selection scores on
-    the validation dataset (`evaluation.selection_scores`), read into memory
-    on first use (~1 GB) instead of from zarr at every evaluation."""
+    the validation dataset (`evaluation.selection_scores`; a stochastic
+    model's on `evaluation.monitor_members` members), read into memory on
+    first use (~1 GB) instead of from zarr at every evaluation."""
 
     def __init__(self, series, scale: np.ndarray, cfg: DictConfig) -> None:
         self.series = series
@@ -154,6 +155,8 @@ class ValidationMonitor:
         self.skill_threshold = cfg.evaluation.skill_threshold
         self.tie_break_lead = cfg.evaluation.tie_break_lead
         self.stability = cfg.evaluation.stability
+        self.members = cfg.evaluation.monitor_members
+        self.member_batch = cfg.evaluation.member_batch
 
     def __call__(self, model) -> dict[str, float]:
         if self.frames is None:
@@ -169,4 +172,6 @@ class ValidationMonitor:
             self.dy,
             self.stability.block_steps,
             self.stability.max_ratio,
+            members=self.members,
+            member_batch=self.member_batch,
         )

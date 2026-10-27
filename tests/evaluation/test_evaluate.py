@@ -1,4 +1,5 @@
 import time
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -8,7 +9,7 @@ from mhd_surrogate.evaluation.evaluate import (
     evaluate,
     train_eval_datasets,
 )
-from mhd_surrogate.evaluation.metrics import selection_score
+from mhd_surrogate.evaluation.metrics import CrpsAccumulator, selection_score, skill_horizon
 from mhd_surrogate.evaluation.selection import selection_scores
 from mhd_surrogate.models.baselines import Persistence
 
@@ -80,7 +81,7 @@ def test_a_perfect_forecast_has_zero_error_and_full_skill():
     assert result.rmse.shape == (20,)
     assert result.rmse == pytest.approx(np.zeros(20))
     assert result.scores["rmse_mean"] == pytest.approx(0.0)
-    assert result.scores["skill_horizon"] == 20
+    assert result.scores["crps_skill_horizon"] == 20
     assert result.scores["energy_rel_error"] == pytest.approx(0.0, abs=1e-12)
     assert result.scores["stable_steps"] == 20
     assert result.scores["energy_peak_ratio"] == pytest.approx(1.0)
@@ -95,8 +96,9 @@ def test_scores_include_reported_leads_and_skip_leads_past_the_forecast():
     assert result.scores["rmse_lead_5"] == pytest.approx(result.rmse[4])
     assert "rmse_lead_100" not in result.scores
     assert result.scores["rmse_mean"] == pytest.approx(result.rmse.mean())
-    # Independent noise: persistence is off by ~sqrt(2) std at every lead.
-    assert result.scores["skill_horizon"] == 0
+    # Independent noise: persistence is off by ~sqrt(2) std at every lead,
+    # an absolute error (its CRPS) of 2 / sqrt(pi) ~ 1.13.
+    assert result.scores["crps_skill_horizon"] == 0
 
 
 def test_scale_divides_the_error_per_channel():
@@ -179,13 +181,14 @@ def select(model, series, tie_break_lead=10, **kwargs):
 
 def test_selection_scores_match_the_skill_horizon_and_the_tie_break_lead():
     series = make_series()
-    # Error 0.1 * lead: within the 0.5 threshold up to lead 5.
+    # Off by 0.1 * lead everywhere, so the CRPS (the absolute error) is
+    # 0.1 * lead: within the 0.5 threshold up to lead 5.
     model = Offset(series, 10, lambda lead: 0.1 * lead)
 
     scores = select(model, series)
 
-    assert scores["skill_horizon"] == 5
-    assert scores["rmse_lead_10"] == pytest.approx(1.0)
+    assert scores["crps_skill_horizon"] == 5
+    assert scores["crps_lead_10"] == pytest.approx(1.0)
     # The offset adds o**2 to the energy (~1 for this noise): the third
     # block's mean (o = 1.1..1.5) is the first over 2x the truth's.
     assert scores["stable_steps"] == 10
@@ -198,19 +201,19 @@ def test_selection_scores_use_the_last_lead_when_the_forecast_is_shorter():
 
     scores = select(Offset(series, 10, lambda lead: lead), series)
 
-    assert scores["rmse_lead_10"] == pytest.approx(5.0)
+    assert scores["crps_lead_10"] == pytest.approx(5.0)
 
 
 @pytest.mark.parametrize("chunk_t", [1, 3, 64])
-def test_selection_scores_rmse_does_not_depend_on_the_chunk_size(chunk_t):
+def test_selection_scores_crps_does_not_depend_on_the_chunk_size(chunk_t):
     series = make_series()
     model = Offset(series, 10, lambda lead: 0.07 * lead)
-    expected = run(model, series).rmse
+    expected = run(model, series).ensemble.crps
 
     scores = select(model, series, chunk_t=chunk_t)
 
-    assert scores["skill_horizon"] == 7
-    assert scores["rmse_lead_10"] == expected[9]
+    assert scores["crps_skill_horizon"] == 7
+    assert scores["crps_lead_10"] == expected[9]
 
 
 def test_a_blowing_up_forecast_loses_its_stable_steps_and_ranks_below_a_stable_one():
@@ -218,7 +221,7 @@ def test_a_blowing_up_forecast_loses_its_stable_steps_and_ranks_below_a_stable_o
     # Energy grows as 1.1 ** (2 * lead): the second 5-step block's mean is
     # over 2x the truth's (white noise, so its block means are all ~1).
     blowing_up = Growing(series, 10, 1.1)
-    # Off by 0.6 everywhere: no skill (RMSE over 0.5), but bounded.
+    # Off by 0.6 everywhere: no skill (CRPS over 0.5), but bounded.
     stable = Offset(series, 10, lambda lead: 0.6 + 0.0 * lead)
 
     unstable_scores = select(blowing_up, series)
@@ -227,7 +230,7 @@ def test_a_blowing_up_forecast_loses_its_stable_steps_and_ranks_below_a_stable_o
     assert unstable_scores["stable_steps"] == 5
     assert unstable_scores["energy_peak_ratio"] > 2.0
     assert stable_scores["stable_steps"] == 20
-    assert unstable_scores["skill_horizon"] > stable_scores["skill_horizon"] == 0
+    assert unstable_scores["crps_skill_horizon"] > stable_scores["crps_skill_horizon"] == 0
     assert unstable_scores["selection_score"] < stable_scores["selection_score"]
 
 
@@ -288,7 +291,7 @@ def test_a_deterministic_model_is_a_one_member_ensemble_whose_crps_is_its_error(
     assert result.scores["crps_mean"] == pytest.approx(expected.mean())
 
 
-def test_a_stochastic_model_is_scored_on_its_ensemble_and_its_seed_0_member():
+def test_a_stochastic_model_is_scored_on_its_ensemble_and_its_members_median():
     series = make_series()
     model = NoisyOracle(series, 10, noise=0.3)
 
@@ -296,16 +299,54 @@ def test_a_stochastic_model_is_scored_on_its_ensemble_and_its_seed_0_member():
 
     assert sorted(model.seeds) == [0, 1, 2, 3]
     assert result.scores["ensemble_size"] == 4
-    # The pointwise scores are the seed-0 member's...
-    member_0 = NoisyOracle(series, 10, noise=0.3).predict(None, 20, seed=0)
-    assert result.rmse == pytest.approx(
-        np.sqrt(((member_0 - series[10:]) ** 2).mean(axis=(1, 2, 3)))
+    # Each member's own scores, by seed...
+    sampler = NoisyOracle(series, 10, noise=0.3)
+    rmse = np.stack(
+        [
+            np.sqrt(((sampler.predict(None, 20, seed=k) - series[10:]) ** 2).mean(axis=(1, 2, 3)))
+            for k in range(4)
+        ]
     )
-    # ...the ensemble's spread is the noise level, and it is overconfident
+    assert [m["rmse_mean"] for m in result.members] == pytest.approx(rmse.mean(axis=1))
+    # ...and the scores of a trajectory are their median.
+    assert result.rmse == pytest.approx(np.median(rmse, axis=0))
+    assert result.scores["rmse_mean"] == pytest.approx(np.median(rmse.mean(axis=1)))
+    assert result.scores["energy_rel_error"] == pytest.approx(
+        np.median([m["energy_rel_error"] for m in result.members])
+    )
+    # The skill horizon is the ensemble's, on its CRPS.
+    assert result.scores["crps_skill_horizon"] == skill_horizon(result.ensemble.crps, 0.5)
+    # The ensemble's spread is the noise level, and it is overconfident
     # (members scatter around the truth, not with it).
     assert result.ensemble.spread == pytest.approx(np.full(20, 0.3), rel=0.25)
     assert "spread_skill_lead_5" in result.scores
     assert result.scores["crps_lead_1"] < result.scores["rmse_lead_1"]
+
+
+class Seeded:
+    """A stochastic model whose member for seed k is `models[k]`'s forecast."""
+
+    window = 0
+    stochastic = True
+
+    def __init__(self, *models):
+        self.models = models
+        self.seeds = []
+
+    def predict(self, context, n_steps, seed=0):
+        self.seeds.append(seed)
+        return self.models[seed].predict(context, n_steps)
+
+
+def test_one_blown_up_member_does_not_decide_an_ensembles_stability():
+    series = make_series()
+    bounded, blowing_up = Offset(series, 10, lambda lead: 0.0 * lead), Growing(series, 10, 1.1)
+
+    result = run(Seeded(bounded, blowing_up, bounded), series, n_members=3)
+
+    assert [m["stable_steps"] for m in result.members] == [20, 5, 20]
+    assert result.scores["stable_steps"] == 20
+    assert result.scores["energy_peak_ratio"] == pytest.approx(1.0)
 
 
 class BatchedNoisyOracle(NoisyOracle):
@@ -330,6 +371,60 @@ def test_batching_members_changes_how_they_are_sampled_not_the_scores():
     np.testing.assert_allclose(batched.ensemble.crps, alone.ensemble.crps)
 
 
+def test_selection_scores_score_a_stochastic_model_as_an_ensemble_of_its_members():
+    series = make_series()
+    model = NoisyOracle(series, 10, noise=0.3)
+
+    scores = select(model, series, members=2)
+
+    assert model.seeds == [0, 1]
+    assert scores["members"] == 2 and scores["stable_members"] == 2
+    crps = CrpsAccumulator(series[10:], np.array([1.0, 1.0]))
+    sampler = NoisyOracle(series, 10, noise=0.3)
+    for seed in (0, 1):
+        crps.add(sampler.predict(None, 20, seed=seed))
+    assert scores["crps_lead_10"] == pytest.approx(crps.crps()[9])
+    assert scores["crps_skill_horizon"] == skill_horizon(crps.crps(), 0.5)
+
+
+def test_selection_scores_take_the_median_of_the_members_stability():
+    series = make_series()
+    bounded, blowing_up = Offset(series, 10, lambda lead: 0.0 * lead), Growing(series, 10, 1.1)
+    alone = select(blowing_up, series)
+
+    two = select(Seeded(bounded, blowing_up), series, members=2)
+    three = select(Seeded(bounded, blowing_up, bounded), series, members=3)
+
+    # Two members' median is their mean: an unstable candidate, ranked by
+    # its stable steps, then by its (median) peak ratio.
+    assert two["stable_steps"] == 12.5 and two["stable_members"] == 1
+    peak = (1.0 + max(alone["energy_peak_ratio"], alone["enstrophy_peak_ratio"])) / 2
+    assert two["selection_score"] == pytest.approx(
+        selection_score(two["crps_skill_horizon"], two["crps_lead_10"], 12.5, 20, peak)
+    )
+    # Of three, two stable ones decide.
+    assert three["stable_steps"] == 20 and three["stable_members"] == 2
+    assert three["selection_score"] > two["selection_score"]
+
+
+def test_selection_scores_give_a_deterministic_model_one_member_whatever_asked():
+    series = make_series()
+
+    scores = select(Persistence(), series, members=4)
+
+    assert scores["members"] == 1
+
+
+def test_selection_scores_sample_members_in_batches_where_the_model_can():
+    series = make_series()
+    model = BatchedNoisyOracle(series, 10, 0.3)
+
+    batched = select(model, series, members=4, member_batch=2)
+
+    assert model.batches == [[0, 1], [2, 3]]
+    assert batched == pytest.approx(select(NoisyOracle(series, 10, 0.3), series, members=4))
+
+
 class Trained:
     """An iteratively trained model whose training recorded `fit_info`."""
 
@@ -339,16 +434,23 @@ class Trained:
         self.fit_info = fit_info
 
 
+def scored(*stable_steps, n_steps=20):
+    """An evaluation over `n_steps` whose members are stable for `stable_steps`."""
+    return SimpleNamespace(
+        rmse=np.zeros(n_steps), members=[{"stable_steps": float(s)} for s in stable_steps]
+    )
+
+
 def test_a_closed_form_models_stable_fraction_is_its_forecasts_stability():
     model = Growing(make_series(), 10, 1.0)
 
-    assert candidate_stable_fraction(model, {"stable_steps": 20.0}, 20) == 1.0
-    assert candidate_stable_fraction(model, {"stable_steps": 15.0}, 20) == 0.0
+    assert candidate_stable_fraction(model, scored(20)) == 1.0
+    assert candidate_stable_fraction(model, scored(15)) == 0.0
+    # A stochastic one's: the share of its members stable.
+    assert candidate_stable_fraction(model, scored(20, 15, 20, 20)) == 0.75
 
 
 def test_an_iterative_models_stable_fraction_is_its_training_runs():
-    scores = {"stable_steps": 20.0}
-
-    assert candidate_stable_fraction(Trained({"stable_fraction": 0.6}), scores, 20) == 0.6
+    assert candidate_stable_fraction(Trained({"stable_fraction": 0.6}), scored(20)) == 0.6
     # A checkpoint from before the stable fraction: unknown, not its own forecast's.
-    assert candidate_stable_fraction(Trained({"best_epoch": 3.0}), scores, 20) is None
+    assert candidate_stable_fraction(Trained({"best_epoch": 3.0}), scored(20)) is None
