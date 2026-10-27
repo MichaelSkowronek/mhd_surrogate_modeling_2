@@ -53,10 +53,15 @@ conventions below; it shifts which tools are worth reaching for at all.
   stopping, and comparisons between models (architecture, window length,
   ...), since choosing between models is tuning too. The test dataset is
   read once, at the end: the frozen finalists (baselines included) are
-  refit on train + val with the epoch count fixed from their tuned run and
+  refit on train + val with the epoch count fixed from their tuned run
+  (unscaled) and
   normalization stats recomputed over train + val (normalization is the first
-  step of fitting, not a separate split), and all of them are scored on test
-  by one evaluation. Nothing is changed or
+  step of fitting, not a separate split), an iterative one five times (seeds
+  0-4: one refit is one draw, and a stable epoch is often a lucky one; a
+  closed-form fit once), and all of them are scored on test
+  by one evaluation, reporting for an iterative finalist the share of its
+  seeds stable on test and each score's median over them, every seed's
+  scores listed and none picked. Nothing is changed or
   chosen after seeing test scores.
 - Candidates are ranked by validation stable steps (how long the forecast
   stays bounded, `evaluation/stability.py`), then, for an iterative run's
