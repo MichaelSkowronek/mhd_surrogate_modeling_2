@@ -10,6 +10,8 @@
 # delete it.
 #
 #   docker compose up -d                           # start the stack, UI on :5000
+#                                                  # (it restarts with Docker, after a
+#                                                  # reboot too, until stopped)
 #   docker compose run --rm app                    # default: training entrypoint
 #   docker compose run --rm app python scripts/analysis/run_all_checks.py
 #   docker compose run --rm test                   # pytest in the container
@@ -47,9 +49,17 @@ x-s3-credentials: &s3-credentials
   AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-mlflow}
   AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-mlflow-secret}
 
+# The tracking stack (postgres, seaweedfs, mlflow) restarts with Docker:
+# the kind cluster's serving pods fetch their model from the registry, so a
+# reboot that left it down would leave them unable to start. `unless-stopped`
+# brings it back with the Docker daemon, unless it was stopped on purpose
+# (`docker compose stop`/`down`). On a restart Docker doesn't wait for
+# `depends_on`: the MLflow server retries until Postgres is up. The one-shot
+# `s3-init` stays "no" (the buckets persist in mlflow/seaweedfs/).
 services:
   postgres:
     image: postgres:18-alpine
+    restart: unless-stopped
     # Run as the host user so the bind-mounted data stays owned by you.
     # (/etc/passwd is mounted because initdb needs the UID to resolve.)
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
@@ -68,6 +78,7 @@ services:
 
   seaweedfs:
     image: chrislusf/seaweedfs:4.47
+    restart: unless-stopped
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     # Single-process master + volume + filer + S3 gateway (port 8333).
     command: ["server", "-dir=/data", "-s3"]
@@ -100,6 +111,7 @@ services:
 
   mlflow:
     <<: *app
+    restart: unless-stopped
     depends_on:
       postgres: {condition: service_healthy}
       s3-init: {condition: service_completed_successfully}
