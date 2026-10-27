@@ -1,8 +1,9 @@
 # Ray Tune search over the U-Net (configs/model/unet.yaml): Optuna's TPE
 # sampler proposes configurations, ASHA stops unpromising trials early. The
-# metric is a trial's best validation selection_score so far (stable steps,
-# then skill horizon, RMSE at lead 10 as tie-break), reported after every
-# validation (model.training.eval_every).
+# metric is a trial's best validation selection_score so far (stable steps;
+# then, for a stable validation, stable fraction, skill horizon and RMSE at
+# lead 10; for an unstable one, peak ratio; CLAUDE.md, "Data analysis"),
+# reported after every validation (model.training.eval_every).
 num_samples: 24          # trials
 max_concurrent_trials: 1 # one GPU: concurrent trials would split it rather than add throughput
 resources_per_trial:     # Ray's scheduling budget per trial
