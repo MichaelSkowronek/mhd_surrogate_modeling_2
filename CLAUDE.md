@@ -474,11 +474,16 @@ conventions below; it shifts which tools are worth reaching for at all.
 
 ## Maintaining this file
 
-- After finishing a piece of work, consider whether it introduced a
-  standing convention, architectural decision, or non-obvious constraint
-  (like the ones already in this file) that would trip up future work if
-  left undocumented. If so, propose adding it here — don't add it
-  silently — and let the user decide.
+- Documentation goes in the pull request of the work it documents, not
+  a follow-up: one squash commit carries both. Before committing a piece
+  of work, consider whether it introduced a standing convention,
+  architectural decision, or non-obvious constraint (like the ones
+  already in this file) that would trip up future work if left
+  undocumented, and if so add it here and its rationale to the README.
+  Don't add it silently: name it when reporting the finished work and in
+  the pull request description, and let the user decide whether it stays.
+  Only what surfaces after the merge (a rollout, runs started after it)
+  gets a follow-up.
 - Don't propose documenting things the code/git history already makes
   obvious, or one-off details that only matter to the current task.
 
