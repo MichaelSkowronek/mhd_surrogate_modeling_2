@@ -77,8 +77,10 @@ def test_the_untrained_network_maps_a_point_time_and_context_to_a_zero_velocity(
 
 def test_the_point_the_time_and_the_context_all_reach_the_velocity():
     network = VelocityMLP(5, window=3, width=8, depth=2, key=jax.random.key(0))
-    head = network.head
-    network = eqx.tree_at(lambda n: n.head.weight, network, jnp.ones_like(head.weight))
+    # A random head: the init's is zero, and one of equal weights sums the
+    # zero-mean LayerNorm output to zero whatever the input.
+    head = jax.random.normal(jax.random.key(1), network.head.weight.shape)
+    network = eqx.tree_at(lambda n: n.head.weight, network, head)
     x, t, condition = jnp.ones(5), jnp.asarray(0.3), jnp.ones((3, 5))
 
     velocity = network(x, t, condition)
@@ -91,6 +93,39 @@ def test_the_point_the_time_and_the_context_all_reach_the_velocity():
 def test_the_network_needs_a_block():
     with pytest.raises(ValueError, match="depth must be >= 1"):
         VelocityMLP(5, window=3, width=8, depth=0, key=jax.random.key(0))
+
+
+def dot_precisions(jaxpr):
+    """The precision of every matmul in `jaxpr` and the jaxprs inside it."""
+    found = []
+    for eqn in jaxpr.eqns:
+        if eqn.primitive.name == "dot_general":
+            found.append(eqn.params["precision"])
+        for param in eqn.params.values():
+            inner = getattr(param, "jaxpr", param)
+            if hasattr(inner, "eqns"):
+                found += dot_precisions(inner)
+    return found
+
+
+def test_every_matmul_of_the_training_step_is_float32_on_any_device():
+    """The loss's gradient, the network's forward pass included, asks for
+    full float32 in every matmul. At the GPU's default (TF32), a member
+    sampled in a batch rounds differently from the same member alone."""
+    network = VelocityMLP(5, window=3, width=8, depth=2, key=jax.random.key(0))
+    scales = LatentScales(jnp.zeros(5), jnp.ones(5), jnp.ones(5))
+    batch = jnp.ones((4, 4, 5))
+
+    def loss(network):
+        return latent_flow_loss(network, scales, batch, 3, jax.random.key(0))
+
+    jaxpr, _, _ = eqx.filter_make_jaxpr(eqx.filter_grad(loss))(network)
+    precisions = dot_precisions(jaxpr.jaxpr)
+
+    highest = (jax.lax.Precision.HIGHEST, jax.lax.Precision.HIGHEST)
+    # More than the forward pass's 10 (input, 2 in the time MLP, 3 per block, head).
+    assert len(precisions) > 10
+    assert all(precision == highest for precision in precisions)
 
 
 # -- units and the loss ------------------------------------------------------------

@@ -3231,6 +3231,16 @@ seed is one forecast, an ensemble the seeds 0, 1, ...
   the latent size: ~9.9M parameters at width 1024, depth 2, window 4 on the
   rank-750 codec. Untrained, its velocity is zero, so each mode random-walks
   with its own step RMS.
+- **Float32 matmuls on the GPU too.** The GPU's default for float32
+  matmuls is TF32, which rounds a batch of members differently from each
+  member alone, and a forecast feeds on its own rounding. Measured at the
+  default size (untrained, with a random head and unit scales), member 0
+  sampled in a batch of 8 drifted from the same member alone by 1e-3 of a
+  step RMS by step 3, and by 0.5 by step 837. In float32 the gap stays
+  within 3e-4 over all 837 steps. The network asks for float32 in every
+  matmul (`jax.default_matmul_precision`). That costs nothing for a member
+  alone, whose sampling is memory-bound (1.0 s), 8% for 8 batched (1.75 ->
+  1.88 s), and ~0.2 s per training epoch (2.6 -> 3.4 ms per step).
 - **Training.** `training/trainer.py`, unchanged: one-step pairs (a window
   and the step after it) from the training datasets' latents, ~20 MB for
   all 7 at rank 750; early stopping on the validation selection score of

@@ -37,6 +37,11 @@ embedding, two linear layers with a GELU between), and a LayerNorm and a
 linear head back to the latent size. The head is zero-initialized, as the
 U-Net's: an untrained network's velocity is zero, so its samples are the
 noise itself, each mode stepping like a random walk of its own step size.
+Its matmuls run in full float32 on the GPU too, not the GPU's default
+TF32, which rounds a batch of members differently from each one alone: a
+member sampled in a batch would drift away from the same member alone
+within a few steps. Alone, float32 costs nothing (sampling a member is
+memory-bound); batched, a few percent (README "Latent flow matching").
 
 `sampling_steps` Euler steps per forecast step (8 by default) is a
 sampling setting, not a trained one: the same network is scored at any
@@ -147,11 +152,12 @@ class VelocityMLP(eqx.Module):
         self.head = _zero_linear(eqx.nn.Linear(width, size, key=keys[-1]))
 
     def __call__(self, x: jax.Array, t: jax.Array, condition: jax.Array) -> jax.Array:
-        h = self.inputs(jnp.concatenate([condition.reshape(-1), x]))
-        embedding = self.time(time_features(t))
-        for block in self.blocks:
-            h = block(h, embedding)
-        return self.head(self.norm(h))
+        with jax.default_matmul_precision("float32"):
+            h = self.inputs(jnp.concatenate([condition.reshape(-1), x]))
+            embedding = self.time(time_features(t))
+            for block in self.blocks:
+                h = block(h, embedding)
+            return self.head(self.norm(h))
 
 
 class LatentScales(eqx.Module):
