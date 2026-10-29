@@ -206,7 +206,7 @@ conventions below; it shifts which tools are worth reaching for at all.
   same units.
 - A generative model sets `stochastic = True` and takes
   `predict(context, n_steps, seed=...)` (optionally `predict_members` for
-  batches, the same sample per seed whatever the batch); code that
+  batches, each member drawing the same noise as alone); code that
   forecasts goes through `evaluation/protocol.py` (`predict_member`,
   `forecast`, `forecast_members`) rather than calling `model.predict`, so
   the seed reaches a stochastic model and a deterministic one gets none.
@@ -226,8 +226,18 @@ conventions below; it shifts which tools are worth reaching for at all.
 - A generative latent model builds on `StochasticLatentSurrogate` and
   draws each forecast step's noise from the member's seed and the step's
   index (`flow.step_noise`), never from a key carried along the rollout;
-  its carried state is the latents it returns. Streamed blocks and batched
-  members then equal one call, which `serve_parity` relies on.
+  its carried state is the latents it returns. Streamed blocks then equal
+  one call bitwise, which `serve_parity` relies on.
+- A forecast amplifies rounding: a `latent_flow` member 1e-6 apart at
+  step 1 is a whole std apart by step ~400, whether the difference comes
+  from the device or from sampling in a batch. A member is the one served
+  for its seed only when sampled alone (`evaluation.member_batch: 1`) on
+  the device that serves it. So a canonical generative model's `evaluate`
+  and `gate` stages run on the serving device (the CPU for now);
+  otherwise the gate checks other forecasts than the ones served. Its
+  network still asks for float32 matmuls
+  (`jax.default_matmul_precision("float32")`): with TF32, the GPU's
+  default, even a short forecast depends on its batch.
 - Neural models build on `models/neural.py`'s `AutoregressiveSurrogate` (a
   new network supplies only `build_network` and `pad_multiple`) and train
   with `training/trainer.py`. An iteratively trained model sets
@@ -392,6 +402,9 @@ conventions below; it shifts which tools are worth reaching for at all.
   (`parallel.SCRIPTS_DIR`'s old `parents[3]`-from-`__file__` lookup worked
   under an editable install but silently broke non-editably, inside the
   image). Don't remove either on the assumption they're the same check.
+- CI's runners have no GPU: before pushing a change to a JAX model, run
+  the full suite locally with the GPU visible, where device-dependent
+  failures (like TF32 rounding) show up.
 - `tests.yml`'s pytest run is coverage-gated at 95% (`pyproject.toml`'s
   `[tool.coverage]`), scoped to `src/mhd_surrogate/` only — not `scripts/`,
   where CLI/argparse/plotting glue (deliberately untested, per above) would
