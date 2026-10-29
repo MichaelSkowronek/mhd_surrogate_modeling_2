@@ -14,6 +14,7 @@ import mhd_surrogate.utils.hydra_resolvers  # noqa: F401
 import mlflow
 from mhd_surrogate.data.normalization import compute_normalization_stats
 from mhd_surrogate.models.latent_linear import LatentLinear
+from mhd_surrogate.models.registry import load_model
 from mhd_surrogate.training import startup
 from mhd_surrogate.training.codec_run import run_codec_training
 from mhd_surrogate.training.export import checkpoint_digest
@@ -166,3 +167,45 @@ def test_a_latent_model_trains_on_a_codec_referenced_by_its_logged_model(workspa
     direct.fit({name: root[name] for name in TRAIN})
     context = np.asarray(root["v"][:4])
     assert (logged.predict(context, 5) == direct.predict(context, 5)).all()
+
+
+def test_a_generative_latent_model_validates_and_is_scored_as_an_ensemble(workspace):
+    run_codec_training(config(workspace, "codec.rank=2"), workspace / "codec_run", None, "pod")
+    experiment = mlflow.get_experiment_by_name("mhd-codecs").experiment_id
+    (codec,) = mlflow.search_logged_models(experiment_ids=[experiment], output_format="list")
+    overrides = [
+        "model=latent_flow",
+        f"model.codec=models:/{codec.model_id}",
+        "model.window=2",
+        "model.width=8",
+        "model.depth=1",
+        "model.sampling_steps=2",
+        "model.training.max_epochs=2",
+        "model.training.batch_size=8",
+        "model.training.samples_per_epoch=64",
+        "model.training.prefetch=0",
+        "evaluation.ensemble_size=3",
+    ]
+
+    scores = run_training(
+        training_config(workspace, *overrides), workspace / "out", None, "latent_flow"
+    )
+
+    assert scores["val"]["ensemble_size"] == 3
+    members = [group for group in scores if group.startswith("val.member_")]
+    assert members == ["val.member_0", "val.member_1", "val.member_2"]
+    client = MlflowClient(f"sqlite:///{workspace / 'mlruns.db'}")
+    (run,) = client.search_runs([mlflow.get_experiment_by_name("test").experiment_id])
+    # Every validation during training forecasts evaluation.monitor_members.
+    assert run.data.metrics["val_monitor.members"] == 2
+    assert "fit.stable_fraction" in run.data.metrics
+    (model,) = mlflow.search_logged_models(
+        experiment_ids=[run.info.experiment_id], output_format="list"
+    )
+    logged, _ = load_logged_surrogate(model.model_id)
+    saved = load_model(workspace / "out" / "model")
+    root = zarr.open_group(store=str(workspace / "data.zarr"), mode="r")
+    context = np.asarray(root["v"][:4])
+    np.testing.assert_array_equal(
+        logged.predict(context, 5, seed=1), saved.predict(context, 5, seed=1)
+    )

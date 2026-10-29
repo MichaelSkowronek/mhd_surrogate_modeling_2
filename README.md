@@ -94,7 +94,7 @@ src/mhd_surrogate/   importable package, split by pipeline stage
   evaluation/        protocol, metrics, quantities, stability, selection, rollout, gate, diagnostics, ensemble, evaluate,
                      reconstruction
   models/            base (interface), baselines, snapshots, dmd, hankel_dmd, neural, unet, registry,
-                     codec (codec interface + registry), pod_codec, latent, latent_linear
+                     codec (codec interface + registry), pod_codec, latent, latent_linear, flow, latent_flow
   serving/           promotion, fetch, stream, schemas, app, client, metrics
   utils/             logging_config, parallel, jax_cache, jax_determinism, hydra_resolvers
 scripts/             CLI entry points, same split (plus viz/)
@@ -3133,7 +3133,8 @@ A latent model (`src/mhd_surrogate/models/latent.py`, `LatentSurrogate`)
 encodes its context with a codec, forecasts the next latents and decodes
 them: raw frames in and out, so it is trained by `train.py`, scored, gated,
 streamed and served like any model, and a new one supplies only its latent
-dynamics (`fit_latents`, `forecast_latents`).
+dynamics (`fit_latents`, `forecast_latents`; a generative one
+`sample_latents`, see "Latent flow matching").
 
 - **The codec by reference.** The config names the codec,
   `codec: models:/<model id>` of a `train_codec.py` run (or a codec
@@ -3163,6 +3164,102 @@ whether a long forecast can grow. It is there to exercise the latent path
 end to end, not as a contender; on the real data (a smoke run on the POD
 codec at rank 750) it trains in ~30 s, and its checkpoint, codec included,
 streams a stable 3000-step rollout.
+
+#### Latent flow matching
+
+```bash
+uv run --extra gpu scripts/training/train.py model=latent_flow model.codec=models:/<codec model id>
+uv run --extra gpu scripts/training/train.py model=latent_flow model.codec=models:/<id> model.sampling_steps=1
+```
+
+**`latent_flow`** (`models/latent_flow.py`) is the first generative model,
+and deliberately a cheap one: the project's probabilistic baseline, there to
+put the ensemble machinery (the CRPS skill horizon, member medians, the
+gate's member count, seeded serving) to work on a real sampler before
+anything expensive is built on it. It samples the next step of a codec's
+latents by flow matching (`models/flow.py`; Lipman et al. 2023, "Flow
+Matching for Generative Modeling"; Liu et al. 2023, "Flow Straight and
+Fast") and rolls the forecast out autoregressively, one sample per step; a
+seed is one forecast, an ensemble the seeds 0, 1, ...
+
+- **What it samples.** The change of each latent mode over one step, in
+  units of its RMS over the training pairs: d = (a_{t+1} - a_t) / s. The
+  change rather than the latent, as for the U-Net's residual update (a step
+  changes the state little, and d = 0 is persistence); per mode, because
+  POD modes' variances fall off by orders of magnitude, and in the codec's
+  own units the loss would be the leading modes' alone, the trailing ones
+  -- the small scales -- sampled from whatever the network happened to do
+  with them. The context is the last `window` latents, standardized per
+  mode.
+- **Flow matching.** Noise z ~ N(0, I) and a target d are joined by the
+  straight path x_t = (1 - t) z + t d, and a network v(x_t, t, context) is
+  regressed onto that path's velocity d - z at random points of random
+  paths. It learns the expected velocity, the field whose flow carries the
+  noise to the distribution of d given the context; a sample integrates the
+  flow from a fresh z with `sampling_steps` Euler steps.
+- **t uniform, so one step is the conditional mean.** Every sample starts
+  at t = 0 whatever the step count, and there x_0 = z says nothing about d:
+  the optimal velocity is E[d | context] - z, and one Euler step lands on
+  E[d | context]. With `sampling_steps=1` the model is the conditional-mean
+  forecaster its network learned (deterministic as far as it learned that
+  field), so the ladder latent_linear -> one sampling step -> several
+  separates the nonlinear dynamics from what sampling adds. A logit-normal
+  t, the image-generation choice, would rarely train the very point every
+  sample starts from.
+- **Euler; the step count is a sampling setting.** Training doesn't depend
+  on `sampling_steps`, so one trained network can be scored at several; how
+  its scores change with the count measures the sampler's error. A
+  higher-order sampler (Heun, two network calls a step) is worth it only if
+  they still change at many steps, and would re-score the same network, not
+  retrain it.
+- **Each step's noise comes from the seed.** Step k of the member for seed
+  s starts its sample from noise drawn with `fold_in(key(s), k)`
+  (`flow.step_noise`), not from a key split along the rollout: a forecast
+  streamed in blocks draws the same noise as one call, and a member sampled
+  in a batch (`predict_members`, one vectorized call for several seeds) the
+  same as alone.
+- **It streams exactly.** The state carried from step to step is the
+  latents themselves (float32), standardized afresh for each network call,
+  so the latent window `predict_blocks` carries between blocks is that
+  state: a streamed forecast is one call's forecast bit for bit on the CPU,
+  not up to a round trip through the standardization, which a long chaotic
+  rollout would amplify (and `serve_parity` would catch).
+- **The network.** A residual MLP: a linear layer from the flattened context
+  and x_t to `width` features, `depth` blocks (LayerNorm, a scale and shift
+  from Fourier features of the flow time -- FiLM -- and two linear layers
+  with a GELU), and a LayerNorm and a zero-initialized linear head back to
+  the latent size: ~9.9M parameters at width 1024, depth 2, window 4 on the
+  rank-750 codec. Untrained, its velocity is zero, so each mode random-walks
+  with its own step RMS.
+- **Training.** `training/trainer.py`, unchanged: one-step pairs (a window
+  and the step after it) from the training datasets' latents, ~20 MB for
+  all 7 at rank 750; early stopping on the validation selection score of
+  `evaluation.monitor_members` members; resumable.
+- **Input noise** (`input_noise_std`, off by default): the U-Net's recipe
+  (see "Input noise") in latent units, since flow matching trains on true
+  contexts only, while a forecast conditions on its own samples. Gaussian
+  noise perturbs the context latents, and the target is the change from
+  the perturbed newest latent to the true next one. So the network learns
+  to undo a perturbation, as the U-Net's update does: it is added to the
+  perturbed newest frame and scored against the true next one. Scored
+  against the true change instead, the network would learn to ignore the
+  perturbation, and the forecast would carry it on all the same. The noise
+  is in each mode's step RMS, and the U-Net's 0.1 says little about its
+  value. Measured on the rank-750 codec's training latents:
+  - Per normalized pixel, all but 0.25% of the U-Net's noise lands in the
+    small scales the codec drops. In the codec's modes it is 0.5-3% of a
+    typical step (0.1% of a leading mode's std).
+  - A mode's std is about one typical step for most modes (median 0.8-1.1
+    beyond the 50th), but ~5 steps for the 10 leading ones (35 for the
+    first). In std units, the leading modes would be perturbed by ~5 times
+    as many of their steps as the rest, and the target would ask for the
+    whole correction in one step.
+- **The latent contract it needed.** A latent model trained iteratively
+  sets `iterative = True` and gets the `FitHooks` in `fit_latents`; a
+  generative one builds on `StochasticLatentSurrogate` (`models/latent.py`)
+  and supplies `sample_latents(window, n_steps, seeds, first_step)`, on
+  which its `predict`, `predict_members` and `predict_blocks` are all
+  built, so a member is the same sample whichever of them asks for it.
 
 ## Serving
 

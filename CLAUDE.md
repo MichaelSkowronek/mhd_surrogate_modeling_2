@@ -223,6 +223,11 @@ conventions below; it shifts which tools are worth reaching for at all.
   as `codec: models:/<model id>` of a `train_codec.py` run; its checkpoint
   carries a copy of the codec. New codecs implement `models/codec.py` and
   register in its `CODECS` with a `configs/codec/` file.
+- A generative latent model builds on `StochasticLatentSurrogate` and
+  draws each forecast step's noise from the member's seed and the step's
+  index (`flow.step_noise`), never from a key carried along the rollout;
+  its carried state is the latents it returns. Streamed blocks and batched
+  members then equal one call, which `serve_parity` relies on.
 - Neural models build on `models/neural.py`'s `AutoregressiveSurrogate` (a
   new network supplies only `build_network` and `pad_multiple`) and train
   with `training/trainer.py`. An iteratively trained model sets
