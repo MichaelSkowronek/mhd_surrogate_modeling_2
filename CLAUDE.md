@@ -228,6 +228,10 @@ conventions below; it shifts which tools are worth reaching for at all.
   index (`flow.step_noise`), never from a key carried along the rollout;
   its carried state is the latents it returns. Streamed blocks and batched
   members then equal one call, which `serve_parity` relies on.
+- A generative model's network asks for float32 matmuls
+  (`jax.default_matmul_precision("float32")`): the GPU's default, TF32,
+  rounds a batch of members differently from each one alone, so a member
+  would depend on its batch.
 - Neural models build on `models/neural.py`'s `AutoregressiveSurrogate` (a
   new network supplies only `build_network` and `pad_multiple`) and train
   with `training/trainer.py`. An iteratively trained model sets
@@ -392,6 +396,9 @@ conventions below; it shifts which tools are worth reaching for at all.
   (`parallel.SCRIPTS_DIR`'s old `parents[3]`-from-`__file__` lookup worked
   under an editable install but silently broke non-editably, inside the
   image). Don't remove either on the assumption they're the same check.
+- CI's runners have no GPU: before pushing a change to a JAX model, run
+  the full suite locally with the GPU visible, where device-dependent
+  failures (like TF32 rounding) show up.
 - `tests.yml`'s pytest run is coverage-gated at 95% (`pyproject.toml`'s
   `[tool.coverage]`), scoped to `src/mhd_surrogate/` only — not `scripts/`,
   where CLI/argparse/plotting glue (deliberately untested, per above) would
