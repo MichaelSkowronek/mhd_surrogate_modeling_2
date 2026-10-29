@@ -26,8 +26,8 @@ the training entry point's `FitHooks` (`base.py`) and passes them on to
 `fit_latents`. A generative one (`stochastic = True`) builds on
 `StochasticLatentSurrogate` and samples latents for a batch of seeds at
 once (`sample_latents`); its `predict`, `predict_members` and
-`predict_blocks` all go through that one method, so a member is the same
-sample whichever of them asks for it.
+`predict_blocks` all go through that one method, so a member draws the
+same noise whichever of them asks for it.
 """
 
 from __future__ import annotations
@@ -195,8 +195,9 @@ class StochasticLatentSurrogate(LatentSurrogate):
         (len(seeds), n_steps, *latent_shape). They are forecast steps
         `first_step` onward of that sample: its randomness drawn per step
         from its seed and the step's index alone, so streamed from its own
-        window a block is the same as in one call, and a member the same in
-        any batch."""
+        window a block is the same as in one call, and a member draws the
+        same noise in any batch (its rounding, which a long forecast
+        amplifies, can differ with the batch)."""
         raise NotImplementedError
 
     def predict(self, context: np.ndarray, n_steps: int, seed: int = 0) -> np.ndarray:

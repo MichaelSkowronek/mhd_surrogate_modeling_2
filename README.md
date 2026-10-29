@@ -3231,16 +3231,33 @@ seed is one forecast, an ensemble the seeds 0, 1, ...
   the latent size: ~9.9M parameters at width 1024, depth 2, window 4 on the
   rank-750 codec. Untrained, its velocity is zero, so each mode random-walks
   with its own step RMS.
-- **Float32 matmuls on the GPU too.** The GPU's default for float32
-  matmuls is TF32, which rounds a batch of members differently from each
-  member alone, and a forecast feeds on its own rounding. Measured at the
-  default size (untrained, with a random head and unit scales), member 0
-  sampled in a batch of 8 drifted from the same member alone by 1e-3 of a
-  step RMS by step 3, and by 0.5 by step 837. In float32 the gap stays
-  within 3e-4 over all 837 steps. The network asks for float32 in every
-  matmul (`jax.default_matmul_precision`). That costs nothing for a member
-  alone, whose sampling is memory-bound (1.0 s), 8% for 8 batched (1.75 ->
-  1.88 s), and ~0.2 s per training epoch (2.6 -> 3.4 ms per step).
+- **Rounding, batches and devices.** A forecast amplifies rounding, so a
+  member reproduces exactly only when it is computed the same way. The
+  measurement used a briefly trained network (10 epochs at the defaults,
+  no validation), seed 0 for 3000 steps from the validation context, in
+  float32:
+
+  | Member 0 against itself | Bitwise | First over 1e-3 std | First over 1 std |
+  |---|---|---|---|
+  | on the CPU, in another process | yes | never | never |
+  | on the CPU, streamed in blocks of 100 | yes | never | never |
+  | on the GPU | no | step 183 | step 403 |
+  | on the GPU, in another process (no deterministic ops) | no | step 207 | step 428 |
+  | in a batch of 8, on the CPU | no | step 156 | step 362 |
+  | in a batch of 8, on the GPU | no | step 162 | step 376 |
+
+  The std is each mode's over the training latents, taken for the worst
+  mode at each step. A difference of ~1e-6 at step 1 doubles about every
+  20 steps. So a member is the one served for its seed only when it is
+  sampled alone on the CPU, as serving samples it. On the GPU or in a
+  batch, after a few hundred steps it is another sample of the same
+  distribution. The network still asks for float32 in every matmul
+  (`jax.default_matmul_precision`), because with TF32, the GPU's default,
+  even a short forecast depends on its batch: untrained, member 0 in a
+  batch of 8 was 1e-3 of a step RMS from itself alone by step 3. Float32
+  costs nothing for a member alone, whose sampling is memory-bound
+  (1.0 s), 8% for 8 batched (1.75 -> 1.88 s), and ~0.2 s per training
+  epoch (2.6 -> 3.4 ms per step).
 - **Training.** `training/trainer.py`, unchanged: one-step pairs (a window
   and the step after it) from the training datasets' latents, ~20 MB for
   all 7 at rank 750; early stopping on the validation selection score of
@@ -3269,7 +3286,7 @@ seed is one forecast, an ensemble the seeds 0, 1, ...
   generative one builds on `StochasticLatentSurrogate` (`models/latent.py`)
   and supplies `sample_latents(window, n_steps, seeds, first_step)`, on
   which its `predict`, `predict_members` and `predict_blocks` are all
-  built, so a member is the same sample whichever of them asks for it.
+  built, so a member draws the same noise whichever of them asks for it.
 
 ## Serving
 

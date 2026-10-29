@@ -28,8 +28,8 @@ What is sampled, in which units:
   a forecast streamed in blocks is one call's forecast exactly, not up to
   the rounding of a round trip through the standardization.
 - Each step's noise is drawn from the member's seed and the step's index
-  (`flow.step_noise`), so a member is the same streamed, alone or in a
-  batch (`predict_members`, one vectorized call for all of them).
+  (`flow.step_noise`), so a member draws the same noise streamed, alone or
+  in a batch (`predict_members`, one vectorized call for all of them).
 
 The network (`VelocityMLP`): a linear layer from the context and x_t to
 `width` features, `depth` residual blocks (LayerNorm, FiLM from the time
@@ -38,10 +38,12 @@ linear head back to the latent size. The head is zero-initialized, as the
 U-Net's: an untrained network's velocity is zero, so its samples are the
 noise itself, each mode stepping like a random walk of its own step size.
 Its matmuls run in full float32 on the GPU too, not the GPU's default
-TF32, which rounds a batch of members differently from each one alone: a
-member sampled in a batch would drift away from the same member alone
-within a few steps. Alone, float32 costs nothing (sampling a member is
-memory-bound); batched, a few percent (README "Latent flow matching").
+TF32, with which even a short forecast depends on its batch. A long one
+does anyway: a forecast amplifies rounding (a whole std apart within a
+few hundred steps), so a member reproduces exactly only when sampled the
+same way, alone on the CPU as serving samples it (README "Latent flow
+matching"). Alone, float32 costs nothing (sampling a member is
+memory-bound); batched, a few percent.
 
 `sampling_steps` Euler steps per forecast step (8 by default) is a
 sampling setting, not a trained one: the same network is scored at any
