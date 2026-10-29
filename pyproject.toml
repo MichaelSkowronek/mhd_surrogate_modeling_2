@@ -1,8 +1,11 @@
 [project]
 name = "mhd-surrogate"
 version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
+description = "Surrogate modeling of a magnetohydrodynamic (MHD) flow"
+# No `readme`: the package isn't published, so nothing reads its long
+# description, and declaring one would make README.md an input of the
+# serving image: every README edit would build and roll out a new image
+# (README, "Image publishing").
 authors = [
     { name = "Michael Skowronek", email = "michael.skowronek.91@gmail.com" }
 ]

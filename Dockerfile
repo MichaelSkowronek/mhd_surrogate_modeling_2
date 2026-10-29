@@ -41,8 +41,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # Layer 2: the project itself, installed non-editable so the venv is
 # self-contained and can be copied to the runtime stage as-is.
-# (README.md is needed because pyproject.toml declares it as the readme.)
-COPY pyproject.toml uv.lock README.md ./
+COPY pyproject.toml uv.lock ./
 COPY src ./src
 # hadolint ignore=SC2086
 RUN --mount=type=cache,target=/root/.cache/uv \

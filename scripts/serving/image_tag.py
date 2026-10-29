@@ -46,7 +46,6 @@ INPUTS = (
     ".dockerignore",
     "pyproject.toml",
     "uv.lock",
-    "README.md",
     "src",
     "scripts",
     "configs",

@@ -3528,7 +3528,7 @@ it without credentials.
 **Tagged by content, pushed before the merge.** The tag is a hash of the
 image's inputs (`scripts/serving/image_tag.py`): the files the Dockerfile
 copies into it (`src/`, `scripts/`, `configs/`, `pyproject.toml`,
-`uv.lock`, `README.md`; a test checks the list against the Dockerfile), the
+`uv.lock`; a test checks the list against the Dockerfile), the
 Dockerfile and `.dockerignore`, and the build arguments that change what's
 in it, all as git's index has them. Not a commit hash, which covers the
 whole tree and exists only once the commit does: the content hash is known
@@ -3543,9 +3543,11 @@ inputs are the same and the build is skipped. That also keeps a tag's image
 fixed although the base image (`python:3.14-slim`) floats. The image is
 labeled with the pull request's head commit (`MHD_GIT_COMMIT`, which
 `/v1/model` reports as `image_commit`), a commit of the same tree as the one
-on `main`. `README.md` is an input (`pyproject.toml` names it as the
-package's readme), so most pull requests make a new image. Pull requests
-from forks don't push: they get no token that can.
+on `main`. `README.md` is deliberately not an input: `pyproject.toml`
+declares no readme, which would copy the README into the package's
+metadata and so into the image. A pull request that only changes the
+README keeps the tag: no new image is pushed, and Argo CD has nothing to
+roll out. Pull requests from forks don't push: they get no token that can.
 
 ### Kubernetes
 
