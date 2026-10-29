@@ -36,4 +36,4 @@ repos:
         entry: python3 scripts/serving/image_tag.py --pin deploy/k8s/overlays/kind/kustomization.yaml
         language: system
         pass_filenames: false
-        files: ^(Dockerfile|\.dockerignore|pyproject\.toml|uv\.lock|README\.md|src/|scripts/|configs/|deploy/k8s/overlays/kind/kustomization\.yaml)
+        files: ^(Dockerfile|\.dockerignore|pyproject\.toml|uv\.lock|src/|scripts/|configs/|deploy/k8s/overlays/kind/kustomization\.yaml)

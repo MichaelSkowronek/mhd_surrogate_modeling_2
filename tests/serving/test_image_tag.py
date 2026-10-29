@@ -109,8 +109,8 @@ def dockerfile_sources(text: str, target: str) -> set[str]:
 def test_the_inputs_are_what_the_dockerfile_copies_into_the_runtime_image():
     sources = dockerfile_sources((ROOT / "Dockerfile").read_text(), BUILD["target"])
 
-    assert sources == {"pyproject.toml", "uv.lock", "README.md", "src", "scripts", "configs"}
-    assert sources <= set(INPUTS)
+    assert sources == {"pyproject.toml", "uv.lock", "src", "scripts", "configs"}
+    assert set(INPUTS) == sources | {"Dockerfile", ".dockerignore"}
 
 
 def test_dockerfile_sources_follows_from_and_copy_from():
