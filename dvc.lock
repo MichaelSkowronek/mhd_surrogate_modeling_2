@@ -146,8 +146,8 @@ stages:
       size: 11242
     - path: src/mhd_surrogate/models/registry.py
       hash: md5
-      md5: dd3423327285cea81209442227f1b69e
-      size: 1813
+      md5: b4f69d8a38a8ec825131c195260f1a4f
+      size: 1879
     - path: src/mhd_surrogate/models/snapshots.py
       hash: md5
       md5: 0b19e9edf92226833567732874b732b0
@@ -315,8 +315,8 @@ stages:
       size: 11242
     - path: src/mhd_surrogate/models/registry.py
       hash: md5
-      md5: dd3423327285cea81209442227f1b69e
-      size: 1813
+      md5: b4f69d8a38a8ec825131c195260f1a4f
+      size: 1879
     - path: src/mhd_surrogate/models/snapshots.py
       hash: md5
       md5: 0b19e9edf92226833567732874b732b0
@@ -499,8 +499,8 @@ stages:
       size: 11242
     - path: src/mhd_surrogate/models/registry.py
       hash: md5
-      md5: dd3423327285cea81209442227f1b69e
-      size: 1813
+      md5: b4f69d8a38a8ec825131c195260f1a4f
+      size: 1879
     - path: src/mhd_surrogate/models/snapshots.py
       hash: md5
       md5: 0b19e9edf92226833567732874b732b0
@@ -651,8 +651,8 @@ stages:
       size: 11242
     - path: src/mhd_surrogate/models/registry.py
       hash: md5
-      md5: dd3423327285cea81209442227f1b69e
-      size: 1813
+      md5: b4f69d8a38a8ec825131c195260f1a4f
+      size: 1879
     - path: src/mhd_surrogate/models/snapshots.py
       hash: md5
       md5: 0b19e9edf92226833567732874b732b0

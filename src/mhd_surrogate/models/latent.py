@@ -18,19 +18,28 @@ Streamed in blocks (`predict_blocks`), the forecast carries its latent
 window from block to block. Restarted from its own decoded frames instead,
 the model would encode them again, which is the latent it forecast only for
 a codec whose `encode(decode(z)) == z` (POD's is, up to rounding; an
-autoencoder's isn't).
+autoencoder's isn't). For a subclass whose state is exactly the latents it
+returns, the blocks are its one forecast exactly.
+
+A latent model trained iteratively (`iterative = True`: a network) gets
+the training entry point's `FitHooks` (`base.py`) and passes them on to
+`fit_latents`. A generative one (`stochastic = True`) builds on
+`StochasticLatentSurrogate` and samples latents for a batch of seeds at
+once (`sample_latents`); its `predict`, `predict_members` and
+`predict_blocks` all go through that one method, so a member is the same
+sample whichever of them asks for it.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Self
 
 import numpy as np
 
-from mhd_surrogate.models.base import CHECKPOINT_META
+from mhd_surrogate.models.base import CHECKPOINT_META, FitHooks
 from mhd_surrogate.models.codec import Codec, load_codec
 from mhd_surrogate.training.mlflow_codec import load_logged_codec
 
@@ -54,6 +63,9 @@ class LatentSurrogate:
     and `set_arrays` (what its checkpoint stores)."""
 
     name: str
+    # A subclass trained by gradient steps sets it: its `fit_latents` also
+    # takes the `FitHooks`.
+    iterative = False
 
     def __init__(self, codec: str, window: int = 1) -> None:
         if window < 1:
@@ -70,9 +82,10 @@ class LatentSurrogate:
 
     # -- what a subclass supplies --------------------------------------------
 
-    def fit_latents(self, latents: Mapping[str, np.ndarray]) -> None:
+    def fit_latents(self, latents: Mapping[str, np.ndarray], hooks: FitHooks | None = None) -> None:
         """Fit the dynamics on the training datasets' latents, {name:
-        (T, *latent_shape)}."""
+        (T, *latent_shape)}; an iterative model's also takes the `FitHooks`
+        (a closed-form one's none)."""
         raise NotImplementedError
 
     def forecast_latents(self, window: np.ndarray, n_steps: int) -> np.ndarray:
@@ -94,9 +107,13 @@ class LatentSurrogate:
 
     # -- the model interface -------------------------------------------------
 
-    def fit(self, datasets: Mapping[str, Any]) -> None:
+    def fit(self, datasets: Mapping[str, Any], hooks: FitHooks | None = None) -> None:
         self.codec = resolve_codec(self.codec_reference)
-        self.fit_latents({name: self.codec.encode(array) for name, array in datasets.items()})
+        latents = {name: self.codec.encode(array) for name, array in datasets.items()}
+        if self.iterative:
+            self.fit_latents(latents, hooks or FitHooks())
+        else:
+            self.fit_latents(latents)
         self.datasets = list(datasets)
 
     def predict(self, context: np.ndarray, n_steps: int) -> np.ndarray:
@@ -160,3 +177,55 @@ class LatentSurrogate:
         model.datasets = meta["datasets"]
         model.fit_info = meta["fit_info"]
         return model
+
+
+class StochasticLatentSurrogate(LatentSurrogate):
+    """A generative latent model: one sample of the forecast per seed
+    (`stochastic = True`, see `base.py`). A subclass implements
+    `sample_latents` in place of `forecast_latents`; `predict`,
+    `predict_members` and `predict_blocks` are built on it."""
+
+    stochastic = True
+
+    def sample_latents(
+        self, window: np.ndarray, n_steps: int, seeds: Sequence[int], first_step: int = 0
+    ) -> np.ndarray:
+        """The latents of the `n_steps` frames after `window` (as for
+        `forecast_latents`) in the sample for each of `seeds`, shape
+        (len(seeds), n_steps, *latent_shape). They are forecast steps
+        `first_step` onward of that sample: its randomness drawn per step
+        from its seed and the step's index alone, so streamed from its own
+        window a block is the same as in one call, and a member the same in
+        any batch."""
+        raise NotImplementedError
+
+    def predict(self, context: np.ndarray, n_steps: int, seed: int = 0) -> np.ndarray:
+        window = self._encode_window(context)
+        return self.codec.decode(self.sample_latents(window, n_steps, [seed])[0])
+
+    def predict_members(
+        self, context: np.ndarray, n_steps: int, seeds: Sequence[int]
+    ) -> np.ndarray:
+        """The forecasts for `seeds`, (len(seeds), n_steps, C, Nx, Ny),
+        sampled in one `sample_latents` call and decoded a member at a time
+        (~1 GB each for a whole validation forecast: decoded at once, the
+        codec's intermediates would be the whole batch's too)."""
+        latents = self.sample_latents(self._encode_window(context), n_steps, list(seeds))
+        first = self.codec.decode(latents[0])
+        frames = np.empty((len(latents), *first.shape), dtype=first.dtype)
+        frames[0] = first
+        for k in range(1, len(latents)):
+            frames[k] = self.codec.decode(latents[k])
+        return frames
+
+    def predict_blocks(
+        self, context: np.ndarray, n_steps: int, block_steps: int, seed: int = 0
+    ) -> Iterator[np.ndarray]:
+        """`predict`'s forecast for `seed`, `block_steps` frames at a time,
+        carrying the latent window from block to block."""
+        window = self._encode_window(context)
+        for start in range(0, n_steps, block_steps):
+            n = min(block_steps, n_steps - start)
+            block = self.sample_latents(window, n, [seed], first_step=start)[0]
+            window = np.concatenate([window, block])[-self.window :]
+            yield self.codec.decode(block)

@@ -1,0 +1,31 @@
+# Flow matching in a codec's latent space (src/mhd_surrogate/models/latent_flow.py,
+# the math in models/flow.py, the training loop in training/trainer.py): the
+# next step's change in each latent mode sampled given the last `window`
+# latents, rolled out autoregressively, one forecast per seed.
+#
+# Defaults are a hand-picked starting point, not tuned: they get tuned on the
+# validation dataset.
+name: latent_flow
+codec: ???            # the codec: models:/<model id> of a train_codec.py run, or a codec checkpoint directory
+window: 4             # latents the next one depends on (<= data.context_steps); Hankel DMD's delays
+width: 1024           # features of the residual blocks (~9.9M parameters at 1024, depth 2, rank 750, window 4)
+depth: 2              # residual blocks
+sampling_steps: 8     # Euler steps per forecast step: sampling only, the training doesn't depend on it
+                      # (1 = the conditional mean, as far as the network learned it)
+input_noise_std: 0.0  # Gaussian noise on the training contexts, in each mode's step RMS (0 = off; README "Latent flow matching")
+seed: ${seed}         # network init, batch order, the training draws of t and noise
+training:             # training/trainer.py's TrainerConfig
+  max_epochs: 30      # the cosine schedule decays over these
+  samples_per_epoch: 65536  # training pairs per epoch (~9 passes over the ~7.1k), i.e. per validation
+  batch_size: 256
+  learning_rate: 1.0e-3
+  warmup_steps: 200
+  final_lr_fraction: 0.01
+  weight_decay: 1.0e-4
+  grad_clip: 1.0
+  patience: 30        # the full schedule, as for the U-Net: stable steps flip between epochs
+  eval_every: 1
+  log_every: 20
+  max_loss: 100.0     # a zero velocity field scores ~2 (unit-mean-square changes, unit noise)
+  prefetch: 2
+  ema_decay: null     # weight averaging per optimizer step (e.g. 0.999); validated/kept instead of the raw weights

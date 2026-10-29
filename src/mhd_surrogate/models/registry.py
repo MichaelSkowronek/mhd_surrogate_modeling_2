@@ -25,6 +25,7 @@ MODELS: dict[str, str] = {
     "hankel_dmd": "mhd_surrogate.models.hankel_dmd:HankelDMD",
     "unet": "mhd_surrogate.models.unet:UNetSurrogate",
     "latent_linear": "mhd_surrogate.models.latent_linear:LatentLinear",
+    "latent_flow": "mhd_surrogate.models.latent_flow:LatentFlow",
 }
 
 

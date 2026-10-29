@@ -4,7 +4,12 @@ import numpy as np
 import pytest
 
 import mlflow
-from mhd_surrogate.models.latent import LatentSurrogate, resolve_codec
+from mhd_surrogate.models.base import FitHooks, fit_model
+from mhd_surrogate.models.latent import (
+    LatentSurrogate,
+    StochasticLatentSurrogate,
+    resolve_codec,
+)
 from mhd_surrogate.models.latent_linear import LatentLinear
 from mhd_surrogate.models.pod_codec import PODCodec
 from mhd_surrogate.models.registry import load_model
@@ -107,3 +112,65 @@ def test_a_subclass_must_supply_the_latent_dynamics():
     ):
         with pytest.raises(NotImplementedError):
             call()
+
+
+class Recorder(LatentSurrogate):
+    """An iterative latent model that records what its fit got."""
+
+    name = "recorder"
+    iterative = True
+
+    def fit_latents(self, latents, hooks=None):
+        self.received = (sorted(latents), hooks)
+
+
+def test_an_iterative_latent_model_gets_the_fit_hooks(codec_dir):
+    model = Recorder(str(codec_dir))
+    hooks = FitHooks(neighbors=2)
+
+    fit_model(model, noisy_datasets(), hooks)
+
+    assert model.received == (["d0", "d1"], hooks)
+    assert model.datasets == ["d0", "d1"]
+
+
+class Drift(StochasticLatentSurrogate):
+    """A stochastic latent model whose step k (of the forecast) adds
+    seed + k to every entry of the newest latent: its randomness is a
+    function of the seed and the step alone, as `sample_latents` requires."""
+
+    name = "drift"
+
+    def sample_latents(self, window, n_steps, seeds, first_step=0):
+        steps = first_step + np.arange(n_steps, dtype=np.float32)
+        return np.stack([window[-1] + np.cumsum(seed + steps)[:, None] for seed in seeds]).astype(
+            np.float32
+        )
+
+
+def drift(codec_dir):
+    model = Drift(str(codec_dir), window=2)
+    model.codec = resolve_codec(str(codec_dir))
+    return model
+
+
+def test_a_stochastic_latent_models_members_and_blocks_are_its_samples(codec_dir):
+    model = drift(codec_dir)
+    context = noisy_datasets(seed=2)["d0"][:4]
+    newest = model.codec.encode(context[-1:])[0]
+
+    members = model.predict_members(context, 5, [0, 7])
+    blocks = list(model.predict_blocks(context, 5, 2, seed=7))
+
+    expected = newest + np.cumsum(7 + np.arange(5))[:, None]
+    np.testing.assert_allclose(model.codec.encode(members[1]), expected, rtol=1e-4, atol=1e-3)
+    np.testing.assert_array_equal(members[1], model.predict(context, 5, seed=7))
+    assert members.shape == (2, 5, *FRAME)
+    assert [len(b) for b in blocks] == [2, 2, 1]
+    np.testing.assert_allclose(np.concatenate(blocks), members[1], rtol=1e-5, atol=1e-5)
+    assert model.stochastic
+
+
+def test_a_stochastic_latent_model_must_supply_its_sampling():
+    with pytest.raises(NotImplementedError):
+        StochasticLatentSurrogate("unused").sample_latents(np.zeros((1, 2)), 1, [0])
