@@ -24,15 +24,28 @@ independent members, an unbiased estimate of E|X - X'| and of
 E(X - X')^2 = 2 Var(X) as all M (M - 1) / 2 pairs would be, at the cost of
 some variance. Memory is the targets, a running sum (for the ensemble mean)
 and three members.
+
+The scoring streams the members on the device a block of lead times at a
+time (`DeviceEnsembleAccumulator`, the same scores reduced there);
+`EnsembleAccumulator`, in NumPy and float64, is the reference it is tested
+against.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 import numpy as np
 
-from mhd_surrogate.evaluation.metrics import AXES, CrpsAccumulator
+from mhd_surrogate.evaluation.metrics import (
+    AXES,
+    CrpsAccumulator,
+    DeviceCrpsAccumulator,
+    device_abs_means,
+    device_squared_means,
+    per_lead,
+)
 from mhd_surrogate.evaluation.quantities import DEFAULT_CHUNK_T
 
 
@@ -91,5 +104,43 @@ class EnsembleAccumulator(CrpsAccumulator):
             size=m,
             crps=self._crps(sums, pairs),
             spread=spread,
+            ensemble_mean_rmse=np.sqrt(mean_squared),
+        )
+
+
+class DeviceEnsembleAccumulator(DeviceCrpsAccumulator):
+    """`EnsembleAccumulator` for members streamed on the device, fed a block
+    of lead times at a time like `DeviceCrpsAccumulator` (`add_block`), then
+    `scores()`. Besides the cycle's pairs it keeps the block's running sum
+    of the members (float32, for the ensemble mean), one block's frames."""
+
+    PAIR_TERMS = {**DeviceCrpsAccumulator.PAIR_TERMS, "squared": 2}
+
+    def __init__(self, n_steps: int, scale: np.ndarray) -> None:
+        super().__init__(n_steps, scale)
+        self._mean_errors: list = []
+
+    def _pair_terms(self, a, b) -> dict:
+        return {"abs": device_abs_means(a, b), "squared": device_squared_means(a, b)}
+
+    def add_block(self, first: int, target, members: Iterable) -> None:
+        total = None
+
+        def summed():
+            nonlocal total
+            for frames in members:
+                total = frames if total is None else total + frames
+                yield frames
+
+        super().add_block(first, target, summed())
+        self._mean_errors.append((first, device_squared_means(total / self.size, target)))
+
+    def scores(self) -> EnsembleScores:
+        error, sums = self._sums()
+        mean_squared = per_lead(self._mean_errors, self.n_steps, self.scale, 2)
+        return EnsembleScores(
+            size=self.size,
+            crps=error / self.size - 0.5 * sums["abs"] / self.n_pairs,
+            spread=np.sqrt(0.5 * sums["squared"] / self.n_pairs),
             ensemble_mean_rmse=np.sqrt(mean_squared),
         )

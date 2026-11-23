@@ -7,12 +7,21 @@ these metrics are the short-horizon half of the evaluation, and
 attractor). The CRPS (`CrpsAccumulator`) scores a forecast as an ensemble,
 a deterministic one as a single member; the skill horizon and the selection
 rule's tie-break are measured on it.
+
+The scoring computes them on the device as a forecast streams
+(`DeviceCrpsAccumulator`, `DeviceRmse`), from per-channel float32 means over
+the pixels that are combined in float64 on the host; `CrpsAccumulator` and
+`rmse_per_step`, in NumPy and float64, are the reference they are tested
+against.
 """
 
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 
+import jax
+import jax.numpy as jnp
 import numpy as np
 
 from mhd_surrogate.evaluation.quantities import DEFAULT_CHUNK_T
@@ -127,6 +136,143 @@ class CrpsAccumulator:
 
     def crps(self) -> np.ndarray:
         return self._crps(*self._cycle())
+
+
+@jax.jit
+def device_abs_means(a: jax.Array, b: jax.Array) -> jax.Array:
+    """The mean over the pixels of |a - b| per step and channel, (t, C), of
+    two (t, C, Nx, Ny) arrays on the device, in float32."""
+    return jnp.mean(jnp.abs(a - b), axis=(2, 3))
+
+
+@jax.jit
+def device_squared_means(a: jax.Array, b: jax.Array) -> jax.Array:
+    """The mean over the pixels of (a - b)^2 per step and channel, (t, C)."""
+    return jnp.mean((a - b) ** 2, axis=(2, 3))
+
+
+def scaled_lead_means(means, scale: np.ndarray, power: int = 1) -> np.ndarray:
+    """Per-step, per-channel means of an error (`device_abs_means`, or with
+    `power` 2 `device_squared_means`), (t, C), in units of `scale` (C,) per
+    channel and averaged over the channels, in float64: the error over
+    channels and space at every lead time, as the NumPy scores take it."""
+    return (np.asarray(means, np.float64) / scale**power).mean(axis=1)
+
+
+class DeviceRmse:
+    """`rmse_per_step` of a forecast fed to it a block of lead times at a
+    time (`add`), its frames and the truth's on the device; `curve()`
+    returns it, float64 on the host."""
+
+    def __init__(self, n_steps: int, scale: np.ndarray) -> None:
+        self.n_steps = n_steps
+        self.scale = np.asarray(scale, dtype=np.float64)
+        self._blocks: list = []
+
+    def add(self, first: int, frames, target) -> None:
+        self._blocks.append((first, device_squared_means(frames, target)))
+
+    def curve(self) -> np.ndarray:
+        return np.sqrt(per_lead(self._blocks, self.n_steps, self.scale, 2))
+
+
+def per_lead(blocks: list, n_steps: int, scale: np.ndarray, power: int = 1) -> np.ndarray:
+    """(first lead, per-channel means) of consecutive blocks as one
+    `scaled_lead_means` curve over all `n_steps` lead times, which they must
+    cover."""
+    curve, covered = np.zeros(n_steps), np.zeros(n_steps, dtype=bool)
+    for first, means in blocks:
+        values = scaled_lead_means(means, scale, power)
+        curve[first : first + len(values)] = values
+        covered[first : first + len(values)] = True
+    if not covered.all():
+        missing = np.flatnonzero(~covered)
+        raise ValueError(f"lead times {missing[0] + 1}-{missing[-1] + 1} were never added")
+    return curve
+
+
+def _summed(values: list, zero: np.ndarray) -> np.ndarray:
+    """Device arrays summed in float64 on the host (`zero` if none)."""
+    return sum((np.asarray(v, np.float64) for v in values), zero)
+
+
+class DeviceCrpsAccumulator:
+    """`CrpsAccumulator` for a forecast streamed on the device: fed a block
+    of lead times at a time with every member's frames for it
+    (`add_block`), it reduces them there and gives the same CRPS per lead
+    time, from the same cycle of member pairs, float64 on the host
+    (`crps()`). A member of a block is read once, as the block's members
+    are produced, so at most three of them are on the device at a time
+    (the first, the previous and the current one), each only for the block's
+    lead times; a NaN member's errors are NaN, as in NumPy.
+
+    `CrpsAccumulator`, in NumPy and float64, is the reference it is tested
+    against: per-channel means over the pixels in float32, ~1e-7 relative,
+    are divided by `scale` and averaged over the channels and the members
+    in float64."""
+
+    # Pairwise terms and the power of `scale` that makes each unitless.
+    PAIR_TERMS = {"abs": 1}
+
+    def __init__(self, n_steps: int, scale: np.ndarray) -> None:
+        self.n_steps = n_steps
+        self.scale = np.asarray(scale, dtype=np.float64)
+        self.size: int | None = None
+        self._blocks: list = []
+
+    def _pair_terms(self, a, b) -> dict:
+        return {"abs": device_abs_means(a, b)}
+
+    def add_block(self, first: int, target, members: Iterable) -> None:
+        """Lead times `first` onward of every member against the truth's
+        `target` for them, (t, C, Nx, Ny) on the device: `members` yields
+        each member's frames for them, in the same (seed) order every
+        block, and is consumed as they come."""
+        errors, pairs = [], {name: [] for name in self.PAIR_TERMS}
+        head = previous = None
+        count = 0
+        for frames in members:
+            errors.append(device_abs_means(frames, target))
+            if previous is not None:
+                for name, value in self._pair_terms(frames, previous).items():
+                    pairs[name].append(value)
+            head = frames if head is None else head
+            previous = frames
+            count += 1
+        if count >= 3:
+            # The pair closing the cycle (see `CrpsAccumulator`).
+            for name, value in self._pair_terms(head, previous).items():
+                pairs[name].append(value)
+        if count == 0 or count != (self.size or count):
+            raise ValueError(f"a block of {count} members, expected {self.size or 'some'}")
+        self.size = count
+        self._blocks.append((first, errors, pairs))
+
+    def _sums(self) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+        """Per lead time: the members' absolute errors summed, and each
+        pairwise term summed over the cycle's pairs (0 for one member)."""
+        if self.size is None:
+            raise ValueError("no members added")
+        errors, pair_terms = [], {name: [] for name in self.PAIR_TERMS}
+        for first, block_errors, pairs in self._blocks:
+            zero = np.zeros(np.shape(block_errors[0]))
+            errors.append((first, _summed(block_errors, zero)))
+            for name in self.PAIR_TERMS:
+                pair_terms[name].append((first, _summed(pairs[name], zero)))
+        sums = {
+            name: per_lead(pair_terms[name], self.n_steps, self.scale, power)
+            for name, power in self.PAIR_TERMS.items()
+        }
+        return per_lead(errors, self.n_steps, self.scale), sums
+
+    @property
+    def n_pairs(self) -> int:
+        """How many pairs the cycle has (one for two members)."""
+        return self.size if self.size >= 3 else max(self.size - 1, 1)
+
+    def crps(self) -> np.ndarray:
+        error, sums = self._sums()
+        return error / self.size - 0.5 * sums["abs"] / self.n_pairs
 
 
 def member_median(values) -> np.ndarray | float:

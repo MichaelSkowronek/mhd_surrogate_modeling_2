@@ -175,6 +175,28 @@ def test_the_validation_monitor_scores_a_stochastic_model_on_its_monitor_members
     assert scores["members"] == 2
 
 
+class BatchedNoisy(Noisy):
+    def __init__(self):
+        super().__init__()
+        self.batches = []
+
+    def predict_members(self, context, n_steps, seeds):
+        self.batches.append(list(seeds))
+        return np.stack([Noisy.predict(self, context, n_steps, seed=s) for s in seeds])
+
+
+@pytest.mark.parametrize("batch, calls", [(None, [[0, 1]]), (1, [])])
+def test_the_validation_monitor_samples_its_members_monitor_batch_per_call(workspace, batch, calls):
+    model = BatchedNoisy()
+    overrides = [] if batch is None else [f"evaluation.monitor_batch={batch}"]
+    monitor = ValidationMonitor(wave(30, 2.0), np.ones(2), config(workspace, *overrides))
+
+    monitor(model)
+
+    assert model.batches == calls  # configs/evaluation: monitor_batch 32
+    assert sorted(model.seeds) == [0, 1]
+
+
 def test_an_ensembles_members_are_scored_one_group_each_on_validation(workspace):
     from mhd_surrogate.training.scoring import score_and_log
 

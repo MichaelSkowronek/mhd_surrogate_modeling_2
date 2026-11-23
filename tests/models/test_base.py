@@ -1,6 +1,6 @@
 import numpy as np
 
-from mhd_surrogate.models.base import FitHooks, fit_model, real_size
+from mhd_surrogate.models.base import DeviceBlock, FitHooks, fit_model, real_size
 
 
 class ClosedForm:
@@ -36,3 +36,19 @@ def test_default_hooks_discard_metrics_and_neither_validate_nor_save():
 def test_real_size_counts_a_complex_entry_as_two_numbers():
     assert real_size(np.zeros((3, 4), dtype=np.float32)) == 12
     assert real_size(np.zeros((3, 4), dtype=np.complex64)) == 24
+
+
+def test_a_device_block_decodes_a_member_when_its_frames_are_read():
+    decoded = []
+
+    def decode(states):
+        decoded.append(states.copy())
+        return states * 10.0
+
+    block = DeviceBlock(np.arange(6.0).reshape(2, 3), decode)
+
+    assert len(block) == 2 and block.steps == 3 and decoded == []
+    assert block.frames(1).tolist() == [30.0, 40.0, 50.0]
+    assert [d.tolist() for d in decoded] == [[3.0, 4.0, 5.0]]
+    # Frames forecast as such are their own states.
+    assert DeviceBlock(np.ones((1, 2))).frames(0).tolist() == [1.0, 1.0]

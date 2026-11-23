@@ -74,6 +74,44 @@ def test_streamed_blocks_are_the_one_forecast(codec_dir):
     )
 
 
+def test_device_blocks_are_the_one_forecast_decoded_on_the_device(codec_dir):
+    model = fitted(codec_dir, window=3)
+    context = noisy_datasets(seed=2)["d0"][:5]
+
+    blocks = list(model.predict_device_blocks(context, 11, 4))
+
+    assert [(len(b), b.steps) for b in blocks] == [(1, 4), (1, 4), (1, 3)]
+    # The latents of one `predict` call; only the decoding differs.
+    np.testing.assert_allclose(
+        np.concatenate([np.asarray(b.frames(0)) for b in blocks]),
+        model.predict(context, 11),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+    with pytest.raises(ValueError, match="block_steps"):
+        list(model.predict_device_blocks(context, 11, 0))
+
+
+def test_a_codec_without_a_device_decode_decodes_on_the_host(codec_dir):
+    class HostOnly:
+        def __init__(self, codec):
+            self.codec = codec
+
+        def __getattr__(self, name):
+            if name == "device_decode":
+                raise AttributeError(name)
+            return getattr(self.codec, name)
+
+    model = fitted(codec_dir)
+    context = noisy_datasets(seed=2)["d1"][:4]
+    expected = model.predict(context, 5)
+    model.codec = HostOnly(model.codec)
+
+    (block,) = model.predict_device_blocks(context, 5, 5)
+
+    np.testing.assert_array_equal(np.asarray(block.frames(0)), expected)
+
+
 def test_the_checkpoint_carries_the_codec(tmp_path, codec_dir):
     model = fitted(codec_dir)
     model.save(tmp_path / "model")
@@ -169,6 +207,19 @@ def test_a_stochastic_latent_models_members_and_blocks_are_its_samples(codec_dir
     assert [len(b) for b in blocks] == [2, 2, 1]
     np.testing.assert_allclose(np.concatenate(blocks), members[1], rtol=1e-5, atol=1e-5)
     assert model.stochastic
+
+
+def test_a_stochastic_latent_models_device_blocks_are_its_members(codec_dir):
+    model = drift(codec_dir)
+    context = noisy_datasets(seed=2)["d0"][:4]
+    members = model.predict_members(context, 5, [0, 7, 3])
+
+    blocks = list(model.predict_device_blocks(context, 5, 2, seeds=[0, 7, 3]))
+
+    assert [(len(b), b.steps) for b in blocks] == [(3, 2), (3, 2), (3, 1)]
+    for k in range(3):
+        streamed = np.concatenate([np.asarray(b.frames(k)) for b in blocks])
+        np.testing.assert_allclose(streamed, members[k], rtol=1e-5, atol=1e-4)
 
 
 def test_a_stochastic_latent_model_must_supply_its_sampling():

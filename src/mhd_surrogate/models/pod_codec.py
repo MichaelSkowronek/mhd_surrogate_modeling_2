@@ -14,6 +14,13 @@ the basis, in normalized units. What it drops is the trailing modes' share
 of the variance, the small scales -- a latent model on it can't forecast
 what its codec doesn't keep. The training frames' latents are uncorrelated,
 each with the variance of its mode (the squared singular value).
+
+`device_decode` decodes on a JAX device, its matmul in full float32
+(`jax.lax.Precision.HIGHEST`): a GPU's default, TF32, rounds its inputs
+to 10 mantissa bits, which put the decoded frames' energy 2e-4 off the
+float32 decode's on the host; in full float32 they agree to 1e-5 of the
+field's std. The basis goes to the device on the first call and stays
+there (~0.9 GB at rank 750).
 """
 
 from __future__ import annotations
@@ -24,6 +31,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Self
 
+import jax
+import jax.numpy as jnp
 import numpy as np
 
 from mhd_surrogate.models.codec import CODEC_META
@@ -40,6 +49,12 @@ from mhd_surrogate.models.snapshots import (
 log = logging.getLogger(__name__)
 
 DEFAULT_RANK = 750
+
+
+@jax.jit
+def _device_decode(latents, basis, mean, scale):
+    flat = jnp.matmul(latents.astype(jnp.float32), basis.T, precision=jax.lax.Precision.HIGHEST)
+    return flat.reshape(-1, *mean.shape) * scale[None, :, None, None] + mean[None]
 
 
 class PODCodec:
@@ -59,6 +74,8 @@ class PODCodec:
         self.basis: np.ndarray | None = None  # (state, r), POD modes U
         self.fit_info: dict[str, float] = {}
         self.datasets: list[str] = []
+        # (basis, mean, scale) on the device, once `device_decode` needs them.
+        self._device_arrays: tuple | None = None
 
     @property
     def latent_shape(self) -> tuple[int, ...]:
@@ -75,6 +92,7 @@ class PODCodec:
         s2, s, v = truncated_pod(gram_matrix(frames, self.column_block), self.rank, self.name)
         r = len(s)
         self.basis = project_basis(frames, np.arange(len(frames)), v / s, self.column_block)
+        self._device_arrays = None
         self.datasets = list(datasets)
         self.fit_info = {
             "rank": float(r),
@@ -97,6 +115,16 @@ class PODCodec:
         self._check_fitted()
         z = (np.asarray(latents, dtype=np.float32) @ self.basis.T).reshape(-1, *self.mean.shape)
         return z * self.scale[None, :, None, None] + self.mean[None]
+
+    def device_decode(self, latents) -> jax.Array:
+        """`decode` on the device: (T, r) latents there to (T, C, Nx, Ny)
+        frames there."""
+        self._check_fitted()
+        if self._device_arrays is None:
+            self._device_arrays = tuple(
+                jnp.asarray(a, dtype=jnp.float32) for a in (self.basis, self.mean, self.scale)
+            )
+        return _device_decode(jnp.asarray(latents), *self._device_arrays)
 
     def parameter_count(self) -> int:
         """The POD modes; the mean field and channel scales are normalization."""

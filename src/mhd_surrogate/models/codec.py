@@ -20,6 +20,11 @@ smoothed mean as for an uncertain forecast. Choosing between codecs (latent
 size, architecture) is choosing between the latent models trained on them,
 by their `selection_score`.
 
+A codec may also implement `device_decode(latents)`: `decode` on a JAX
+device, latents and frames both there (a latent model's scored forecast is
+decoded on the device, `latent.py`). Without it, a latent model decodes on
+the host and copies the frames over.
+
 A checkpoint is a directory holding `codec.json` (the registry name plus the
 codec's own metadata) and whatever arrays it needs; `load_codec` reads the
 name and dispatches to the right class. It isn't a model's `model.json`, so

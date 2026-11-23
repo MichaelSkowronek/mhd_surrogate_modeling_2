@@ -22,7 +22,12 @@ from collections.abc import Mapping
 
 import numpy as np
 
-from mhd_surrogate.evaluation.quantities import DEFAULT_CHUNK_T, enstrophy, kinetic_energy
+from mhd_surrogate.evaluation.quantities import (
+    DEFAULT_CHUNK_T,
+    device_energy_and_enstrophy,
+    enstrophy,
+    kinetic_energy,
+)
 
 QUANTITIES = ("energy", "enstrophy")
 
@@ -31,13 +36,38 @@ def energy_and_enstrophy(
     series, dx: float, dy: float, chunk_t: int = DEFAULT_CHUNK_T
 ) -> dict[str, np.ndarray]:
     """Per-step domain-mean kinetic energy and enstrophy of a (T, 2, Nx, Ny)
-    series, shape (T,) each, computed `chunk_t` steps at a time in float64."""
+    series, shape (T,) each, computed `chunk_t` steps at a time in float64.
+    The reference `DeviceQuantities` is tested against."""
     energy, ens = [], []
     for start in range(0, series.shape[0], chunk_t):
         block = np.asarray(series[start : start + chunk_t], dtype=np.float64)
         energy.append(kinetic_energy(block))
         ens.append(enstrophy(block, dx, dy))
     return {"energy": np.concatenate(energy), "enstrophy": np.concatenate(ens)}
+
+
+class DeviceQuantities:
+    """`energy_and_enstrophy` of a series fed to it a block of frames on
+    the device at a time, in order (`add`; `quantities.to_device` puts
+    host frames there), each block reduced there as it comes. `series()`
+    returns them as `energy_and_enstrophy` does, float64 on the host; the
+    per-step values stay on the device until then, so the device isn't
+    waited for block by block."""
+
+    def __init__(self, dx: float, dy: float) -> None:
+        self.dx, self.dy = dx, dy
+        self._blocks: list = []
+
+    def add(self, frames) -> None:
+        self._blocks.append(device_energy_and_enstrophy(frames, self.dx, self.dy))
+
+    def series(self) -> dict[str, np.ndarray]:
+        if not self._blocks:
+            raise ValueError("no frames added")
+        return {
+            quantity: np.concatenate([np.asarray(block[i], np.float64) for block in self._blocks])
+            for i, quantity in enumerate(QUANTITIES)
+        }
 
 
 def block_means(values: np.ndarray, block_steps: int) -> np.ndarray:

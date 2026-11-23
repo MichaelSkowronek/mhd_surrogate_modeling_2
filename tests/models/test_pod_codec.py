@@ -1,3 +1,4 @@
+import jax
 import numpy as np
 import pytest
 
@@ -92,6 +93,32 @@ def test_result_does_not_depend_on_chunk_or_device_block_size():
     )
 
 
+def test_device_decode_is_decode_on_the_device():
+    datasets, more_frames = subspace_datasets()
+    codec = PODCodec(rank=4)
+    codec.fit(datasets)
+    latents = codec.encode(more_frames(5))
+
+    decoded = codec.device_decode(latents)
+
+    assert isinstance(decoded, jax.Array)
+    np.testing.assert_allclose(np.asarray(decoded), codec.decode(latents), rtol=1e-6, atol=1e-6)
+
+
+def test_a_refit_replaces_the_basis_on_the_device():
+    datasets, more_frames = subspace_datasets()
+    codec = PODCodec(rank=4)
+    codec.fit(datasets)
+    latents = codec.encode(more_frames(3))
+    codec.device_decode(latents)
+
+    codec.fit(subspace_datasets(seed=1)[0])
+
+    np.testing.assert_allclose(
+        np.asarray(codec.device_decode(latents)), codec.decode(latents), rtol=1e-6, atol=1e-6
+    )
+
+
 def test_checkpoint_round_trips_through_the_codec_registry(tmp_path):
     datasets, more_frames = subspace_datasets()
     codec = PODCodec(rank=3, chunk_t=5)
@@ -109,6 +136,8 @@ def test_checkpoint_round_trips_through_the_codec_registry(tmp_path):
 
 
 def test_use_before_fit_and_empty_datasets_are_rejected():
+    with pytest.raises(RuntimeError, match="not fitted"):
+        PODCodec().device_decode(np.zeros((1, 4)))
     for call in (
         lambda c: c.encode(np.zeros((1, *FRAME))),
         lambda c: c.decode(np.zeros((1, 3))),
