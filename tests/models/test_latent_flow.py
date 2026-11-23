@@ -256,6 +256,29 @@ def test_the_protocol_streams_and_batches_its_members(fitted):
     np.testing.assert_allclose(streamed, members[1], rtol=1e-5, atol=1e-6)
 
 
+def test_device_blocks_sample_the_members_as_predict_and_predict_members(fitted):
+    alone = [list(fitted.predict_device_blocks(context(), 7, 3, seeds=[s])) for s in (2, 5)]
+    batched = list(fitted.predict_device_blocks(context(), 7, 3, seeds=[2, 5]))
+    window = fitted.codec.encode(context()[-2:])
+
+    for k, seed in enumerate((2, 5)):
+        # The latents are `predict`'s exactly, the frames up to decoding.
+        np.testing.assert_array_equal(
+            np.concatenate([np.asarray(b.states[0]) for b in alone[k]]),
+            fitted.sample_latents(window, 7, [seed])[0],
+        )
+        np.testing.assert_allclose(
+            np.concatenate([np.asarray(b.frames(0)) for b in alone[k]]),
+            fitted.predict(context(), 7, seed=seed),
+            rtol=1e-5,
+            atol=1e-5,
+        )
+        np.testing.assert_array_equal(
+            np.concatenate([np.asarray(b.states[k]) for b in batched]),
+            fitted.sample_latents(window, 7, [2, 5])[k],
+        )
+
+
 # -- fitting ------------------------------------------------------------------------
 
 

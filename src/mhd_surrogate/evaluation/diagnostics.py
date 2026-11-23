@@ -16,16 +16,31 @@ held-out series is only ~840 steps long: ~7 segments, so the estimates are
 noisy and the frequency resolution coarse.)
 
 Everything works on (T, 2, Nx, Ny) arrays processed `chunk_t` steps at a time,
-so a long series is never held in memory in float64 at once.
+so a long series is never held in memory in float64 at once. The scoring
+summarizes a forecast on the device as it streams (`DeviceSeriesSummary`, a
+block of frames at a time, in float32); `series_summary`, in NumPy and
+float64, is the reference it is tested against. The scores themselves are
+computed from the summaries on the host, in float64.
 """
 
 from __future__ import annotations
 
+import math
+from functools import partial
+
+import jax
+import jax.numpy as jnp
 import numpy as np
 
 from mhd_surrogate.analysis.fields import divergence
 from mhd_surrogate.analysis.spectral import interpolated_peak, spectrum_sum, welch_spectrum
-from mhd_surrogate.evaluation.quantities import DEFAULT_CHUNK_T, enstrophy, kinetic_energy
+from mhd_surrogate.evaluation.quantities import (
+    DEFAULT_CHUNK_T,
+    device_energy_and_enstrophy,
+    device_gradient,
+    enstrophy,
+    kinetic_energy,
+)
 
 __all__ = ["DEFAULT_CHUNK_T", "enstrophy", "kinetic_energy"]  # re-exported
 # Welch segment length in steps, as in the EDA's temporal spectra
@@ -70,6 +85,89 @@ def series_summary(series, dx: float, dy: float, chunk_t: int = DEFAULT_CHUNK_T)
         "spectrum_x": sums["x"] / n,
         "spectrum_y": sums["y"] / n,
     }
+
+
+def device_spectrum_sum(frames: jax.Array, axis: int, spacing: float) -> jax.Array:
+    """`analysis.spectral.spectrum_sum` of (t, C, Nx, Ny) frames on the
+    device: the one-sided spectrum along `axis`, averaged over the other
+    spatial axis and summed over the t steps, (C, K), in float32."""
+    n = frames.shape[axis]
+    shape = [1, 1, 1, 1]
+    shape[axis] = n
+    window = np.hanning(n)
+    # Per-cycle PSD as a density per unit angular wavenumber, and the
+    # negative frequencies folded onto the positive ones, as in NumPy.
+    factor = np.full(n // 2 + 1, spacing / (window**2).sum() / (2 * math.pi))
+    factor[1 : -1 if n % 2 == 0 else None] *= 2
+    detrended = frames - jnp.mean(frames, axis=axis, keepdims=True)
+    transform = jnp.fft.rfft(detrended * window.reshape(shape).astype(np.float32), axis=axis)
+    power = jnp.moveaxis(jnp.abs(transform) ** 2, axis, -1) * factor.astype(np.float32)
+    return jnp.sum(jnp.mean(power, axis=2), axis=0)
+
+
+def device_domain_mean(frames: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """The spatial mean of (t, C, Nx, Ny) frames per step and channel as
+    two float32 parts, (reference, correction), (t, C) each, whose sum in
+    float64 is the mean: the domain-mean u_x is ~1 and varies by ~0.4% of
+    that over time, so one float32 mean (~1e-7 relative) would be off by
+    ~5e-5 of that variation; the correction, a mean of values around 0, is
+    good to ~1e-7 of it."""
+    reference = jnp.mean(jnp.mean(frames, axis=3), axis=2)
+    return reference, jnp.mean(frames - reference[..., None, None], axis=(2, 3))
+
+
+@partial(jax.jit, static_argnames=("dx", "dy"))
+def device_frame_summary(frames: jax.Array, dx: float, dy: float) -> dict[str, jax.Array]:
+    """What `series_summary` needs of (t, 2, Nx, Ny) frames, reduced on the
+    device in float32: per step the energy, enstrophy, RMS divergence and
+    domain-mean velocity (`device_domain_mean`'s two parts), and the x and
+    y spectra summed over the steps."""
+    frames = frames.astype(jnp.float32)
+    energy, ens = device_energy_and_enstrophy(frames, dx, dy)
+    div = device_gradient(frames[:, 0], dx, 1) + device_gradient(frames[:, 1], dy, 2)
+    reference, correction = device_domain_mean(frames)
+    return {
+        "energy": energy,
+        "enstrophy": ens,
+        "rms_divergence": jnp.sqrt(jnp.mean(div**2, axis=(1, 2))),
+        "mean_reference": reference,
+        "mean_correction": correction,
+        "spectrum_x": device_spectrum_sum(frames, 2, dx),
+        "spectrum_y": device_spectrum_sum(frames, 3, dy),
+    }
+
+
+class DeviceSeriesSummary:
+    """`series_summary` of a series fed to it a block of frames on the
+    device at a time, in order (`add`), each block reduced there as it
+    comes (`device_frame_summary`); `summary()` returns it as
+    `series_summary` does, float64 on the host, the spectra summed over the
+    blocks in float64. The reductions stay on the device until then."""
+
+    def __init__(self, dx: float, dy: float) -> None:
+        self.dx, self.dy = dx, dy
+        self._blocks: list[dict] = []
+
+    def add(self, frames) -> None:
+        self._blocks.append(device_frame_summary(frames, self.dx, self.dy))
+
+    def summary(self) -> dict[str, np.ndarray]:
+        if not self._blocks:
+            raise ValueError("no frames added")
+        blocks = [jax.tree.map(lambda a: np.asarray(a, np.float64), b) for b in self._blocks]
+        n = sum(len(block["energy"]) for block in blocks)
+
+        def steps(key: str) -> np.ndarray:
+            return np.concatenate([block[key] for block in blocks])
+
+        return {
+            "energy": steps("energy"),
+            "enstrophy": steps("enstrophy"),
+            "rms_divergence": steps("rms_divergence"),
+            "mean_velocity": steps("mean_reference") + steps("mean_correction"),
+            "spectrum_x": sum(block["spectrum_x"] for block in blocks) / n,
+            "spectrum_y": sum(block["spectrum_y"] for block in blocks) / n,
+        }
 
 
 def log_spectral_distance(predicted: np.ndarray, true: np.ndarray) -> float:

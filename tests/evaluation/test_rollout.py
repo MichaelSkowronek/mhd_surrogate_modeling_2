@@ -5,9 +5,11 @@ from mhd_surrogate.evaluation.rollout import (
     block_seed,
     rollout_block_means,
     rollout_blocks,
+    rollout_device_blocks,
     rollout_stability,
 )
 from mhd_surrogate.evaluation.stability import block_means, energy_and_enstrophy
+from mhd_surrogate.models.base import DeviceBlock
 
 DX, DY = 0.5, 0.25
 
@@ -220,3 +222,64 @@ def test_a_bounded_rollout_is_stable_for_all_its_steps():
 
     assert rollout.stable_steps == 10
     assert rollout.scores()["energy_peak_ratio"] == pytest.approx(1.0)
+
+
+class DeviceClock(Clock):
+    """A `Clock` that streams its forecast on the device, as a stochastic
+    one when `stochastic`: member `seed`'s frame k is k + 1 + seed."""
+
+    def __init__(self, stochastic=False):
+        self.stochastic = stochastic
+        self.calls = []
+
+    def predict_device_blocks(self, context, n_steps, block_steps, **seeds):
+        self.calls.append((len(context), n_steps, block_steps, seeds))
+        offsets = np.array(seeds.get("seeds", [0]), np.float32)[:, None, None, None, None]
+        whole = Clock.predict(self, context, n_steps)[None] + offsets
+        for start in range(0, n_steps, block_steps):
+            yield DeviceBlock(whole[:, start : start + block_steps])
+
+
+@pytest.mark.parametrize("stochastic", [False, True])
+def test_rollout_device_blocks_take_a_device_models_blocks(stochastic):
+    model = DeviceClock(stochastic)
+
+    blocks = [np.asarray(b) for b in rollout_device_blocks(model, np.zeros((4, 2, 3, 3)), 7, 3, 2)]
+
+    seeds = {"seeds": [2]} if stochastic else {}
+    assert model.calls == [(1, 7, 3, seeds)]
+    assert [b[:, 0, 0, 0].tolist() for b in blocks] == (
+        [[3, 4, 5], [6, 7, 8], [9]] if stochastic else [[1, 2, 3], [4, 5, 6], [7]]
+    )
+
+
+def test_rollout_device_blocks_copy_any_other_models_blocks_over():
+    context = np.random.default_rng(4).normal(size=(3, 2, 3, 3))
+
+    device = [np.asarray(b) for b in rollout_device_blocks(Doubling(1), context, 5, 2)]
+
+    for got, expected in zip(device, rollout_blocks(Doubling(1), context, 5, 2), strict=True):
+        np.testing.assert_allclose(got, expected, rtol=1e-6)
+
+
+def test_rollout_device_blocks_check_what_a_device_model_yields():
+    class Short(DeviceClock):
+        def predict_device_blocks(self, context, n_steps, block_steps, **seeds):
+            for block in super().predict_device_blocks(context, n_steps, block_steps, **seeds):
+                yield DeviceBlock(block.states[:, :1])
+
+    with pytest.raises(ValueError, match="shape"):
+        list(rollout_device_blocks(Short(), np.zeros((2, 2, 3, 3)), 3, 2))
+    with pytest.raises(ValueError, match="block_steps"):
+        list(rollout_device_blocks(DeviceClock(), np.zeros((2, 2, 3, 3)), 3, 0))
+
+
+def test_rollout_block_means_of_a_device_model_are_its_blocks_means():
+    context = np.zeros((2, 2, 3, 3))  # a clock's frames are 3 x 3
+
+    means = rollout_block_means(DeviceClock(), context, 7, 3, DX, DY, chunk_t=2)
+
+    whole = Clock().predict(context, 7)
+    expected = energy_and_enstrophy(whole, DX, DY)
+    for quantity in expected:
+        assert means[quantity] == pytest.approx(block_means(expected[quantity], 3), rel=1e-6)

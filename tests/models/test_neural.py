@@ -290,6 +290,22 @@ def test_predict_blocks_stream_the_forecast_of_one_predict():
     np.testing.assert_allclose(np.concatenate(blocks), model.predict(context, 7), rtol=1e-6)
 
 
+def test_device_blocks_are_the_streamed_forecast_left_on_the_device():
+    datasets = wave_datasets()
+    model = small_model()
+    model.fit(datasets)
+    context = datasets["d1"][:3]
+
+    blocks = list(model.predict_device_blocks(context, 7, 3))
+
+    assert [(len(b), b.steps) for b in blocks] == [(1, 3), (1, 3), (1, 1)]
+    assert all(isinstance(b.frames(0), jax.Array) for b in blocks)
+    np.testing.assert_array_equal(
+        np.concatenate([np.asarray(b.frames(0)) for b in blocks]),
+        np.concatenate(list(model.predict_blocks(context, 7, 3))),
+    )
+
+
 class OneConv(AutoregressiveSurrogate):
     name = "one_conv"
 

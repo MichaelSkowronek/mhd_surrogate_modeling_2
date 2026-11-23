@@ -214,6 +214,18 @@ conventions below; it shifts which tools are worth reaching for at all.
   `rollout_blocks`; a model whose state is more than its last `window`
   frames implements `predict_blocks`, or its streamed forecast differs
   from its scored one.
+- Code that scores a forecast reduces it on the device as it streams, a
+  block of lead times at a time (`evaluation/protocol.py`'s
+  `MemberBlocks`, `evaluation/rollout.py`'s `rollout_device_blocks`), in
+  JAX float32, next to the NumPy float64 versions (`quantities.py`,
+  `diagnostics.py`, `metrics.py`, `ensemble.py`), which stay as the tests'
+  references; only per-step and per-lead values reach the host, where the
+  scores are computed in float64. A JAX model implements
+  `predict_device_blocks` (the forecast of its `predict` or
+  `predict_members` call, left on the device), so its frames never reach
+  the host. A matmul whose output gets scored, like a codec's
+  `device_decode`, asks for full float32 (`jax.lax.Precision.HIGHEST`):
+  with the GPU's default TF32 the decoded energy was 2e-4 off.
 - Register a model by import path (`"module:Class"` in `MODELS`), not by
   importing it in the registry: the registry imports a model only when it's
   built or loaded, so the DVC `train` stage depends only on the canonical
@@ -234,8 +246,10 @@ conventions below; it shifts which tools are worth reaching for at all.
   for its seed only when sampled alone (`evaluation.member_batch: 1`) on
   the device that serves it. So a canonical generative model's `evaluate`
   and `gate` stages run on the serving device (the CPU for now);
-  otherwise the gate checks other forecasts than the ones served. Its
-  network still asks for float32 matmuls
+  otherwise the gate checks other forecasts than the ones served. The
+  validations during training batch their members
+  (`evaluation.monitor_batch`): early stopping needs their scores, not the
+  served members. `latent_flow`'s network still asks for float32 matmuls
   (`jax.default_matmul_precision("float32")`): with TF32, the GPU's
   default, even a short forecast depends on its batch.
 - Neural models build on `models/neural.py`'s `AutoregressiveSurrogate` (a

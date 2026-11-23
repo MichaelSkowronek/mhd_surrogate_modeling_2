@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 import numpy as np
@@ -10,18 +10,19 @@ import numpy as np
 from mhd_surrogate.evaluation.diagnostics import (
     DEFAULT_CHUNK_T,
     NPERSEG,
+    DeviceSeriesSummary,
     compare_summaries,
-    series_summary,
 )
-from mhd_surrogate.evaluation.ensemble import EnsembleAccumulator, EnsembleScores
-from mhd_surrogate.evaluation.metrics import member_median, rmse_per_step, skill_horizon
+from mhd_surrogate.evaluation.ensemble import DeviceEnsembleAccumulator, EnsembleScores
+from mhd_surrogate.evaluation.metrics import DeviceRmse, member_median, skill_horizon
 from mhd_surrogate.evaluation.protocol import (
+    EnsembleBlock,
     ForecastModel,
+    MemberBlocks,
     ensemble_size,
-    forecast,
-    forecast_members,
-    is_stochastic,
+    split_context,
 )
+from mhd_surrogate.evaluation.quantities import to_device
 from mhd_surrogate.evaluation.stability import QUANTITIES, stability_scores
 
 
@@ -73,24 +74,6 @@ class Evaluation:
         return self.predict_seconds / len(self.rmse)
 
 
-class _TimedModel:
-    """Wraps a model to time its `predict` call. The result is converted to
-    NumPy inside the timed block so JAX's asynchronous dispatch is waited
-    for, not just launched."""
-
-    def __init__(self, model: ForecastModel) -> None:
-        self.model = model
-        self.window = model.window
-        self.stochastic = is_stochastic(model)
-        self.seconds = 0.0
-
-    def predict(self, context: np.ndarray, n_steps: int, **seed) -> np.ndarray:
-        start = time.perf_counter()
-        prediction = np.asarray(self.model.predict(context, n_steps, **seed))
-        self.seconds = time.perf_counter() - start
-        return prediction
-
-
 def evaluate(
     model: ForecastModel,
     series,
@@ -120,29 +103,46 @@ def evaluate(
 
     A stochastic model forecasts an ensemble of `n_members` (seeds 0, 1,
     ...; a deterministic model has one member, whatever `n_members`),
-    sampled `member_batch` per call where the model can
-    (`protocol.forecast_members`). Every score of a trajectory -- the RMSE,
-    the diagnostics, the stability scores -- is the median over the members
-    (`metrics.member_median`; each member is one trajectory, as `predict`
-    gives it: the ensemble *mean* would be smooth and fail the physics). The
-    ensemble adds `crps_mean`, `crps_lead_<n>`, `ensemble_size` and, for
-    more than one member, `spread_skill_lead_<n>` (`ensemble.EnsembleScores`).
-    For one member the CRPS is the absolute error, so deterministic and
-    generative models share that score, and the skill horizon.
-    """
-    timed = _TimedModel(model)
-    prediction, targets = forecast(timed, series, context_steps)
-    true = series_summary(targets, dx, dy, chunk_t)
-    accumulator = EnsembleAccumulator(targets, scale, chunk_t)
-    rmse_curves, members = [], []
+    sampled `member_batch` per call where the model can, after seed 0
+    alone, which is timed (`predict_seconds`). Every score of a trajectory
+    -- the RMSE, the diagnostics, the stability scores -- is the median
+    over the members (`metrics.member_median`; each member is one
+    trajectory, as `predict` gives it: the ensemble *mean* would be smooth
+    and fail the physics). The ensemble adds `crps_mean`, `crps_lead_<n>`,
+    `ensemble_size` and, for more than one member, `spread_skill_lead_<n>`
+    (`ensemble.EnsembleScores`). For one member the CRPS is the absolute
+    error, so deterministic and generative models share that score, and
+    the skill horizon.
 
-    def score(member: np.ndarray) -> None:
-        rmse = rmse_per_step(member, targets, scale)
+    The members are scored on the device as they stream, `chunk_t` lead
+    times at a time (`protocol.MemberBlocks`), each reduced there to its
+    per-step quantities (`diagnostics.DeviceSeriesSummary`,
+    `metrics.DeviceRmse`, `ensemble.DeviceEnsembleAccumulator`), which the
+    scores are computed from on the host.
+    """
+    _, targets = split_context(series, context_steps)
+    targets = np.asarray(targets)
+    seeds = range(ensemble_size(model, n_members))
+    stream = MemberBlocks(
+        model, series, context_steps, seeds, chunk_t, member_batch, time_first=True
+    )
+    accumulator = DeviceEnsembleAccumulator(stream.n_steps, scale)
+    truth = DeviceSeriesSummary(dx, dy)
+    summaries = [DeviceSeriesSummary(dx, dy) for _ in seeds]
+    errors = [DeviceRmse(stream.n_steps, scale) for _ in seeds]
+    for block in stream:
+        target = to_device(targets[block.first : block.first + block.steps])
+        truth.add(target)
+        accumulator.add_block(block.first, target, _tracked(block, target, summaries, errors))
+    true = truth.summary()
+    rmse_curves, members = [], []
+    for summary, error in zip(summaries, errors):
+        rmse = error.curve()
         scores = {"rmse_mean": float(rmse.mean())}
         for lead in report_leads:
             if 1 <= lead <= len(rmse):
                 scores[f"rmse_lead_{lead}"] = float(rmse[lead - 1])
-        pred = series_summary(member, dx, dy, chunk_t)
+        pred = summary.summary()
         scores.update(compare_summaries(pred, true, nperseg))
         scores.update(
             stability_scores(
@@ -154,15 +154,6 @@ def evaluate(
         )
         rmse_curves.append(rmse)
         members.append(scores)
-        accumulator.add(member)
-
-    score(prediction)
-    del prediction  # one member at a time from here on (~1 GB each)
-    size = ensemble_size(model, n_members)
-    for member in forecast_members(
-        model, series, context_steps, range(1, size), batch_size=member_batch
-    ):
-        score(member)
     ensemble = accumulator.scores()
     scores = {key: member_median([s[key] for s in members]) for key in members[0]}
     scores["crps_skill_horizon"] = float(skill_horizon(ensemble.crps, skill_threshold))
@@ -178,5 +169,16 @@ def evaluate(
         rmse=member_median(rmse_curves),
         members=members,
         ensemble=ensemble,
-        predict_seconds=timed.seconds,
+        predict_seconds=stream.first_member_seconds,
     )
+
+
+def _tracked(
+    block: EnsembleBlock, target, summaries: list[DeviceSeriesSummary], errors: list[DeviceRmse]
+) -> Iterator:
+    """The members' frames of `block`, each also reduced into its member's
+    summary and its error against `target`, the truth's frames."""
+    for frames, summary, error in zip(block, summaries, errors, strict=True):
+        summary.add(frames)
+        error.add(block.first, frames, target)
+        yield frames

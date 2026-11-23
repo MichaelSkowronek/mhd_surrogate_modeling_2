@@ -31,6 +31,16 @@ input onto, a random key that advances with the rollout -- implements
 at a time (the last block may be shorter), up to float rounding (a GPU
 compiles each block length separately).
 
+A model that forecasts on a JAX device may also implement
+`predict_device_blocks(context, n_steps, block_steps)` (a stochastic one
+with `seeds=`, a list): the same blocks, each a `DeviceBlock` that leaves
+the frames on the device, where the scoring reduces them
+(`evaluation.protocol.MemberBlocks`), for every seed in one call. Its
+forecast is `predict`'s (`predict_members`' for several seeds), up to the
+rounding of its last step on the device, e.g. a latent model's decoding:
+the scores of a model are those of the forecast it serves. One without it
+is scored on its `predict` frames, copied to the device.
+
 A model trained iteratively (a neural network) sets `iterative = True` and
 takes `fit(datasets, hooks)`: the `FitHooks` give it what a closed-form fit
 doesn't need -- a validation score to early-stop on, somewhere to log its
@@ -79,6 +89,34 @@ class SurrogateModel(Protocol):
     @classmethod
     def load(cls, directory: Path) -> Self:
         """Rebuild the fitted model from a checkpoint written by `save`."""
+
+
+def _identity(states: Any) -> Any:
+    return states
+
+
+@dataclass(frozen=True)
+class DeviceBlock:
+    """One block of a batch of members' forecasts on the device
+    (`predict_device_blocks`): `states`, (members, t, ...), and `decode`,
+    which maps one member's states, (t, ...), to its frames,
+    (t, C, Nx, Ny). For a model forecasting frames they are the frames and
+    `decode` is the identity; a latent model's are its latents, decoded
+    one member at a time when read (`frames`), so a batch of many members
+    never has all its frames on the device at once."""
+
+    states: Any
+    decode: Callable[[Any], Any] = _identity
+
+    def __len__(self) -> int:
+        return len(self.states)
+
+    @property
+    def steps(self) -> int:
+        return self.states.shape[1]
+
+    def frames(self, member: int) -> Any:
+        return self.decode(self.states[member])
 
 
 def real_size(array: np.ndarray) -> int:

@@ -21,6 +21,13 @@ a codec whose `encode(decode(z)) == z` (POD's is, up to rounding; an
 autoencoder's isn't). For a subclass whose state is exactly the latents it
 returns, the blocks are its one forecast exactly.
 
+Scored, the forecast stays on the device (`predict_device_blocks`): its
+latents come from the one call `predict` makes (`predict_members` for
+several seeds; ~2.5 MB for an 837-step member at rank 750, against ~1 GB
+of frames), and each block of them is decoded there when it is read, by
+the codec's `device_decode` if it has one. So the scored forecast is the
+served one up to the decoding's rounding, which nothing feeds back from.
+
 A latent model trained iteratively (`iterative = True`: a network) gets
 the training entry point's `FitHooks` (`base.py`) and passes them on to
 `fit_latents`. A generative one (`stochastic = True`) builds on
@@ -37,9 +44,10 @@ from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Self
 
+import jax.numpy as jnp
 import numpy as np
 
-from mhd_surrogate.models.base import CHECKPOINT_META, FitHooks
+from mhd_surrogate.models.base import CHECKPOINT_META, DeviceBlock, FitHooks
 from mhd_surrogate.models.codec import Codec, load_codec
 from mhd_surrogate.training.mlflow_codec import load_logged_codec
 
@@ -131,6 +139,28 @@ class LatentSurrogate:
             window = np.concatenate([window, block])[-self.window :]
             yield self.codec.decode(block)
 
+    def predict_device_blocks(
+        self, context: np.ndarray, n_steps: int, block_steps: int
+    ) -> Iterator[DeviceBlock]:
+        """`predict`'s forecast on the device, `block_steps` frames at a
+        time: its latents in one call, decoded there a block at a time when
+        read."""
+        latents = self.forecast_latents(self._encode_window(context), n_steps)
+        yield from self._device_blocks(np.asarray(latents)[None], block_steps)
+
+    def _device_blocks(self, latents: np.ndarray, block_steps: int) -> Iterator[DeviceBlock]:
+        """(members, n_steps, ...) latents as `DeviceBlock`s of
+        `block_steps` steps, decoded on the device when read."""
+        if block_steps < 1:
+            raise ValueError(f"block_steps must be >= 1, got {block_steps}")
+        latents = jnp.asarray(latents, dtype=jnp.float32)
+        decode = getattr(self.codec, "device_decode", None) or self._decode_on_host
+        for start in range(0, latents.shape[1], block_steps):
+            yield DeviceBlock(latents[:, start : start + block_steps], decode)
+
+    def _decode_on_host(self, latents) -> jnp.ndarray:
+        return jnp.asarray(self.codec.decode(np.asarray(latents)), dtype=jnp.float32)
+
     def _encode_window(self, context: np.ndarray) -> np.ndarray:
         self._check_fitted()
         if len(context) < self.window:
@@ -218,6 +248,16 @@ class StochasticLatentSurrogate(LatentSurrogate):
         for k in range(1, len(latents)):
             frames[k] = self.codec.decode(latents[k])
         return frames
+
+    def predict_device_blocks(
+        self, context: np.ndarray, n_steps: int, block_steps: int, seeds: Sequence[int]
+    ) -> Iterator[DeviceBlock]:
+        """The forecasts for `seeds` on the device, `block_steps` frames at
+        a time: their latents in one `sample_latents` call, as `predict`
+        (one seed) or `predict_members` samples them, decoded there a block
+        and a member at a time when read."""
+        latents = self.sample_latents(self._encode_window(context), n_steps, list(seeds))
+        yield from self._device_blocks(latents, block_steps)
 
     def predict_blocks(
         self, context: np.ndarray, n_steps: int, block_steps: int, seed: int = 0

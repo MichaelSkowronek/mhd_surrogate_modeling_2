@@ -13,6 +13,10 @@ canonical model's gate (`gate.py`) and
 `scripts/evaluation/check_rollout_stability.py`; kept out of
 `stability.py`, which early stopping imports, so the DVC `train` stage
 doesn't depend on it.
+
+The rollout checks reduce each block on the device as it comes
+(`rollout_device_blocks`): a model with `predict_device_blocks` leaves its
+frames there, any other's are copied over, a block at a time.
 """
 
 from __future__ import annotations
@@ -20,14 +24,15 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 
+import jax
 import numpy as np
 
 from mhd_surrogate.evaluation.protocol import ForecastModel, is_stochastic, predict_member
-from mhd_surrogate.evaluation.quantities import DEFAULT_CHUNK_T
+from mhd_surrogate.evaluation.quantities import DEFAULT_CHUNK_T, to_device
 from mhd_surrogate.evaluation.stability import (
     QUANTITIES,
+    DeviceQuantities,
     block_means,
-    energy_and_enstrophy,
     first_failing_step,
 )
 
@@ -84,6 +89,31 @@ def _restarted(
         yield block
 
 
+def rollout_device_blocks(
+    model: ForecastModel, context: np.ndarray, n_steps: int, block_steps: int, seed: int = 0
+) -> Iterator[jax.Array]:
+    """`rollout_blocks`' forecast on the device, a block at a time: a model
+    with `predict_device_blocks` leaves its frames there (its `predict`
+    forecast, which its `predict_blocks` streams up to rounding), any
+    other's blocks are copied over."""
+    if not hasattr(model, "predict_device_blocks"):
+        for block in rollout_blocks(model, context, n_steps, block_steps, seed=seed):
+            yield to_device(block)
+        return
+    if block_steps < 1:
+        raise ValueError(f"block_steps must be >= 1, got {block_steps}")
+    window = np.asarray(context[len(context) - model.window :])
+    seeded = {"seeds": [seed]} if is_stochastic(model) else {}
+    sizes = [min(block_steps, n_steps - start) for start in range(0, n_steps, block_steps)]
+    blocks = model.predict_device_blocks(window, n_steps, block_steps, **seeded)
+    for n, block in zip(sizes, blocks, strict=True):
+        frames = block.frames(0)
+        expected = (n, *window.shape[1:])
+        if len(block) != 1 or tuple(frames.shape) != expected:
+            raise ValueError(f"model yielded a block of shape {frames.shape}, expected {expected}")
+        yield frames
+
+
 def rollout_block_means(
     model: ForecastModel,
     context: np.ndarray,
@@ -95,14 +125,21 @@ def rollout_block_means(
     seed: int = 0,
 ) -> dict[str, np.ndarray]:
     """Block means of the energy and enstrophy of an `n_steps` rollout from
-    `context` (`rollout_blocks`; a stochastic model's sample for `seed`),
-    one value per `block_steps`-step block (the last may be shorter), for
-    rollouts longer than a dataset."""
-    means = {q: [] for q in QUANTITIES}
-    for block in rollout_blocks(model, context, n_steps, block_steps, seed=seed):
-        for quantity, values in energy_and_enstrophy(block, dx, dy, chunk_t).items():
-            means[quantity].append(values.mean())
-    return {q: np.array(values) for q, values in means.items()}
+    `context` (`rollout_device_blocks`; a stochastic model's sample for
+    `seed`), one value per `block_steps`-step block (the last may be
+    shorter), for rollouts longer than a dataset. Each block is reduced on
+    the device, `chunk_t` steps at a time."""
+    quantities = DeviceQuantities(dx, dy)
+    sizes = []
+    for block in rollout_device_blocks(model, context, n_steps, block_steps, seed=seed):
+        for start in range(0, len(block), chunk_t):
+            quantities.add(block[start : start + chunk_t])
+        sizes.append(len(block))
+    edges = np.cumsum([0, *sizes])
+    return {
+        q: np.array([values[a:b].mean() for a, b in zip(edges[:-1], edges[1:])])
+        for q, values in quantities.series().items()
+    }
 
 
 @dataclass(frozen=True)
@@ -154,7 +191,10 @@ def rollout_stability(
     """Roll `model` out for `n_steps` from `context` (`rollout_block_means`;
     a stochastic model's sample for `seed`) and compare its block means
     with those of `targets`, the scored steps that follow the context."""
-    truth = energy_and_enstrophy(targets, dx, dy, chunk_t)
+    truth = DeviceQuantities(dx, dy)
+    for start in range(0, targets.shape[0], chunk_t):
+        truth.add(to_device(targets[start : start + chunk_t]))
+    truth = truth.series()
     return RolloutStability(
         blocks=rollout_block_means(model, context, n_steps, block_steps, dx, dy, chunk_t, seed),
         reference={q: block_means(truth[q], block_steps) for q in QUANTITIES},

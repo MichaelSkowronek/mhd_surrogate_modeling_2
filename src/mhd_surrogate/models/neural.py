@@ -52,7 +52,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from mhd_surrogate.models.base import CHECKPOINT_META, FitHooks
+from mhd_surrogate.models.base import CHECKPOINT_META, DeviceBlock, FitHooks
 from mhd_surrogate.training.trainer import TrainerConfig, WindowSampler, train
 
 log = logging.getLogger(__name__)
@@ -374,13 +374,21 @@ class AutoregressiveSurrogate:
         padded, on the device), so the blocks are one rollout: restarting
         from the output would normalize it again, off by rounding that a
         long rollout amplifies."""
+        for block in self.predict_device_blocks(context, n_steps, block_steps):
+            yield np.asarray(block.states[0])
+
+    def predict_device_blocks(
+        self, context: np.ndarray, n_steps: int, block_steps: int
+    ) -> Iterator[DeviceBlock]:
+        """`predict_blocks`' blocks left on the device, where the scoring
+        reduces them."""
         window = self._input_window(context)
         dtype = DTYPES[self.compute_dtype]
         for start in range(0, n_steps, block_steps):
             n = min(block_steps, n_steps - start)
             predictions = _forecast(self.network, self.frame, window, n, dtype)
             window = jnp.concatenate([window, predictions])[-self.window :]
-            yield self._output(predictions)
+            yield DeviceBlock(self._device_output(predictions)[None])
 
     def _input_window(self, context: np.ndarray) -> jax.Array:
         """The last `window` context frames as the network sees them."""
@@ -392,12 +400,15 @@ class AutoregressiveSurrogate:
         )
 
     def _output(self, predictions: jax.Array) -> np.ndarray:
+        return np.asarray(self._device_output(predictions))
+
+    def _device_output(self, predictions: jax.Array) -> jax.Array:
         # Cropped, denormalized and the constant pixels set to exactly their
         # training value (normalizing and back is off by rounding) on the
         # device, so only the result (~1 GB for a whole validation forecast)
-        # is copied to the host.
+        # is copied to the host, if at all.
         frames = self.denormalize(crop(predictions, self.frame_shape[1:]))
-        return np.asarray(jnp.where(self.constant, self.constant_values, frames))
+        return jnp.where(self.constant, self.constant_values, frames)
 
     def parameter_count(self) -> int:
         """The network's weights."""

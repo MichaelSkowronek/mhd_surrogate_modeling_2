@@ -12,12 +12,12 @@ stored checkpoint instead of retraining the model.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 
 import numpy as np
 
 from mhd_surrogate.evaluation.metrics import (
-    CrpsAccumulator,
+    DeviceCrpsAccumulator,
     member_median,
     selection_score,
     skill_horizon,
@@ -25,14 +25,14 @@ from mhd_surrogate.evaluation.metrics import (
 )
 from mhd_surrogate.evaluation.protocol import (
     ForecastModel,
+    MemberBlocks,
     ensemble_size,
-    forecast_members,
     split_context,
 )
-from mhd_surrogate.evaluation.quantities import DEFAULT_CHUNK_T
+from mhd_surrogate.evaluation.quantities import DEFAULT_CHUNK_T, to_device
 from mhd_surrogate.evaluation.stability import (
     QUANTITIES,
-    energy_and_enstrophy,
+    DeviceQuantities,
     stability_scores,
 )
 
@@ -58,30 +58,32 @@ def selection_scores(
     combination `selection_score` (of this forecast alone; `RunSelection`
     adds the stable fraction) and the forecast's length, `forecast_steps`.
     Cheap enough to run during training (early stopping, the
-    hyperparameter search; the stability check adds ~3 s to an 837-step
-    validation forecast); `evaluate` scores the final model in full.
+    hyperparameter search); `evaluate` scores the final model in full.
+    The forecast is scored on the device as it streams, `chunk_t` lead
+    times at a time (`protocol.MemberBlocks`), so its frames never reach
+    the host.
 
     A stochastic model is scored as an ensemble of `members` (seeds 0, 1,
     ..., the same at every validation; a deterministic model has one
     member, whatever `members`), sampled `member_batch` per call where the
-    model can (`protocol.forecast_members`): the skill horizon and
-    tie-break on the ensemble's CRPS, each stability score the median over
-    the members (`metrics.member_median`), and `members` and
-    `stable_members` (how many are stable over the whole forecast), which
-    `RunSelection` pools into the stable fraction."""
+    model can: the skill horizon and tie-break on the ensemble's CRPS, each
+    stability score the median over the members (`metrics.member_median`),
+    and `members` and `stable_members` (how many are stable over the whole
+    forecast), which `RunSelection` pools into the stable fraction."""
     _, targets = split_context(series, context_steps)
-    targets = np.asarray(targets)
-    truth = energy_and_enstrophy(targets, dx, dy, chunk_t)
-    crps = CrpsAccumulator(targets, scale, chunk_t)
-    stability = []
     seeds = range(ensemble_size(model, members))
-    for member in forecast_members(model, series, context_steps, seeds, member_batch):
-        crps.add(member)
-        stability.append(
-            stability_scores(
-                energy_and_enstrophy(member, dx, dy, chunk_t), truth, block_steps, max_ratio
-            )
-        )
+    stream = MemberBlocks(model, series, context_steps, seeds, chunk_t, member_batch)
+    crps = DeviceCrpsAccumulator(stream.n_steps, scale)
+    truth = DeviceQuantities(dx, dy)
+    quantities = [DeviceQuantities(dx, dy) for _ in seeds]
+    for block in stream:
+        target = to_device(targets[block.first : block.first + block.steps])
+        truth.add(target)
+        crps.add_block(block.first, target, _tracked(block, quantities))
+    truth_series = truth.series()
+    stability = [
+        stability_scores(q.series(), truth_series, block_steps, max_ratio) for q in quantities
+    ]
     curve = crps.crps()
     n_steps = len(curve)
     skill = skill_horizon(curve, skill_threshold)
@@ -99,6 +101,13 @@ def selection_scores(
         "members": float(len(stability)),
         "stable_members": float(sum(s["stable_steps"] >= n_steps for s in stability)),
     }
+
+
+def _tracked(members: Iterable, quantities: list[DeviceQuantities]) -> Iterator:
+    """`members`' frames, each also added to its member's `quantities`."""
+    for frames, tracked in zip(members, quantities, strict=True):
+        tracked.add(frames)
+        yield frames
 
 
 class RunSelection:

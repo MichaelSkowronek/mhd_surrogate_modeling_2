@@ -64,13 +64,24 @@
 #   scored like the ensemble above. 2, the fewest the CRPS is unbiased from,
 #   at twice a single forecast's cost; the stable fraction pools them (2
 #   members x 5 validations).
-# member_batch: members sampled per call by a model that can batch them
-#   (`predict_members`), in the scoring and in the validations: throughput
-#   on a GPU with room to spare, 1 = one member per call. Batching can
-#   change float rounding, so it is part of what reproduces an ensemble's
-#   scores (a DVC param once a stochastic model is canonical, like
-#   ensemble_size and monitor_members; none can change a deterministic
-#   model's).
+# member_batch: members sampled per call in the scoring by a model that can
+#   batch them (`predict_members`, `predict_device_blocks`), 1 = one member
+#   per call. Batching can change float rounding, which a long forecast
+#   amplifies, and a member is the one served for its seed only when
+#   sampled alone on the serving device, so the scoring stays at 1. It is
+#   part of what reproduces an ensemble's scores (a DVC param once a
+#   stochastic model is canonical, like ensemble_size and monitor_members;
+#   none can change a deterministic model's).
+# monitor_batch: the same for the validations during training (early
+#   stopping, the search), where throughput matters and a member needn't be
+#   the served one: the members of a validation are sampled in one call up
+#   to this many. Measured for latent flow matching on the RTX 3060
+#   (2026-11-23): a step of 1 member takes 1.2 ms, of 2 members 2.0 ms, of
+#   32 members 4.7 ms, of 64 members 4.8 ms, so 32 cost hardly more than 2
+#   (16 starts x 2 members, the multi-start validation planned, would be one
+#   call). Part of what reproduces an iterative model's early stopping, so a
+#   DVC param of the train stage once a stochastic model is canonical; 1
+#   reproduces the validations of runs before it.
 #
 # tie_break_lead: candidates are ranked by stable steps, then by stable
 #   fraction, then by skill horizon, ties broken by the CRPS at this lead
@@ -132,6 +143,7 @@ stability:
 ensemble_size: 8
 monitor_members: 2
 member_batch: 1
+monitor_batch: 32
 tie_break_lead: 10
 gate:
   rollout_steps: 3000

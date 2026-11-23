@@ -1907,8 +1907,9 @@ neither achievable nor the only thing worth measuring.
   divergence-free on this grid, so the target's own value is the reference, not
   zero), and the log-spectral distance of the x and y spectra. A model that
   regresses toward the mean keeps a modest pointwise error but loses the small
-  scales, which these catch. They are computed in chunks, so a long series is
-  never held in float64 at once.
+  scales, which these catch. They are computed from per-step quantities the
+  forecast is reduced to on the device as it streams (see "On the device"
+  below).
 - *Stability* (`stability.py`): how long does the forecast stay bounded?
   The forecast is cut into 100-step blocks, and a block fails when its mean
   kinetic energy or enstrophy exceeds 2x the truth's largest block mean
@@ -1919,8 +1920,9 @@ neither achievable nor the only thing worth measuring.
   The truth's own block means vary by ~5% (energy) and ~18% (enstrophy) on
   the validation dataset, so a 2x excess is a blow-up, not noise. The check
   is one-sided: a forecast that damps toward a smooth state is bounded, just
-  wrong, and the guardrails below judge that. It costs ~3 s per forecast,
-  cheap enough for every validation during training.
+  wrong, and the guardrails below judge that. Its energy and enstrophy are
+  reduced on the device with the rest, cheap enough for every validation
+  during training.
 - *Long horizon, in time* (`diagnostics.temporal_scores`): the spatial scores
   look at each snapshot, so they can't see a forecast that has the right
   structure at every instant but the wrong dynamics. The EDA's most robust
@@ -1981,7 +1983,10 @@ validation dataset (a rounding error would be ~1e-7). A model whose state is
 more than its last frames -- a recurrent or reservoir network's hidden
 state, a generative model's random key -- implements `predict_blocks`, or
 its long rollouts would quietly be a different forecast from the one it's
-scored on. The test dataset is refused, like in the forecast videos.
+scored on. The check reduces each block on the device as it comes
+(`rollout_device_blocks`): a JAX model's never leaves it
+(`predict_device_blocks`, see "On the device"), any other's is copied
+over. The test dataset is refused, like in the forecast videos.
 
 **Ensembles** (`protocol.py`, `ensemble.py`). The deterministic models
 so far have one answer per context; a generative surrogate (flow matching,
@@ -2015,10 +2020,18 @@ a batch must be the sample for its own seed whatever else is in the batch
 (randomness drawn per seed, not split from a shared key), so batching only
 changes throughput -- up to float rounding, which GPU kernels can vary with
 the batch shape, so the batch size is part of what reproduces an
-ensemble's scores. A model without it gets one call per member.
+ensemble's scores. A model without it gets one call per member. The
+scoring stays at one, since a member is the one served for its seed only
+when sampled alone (see "Latent flow matching"). The validations during
+training don't need the served members, only their scores, so they batch
+theirs (`evaluation.monitor_batch`, 32): a flow-matching step of 2
+members costs 2.0 ms against 1.2 ms for one, of 32 members 4.7 ms (RTX
+3060).
 
-Members are streamed one at a time (an 837-step member is ~1 GB): the
-pairwise terms use the cycle of members, consecutive pairs plus the one
+The members advance through the forecast together, a block of lead times
+at a time (an 837-step member is ~1 GB; the device holds a block of the
+members being compared, see "On the device"), and the pairwise terms use
+the cycle of members, consecutive pairs plus the one
 from the last back to the first, each an independent pair, so they're
 unbiased like all M (M - 1) / 2 pairs, with some more variance. Like all
 pairs, and unlike the consecutive ones alone, the cycle keeps the CRPS from
@@ -2030,6 +2043,65 @@ would look skillful. MLflow gets the per-lead `crps` curve (and `spread`,
 `seed` as a parameter next to `n_steps`, so a server can sample an ensemble
 one call per seed. How an ensemble is ranked is in "How candidates are
 ranked".
+
+**On the device** (2026-11-23). Every forecast is scored where it is
+produced: as it streams, a block of lead times at a time
+(`protocol.MemberBlocks`, `rollout.rollout_device_blocks`), each block
+is reduced on the device to what the scores need -- per step its energy,
+enstrophy, RMS divergence and domain-mean velocity and the block's
+spectra (`stability.DeviceQuantities`, `diagnostics.DeviceSeriesSummary`),
+per lead time the members' errors and pairwise terms
+(`metrics.DeviceCrpsAccumulator`, `metrics.DeviceRmse`,
+`ensemble.DeviceEnsembleAccumulator`) -- and only those come back; the
+scores are computed from them on the host in float64, as before. A JAX
+model implements `predict_device_blocks`, so its frames never reach the
+host: the U-Net streams its frames on the device, and a latent model
+keeps its latents there (2.5 MB for an 837-step member at rank 750,
+against ~1 GB of frames) and decodes a block of them when it's read
+(`PODCodec.device_decode`). Either way the forecast is the one the
+model's `predict` (`predict_members`) call made before, the same samples
+bit for bit (only the decoding rounds differently). Other models (Hankel
+DMD, the baselines) are scored on their `predict` frames, copied to the
+device a block at a time.
+
+It used to be the other way round: a forecast was copied to the host and
+scored there in float64 NumPy. A 3000-step flow-matching rollout took
+16.5 s of which 3.6 s were the sampling on the GPU (in one call or in
+100-step blocks alike, and with or without deterministic ops), 5.1 s
+decoding the latents on the host and 5.9 s the float64 energy and
+enstrophy; decoded and reduced on the device, those last two take 0.2 s.
+
+The reductions run in float32. Against the float64 NumPy versions, which
+stay as the reference the tests compare them with, they agree to ~1e-7
+relative on the validation data (energy 1.5e-7, enstrophy 2.5e-7, RMS
+divergence 1.3e-7, spectra 3e-7 in log10, on the GPU and on the CPU
+alike), with two exceptions handled explicitly. The domain-mean `u_x` is
+~1 and varies by ~0.4% over time, which the drift scores measure: one
+float32 mean would be off by 5e-5 of that variation, so it is a float32
+reference plus a float32 correction summed in float64 (good to ~1e-7 of
+that variation).
+And a GPU computes a float32 matmul in TF32 by default, whose 10-bit
+mantissa put the decoded frames' energy 2e-4 off: the decoding asks for
+full float32 (`jax.lax.Precision.HIGHEST`), which agrees with the host's
+decoding to ~1e-5 of the field's std. Re-scored this way, with the same
+forecasts, the kept checkpoints' scores moved by at most 6.6e-6 relative
+(latent_linear; the flow-matching runs, the U-Net and Hankel DMD by at most
+2.5e-6), besides drift offsets near zero (~0.001-0.002 truth stds, three
+flow-matching members), which moved by ~3e-8 truth stds. The time per
+scoring on the validation dataset, main's NumPy scoring against the device
+scoring (warm; RTX 3060, deterministic ops), for a flow-matching model of
+8 members in the final scoring and 2 in a validation during training:
+
+| | final scoring | validation | 3000-step rollout |
+|---|---|---|---|
+| Hankel DMD | 33.9 s -> 1.7 s | 6.2 s -> 1.5 s | 13.1 s -> 6.3 s |
+| latent_linear | 40.4 s -> 0.7 s | 8.8 s -> 0.4 s | 19.8 s -> 1.0 s |
+| U-Net | 41.4 s -> 5.3 s | 10.1 s -> 5.1 s | 27.6 s -> 17.2 s |
+| latent flow (run 1) | 184.8 s -> 11.2 s | 15.1 s -> 2.5 s (2.1 s batched) | 21.6 s -> 4.1 s |
+
+What is left is mostly the forecast itself: Hankel DMD's is computed on
+the host, the U-Net's forward pass takes 5.7 ms a step, and a latent-flow
+member 1.2 ms a step alone (8 network evaluations).
 
 **How big a score is "perfect"?** Scoring a different realization of the same
 flow (train datasets 0 and 10 against the validation targets) -- right

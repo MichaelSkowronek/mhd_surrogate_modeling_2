@@ -1,7 +1,10 @@
+import time
+
 import numpy as np
 import pytest
 
 from mhd_surrogate.evaluation.protocol import (
+    MemberBlocks,
     check_readable,
     check_window,
     ensemble_size,
@@ -10,6 +13,7 @@ from mhd_surrogate.evaluation.protocol import (
     predict_member,
     split_context,
 )
+from mhd_surrogate.models.base import DeviceBlock
 
 
 class Persistence:
@@ -235,3 +239,119 @@ def test_ensemble_size_is_one_for_a_deterministic_model():
     assert ensemble_size(Persistence(), 8) == 1
     with pytest.raises(ValueError, match="n_members"):
         ensemble_size(Sampler(), 0)
+
+
+def blocks_as_arrays(stream):
+    """Every block of a `MemberBlocks` stream, (first, [each member's frames])."""
+    return [(b.first, [np.asarray(f) for f in b]) for b in stream]
+
+
+def test_member_blocks_stream_the_members_forecast_members_makes():
+    series = np.random.default_rng(0).normal(size=(12, 2, 3, 3)).astype(np.float32)
+    members = list(forecast_members(BatchSampler(), series, 4, [0, 1, 2]))
+
+    stream = MemberBlocks(BatchSampler(), series, 4, [0, 1, 2], block_steps=3)
+    blocks = blocks_as_arrays(stream)
+
+    assert len(stream) == 3 and stream.n_steps == 8
+    assert [first for first, _ in blocks] == [0, 3, 6]
+    for k, member in enumerate(members):
+        np.testing.assert_allclose(np.concatenate([b[k] for _, b in blocks]), member, rtol=1e-6)
+
+
+@pytest.mark.parametrize(
+    "batch_size, time_first, calls",
+    [(2, False, [[0, 1], [2, 3], [4]]), (2, True, [[1, 2], [3, 4]]), (1, False, [])],
+)
+def test_member_blocks_batch_the_members_where_the_model_can(batch_size, time_first, calls):
+    model = BatchSampler()
+
+    stream = MemberBlocks(
+        model, np.zeros((6, 2, 3, 3)), 3, range(5), 2, batch_size, time_first=time_first
+    )
+    blocks = blocks_as_arrays(stream)
+
+    assert model.batches == calls
+    assert model.seeds == ([0] if time_first else []) + ([0, 1, 2, 3, 4] if not calls else [])
+    assert all(len(members) == 5 for _, members in blocks)
+
+
+def test_member_blocks_time_the_first_member_alone():
+    class Slow(Sampler):
+        def predict(self, context, n_steps, seed=0):
+            if seed == 0:
+                time.sleep(0.05)
+            return super().predict(context, n_steps, seed)
+
+    stream = MemberBlocks(Slow(), np.zeros((6, 2, 3, 3)), 3, range(3), time_first=True)
+    blocks_as_arrays(stream)
+
+    assert 0.05 <= stream.first_member_seconds < 1.0
+    assert MemberBlocks(Slow(), np.zeros((6, 2, 3, 3)), 3, range(3)).first_member_seconds == 0.0
+
+
+class DeviceSampler(Sampler):
+    """A stochastic model that forecasts on the device: its states are the
+    member's offsets, decoded into frames when read."""
+
+    def __init__(self):
+        super().__init__()
+        self.calls = []
+
+    def predict_device_blocks(self, context, n_steps, block_steps, seeds):
+        self.calls.append(list(seeds))
+        for start in range(0, n_steps, block_steps):
+            n = min(block_steps, n_steps - start)
+            states = np.broadcast_to(np.array(seeds, np.float32)[:, None], (len(seeds), n))
+            yield DeviceBlock(states, lambda s, last=context[-1]: last + s[:, None, None, None])
+
+
+def test_member_blocks_take_a_device_models_blocks_seeds_and_all():
+    model = DeviceSampler()
+
+    blocks = blocks_as_arrays(MemberBlocks(model, np.zeros((7, 2, 3, 3)), 3, range(3), 3, 2))
+
+    assert model.calls == [[0, 1], [2]] and model.seeds == []
+    assert [first for first, _ in blocks] == [0, 3]
+    assert [m.shape for m in blocks[1][1]] == [(1, 2, 3, 3)] * 3
+    assert [float(m[0, 0, 0, 0]) for m in blocks[0][1]] == [0.0, 1.0, 2.0]
+
+
+def test_member_blocks_check_what_a_model_gives():
+    class Short(DeviceSampler):
+        def predict_device_blocks(self, context, n_steps, block_steps, seeds):
+            yield from list(super().predict_device_blocks(context, n_steps, block_steps, seeds))[:1]
+
+    class Misshapen(DeviceSampler):
+        def predict_device_blocks(self, context, n_steps, block_steps, seeds):
+            for block in super().predict_device_blocks(context, n_steps, block_steps, seeds):
+                yield DeviceBlock(block.states, lambda s: np.zeros((len(s), 1, 3, 3)))
+
+    class Long(DeviceSampler):
+        def predict_device_blocks(self, context, n_steps, block_steps, seeds):
+            yield from super().predict_device_blocks(context, n_steps + 1, block_steps, seeds)
+
+    series = np.zeros((7, 2, 3, 3))
+    with pytest.raises(ValueError, match="more blocks than the forecast's 2"):
+        blocks_as_arrays(MemberBlocks(Long(), series, 3, [0], 2))
+    with pytest.raises(ValueError, match="block from lead 3"):
+        blocks_as_arrays(MemberBlocks(Short(), series, 3, [0], 2))
+    with pytest.raises(ValueError, match="shape"):
+        blocks_as_arrays(MemberBlocks(Misshapen(), series, 3, [0], 2))
+    with pytest.raises(ValueError, match="shape"):
+        blocks_as_arrays(MemberBlocks(Recorder(window=1), series, 3, [0]))
+
+
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        ({"seeds": []}, "no seeds"),
+        ({"block_steps": 0}, "block_steps"),
+        ({"batch_size": 0}, "batch_size"),
+        ({"context_steps": 7}, "context_steps"),
+    ],
+)
+def test_member_blocks_reject_what_cannot_be_streamed(kwargs, match):
+    arguments = {"seeds": [0], "context_steps": 3, **kwargs}
+    with pytest.raises(ValueError, match=match):
+        MemberBlocks(Sampler(), np.zeros((7, 2, 3, 3)), **arguments)
