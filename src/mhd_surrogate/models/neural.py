@@ -396,6 +396,14 @@ class AutoregressiveSurrogate:
             window = jnp.concatenate([window, predictions])[-self.window :]
             yield DeviceBlock(self._device_output(predictions)[None])
 
+    # The most forecasts a `predict_device_batch` call holds, a bound on the
+    # validations' `evaluation.monitor_batch` (`protocol.StartBlocks`): a
+    # batch's blocks are its frames (~37 MB a forecast and 32 steps), and the
+    # network's activations grow with it. On the RTX 3060 (12 GB) the U-Net
+    # baseline forecast 16 starts per call; 31 ran out of memory
+    # (2026-11-25).
+    max_device_batch = 16
+
     def predict_device_batch(
         self, contexts: np.ndarray, n_steps: int, block_steps: int
     ) -> Iterator[DeviceBlock]:

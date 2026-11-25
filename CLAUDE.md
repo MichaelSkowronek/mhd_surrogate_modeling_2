@@ -72,15 +72,20 @@ conventions below; it shifts which tools are worth reaching for at all.
   unstable candidate by stable steps, then by its peak ratio (how far its
   energy or enstrophy strayed, lower first) instead of skill. The skill is
   measured from many starts (`evaluation.multistart`,
-  `protocol.skill_starts`): a forecast from every 40 frames from the
-  context's end, as many as are followed by 237 frames of truth (16 on the
+  `protocol.skill_starts`): a forecast from every 20 frames from the
+  context's end, as many as are followed by 237 frames of truth (31 on the
   validation dataset), each scored against the truth at the same frames;
   the horizon is that of the CRPS averaged per lead over the starts,
   capped at 237, and at the cap ties are broken by its mean over the 237
-  leads instead of lead 10. One trajectory's skill swings on its own
-  events (frame 80 is the hardest start for every flow-matching model),
-  so the forecast from the context's end only reports its skill, under
-  the old names (`crps_skill_horizon`); the stability scores stay on it.
+  leads instead of lead 10. 20, not 40: every start adds its own members'
+  draws, halving the per-epoch skill's noise, and the stride is no whole
+  period of the flow's coherent oscillation (24.8-36.3 frames on the
+  readable datasets), so the starts' phases spread on any dataset,
+  including the test dataset, whose period can't be looked at. One
+  trajectory's skill swings on its own events (frame 80 is the hardest
+  start for every flow-matching model), so the forecast from the
+  context's end only reports its skill, under the old names
+  (`crps_skill_horizon`); the stability scores stay on it.
   The rule, not a list of frames, defines the starts, so the test dataset
   gets its own without being read before the final evaluation. A
   generative model is judged as an ensemble (8 members when scored, 4 at

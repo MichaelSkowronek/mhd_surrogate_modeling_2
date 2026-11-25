@@ -24,7 +24,7 @@ copies them to the host) and otherwise from its `predict` calls, copied to
 the device a block at a time.
 
 The skill is measured from many starts of a dataset, not only from the end
-of its context (`skill_starts`, CLAUDE.md "Data analysis"): every 40 frames
+of its context (`skill_starts`, CLAUDE.md "Data analysis"): every 20 frames
 from there, each forecast for the same number of lead times and scored
 against the truth at the same frames. `StartBlocks` streams those
 forecasts like `MemberBlocks`, a start's members advancing together; a
@@ -100,8 +100,8 @@ def skill_starts(n_frames: int, context_steps: int, stride: int, leads: int) -> 
     """The frames the multi-start skill forecasts from: every `stride`
     frames from `context_steps` (the end of the context, the first scored
     frame), as many as are followed by `leads` frames of truth. On the
-    validation dataset (917 frames, context 80, stride 40, 237 leads) that
-    is 16 starts, frames 80 to 680, the last one's forecast ending with the
+    validation dataset (917 frames, context 80, stride 20, 237 leads) that
+    is 31 starts, frames 80 to 680, the last one's forecast ending with the
     dataset. A rule rather than a list, so it gives the test dataset its
     starts without it being read before the final evaluation."""
     for name, value in (("context_steps", context_steps), ("stride", stride), ("leads", leads)):
@@ -363,7 +363,9 @@ class StartBlocks:
     forecasts a member, a start's seeds `batch_size` per call where the
     model can, unless the model has `predict_device_batch`: then
     `batch_size` trajectories, of several starts, share a call, each
-    start's context passed once with its seeds in the call. That is for
+    start's context passed once with its seeds in the call, at most the
+    model's `max_device_batch` where it has one (what a call of it can hold
+    on the device). That is for
     throughput, the validations during training: batched, a trajectory can
     round differently from its own call, and a long forecast amplifies
     rounding. Starts that share no call are streamed one after another, so
@@ -404,9 +406,8 @@ class StartBlocks:
         self.across_starts = batch_size > 1 and hasattr(model, "predict_device_batch")
         if self.across_starts:
             trajectories = [(k, seed) for k, own in enumerate(seeds) for seed in own]
-            calls = [
-                trajectories[i : i + batch_size] for i in range(0, len(trajectories), batch_size)
-            ]
+            size = min(batch_size, getattr(model, "max_device_batch", batch_size))
+            calls = [trajectories[i : i + size] for i in range(0, len(trajectories), size)]
         else:
             calls = [
                 [(k, seed) for seed in own[i : i + batch_size]]

@@ -2,7 +2,7 @@
 starts.
 
 The multi-start skill (`selection.start_ensembles`) averages a CRPS curve
-over a dataset's starts, every 40 frames of one trajectory of the flow.
+over a dataset's starts, every 20 frames of one trajectory of the flow.
 Neighbouring starts share its events, so their curves aren't independent
 draws; a circular block bootstrap (Politis & Romano 1992) resamples them in
 runs of `block` consecutive starts, wrapping around the last, which keeps
@@ -32,9 +32,10 @@ from mhd_surrogate.evaluation.metrics import capped_skill, skill_horizon
 @dataclass(frozen=True)
 class BlockBootstrap:
     """`resamples` circular block resamples of runs of `block` consecutive
-    starts, drawn from `seed`."""
+    starts, drawn from `seed` (the defaults: configs/evaluation's
+    `multistart.bootstrap`)."""
 
-    block: int = 4
+    block: int = 8
     resamples: int = 1000
     seed: int = 0
 

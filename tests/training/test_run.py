@@ -109,12 +109,12 @@ def test_a_closed_form_model_is_fitted_scored_and_tracked(workspace):
     assert (workspace / "out" / "model" / "model.json").exists()
     # The multi-start skill: its scores, the averaged curve and, as an
     # artifact, every start's curve (210 frames, 4 of context, 20 leads,
-    # every 40 frames: starts 4 to 164).
-    assert scores["val"]["multistart_starts"] == 5
+    # every 20 frames: starts 4 to 184).
+    assert scores["val"]["multistart_starts"] == 10
     curve = client.get_metric_history(run.info.run_id, "val.multistart_crps")
     assert [m.step for m in curve] == list(range(1, 21))
     starts = mlflow.artifacts.load_dict(f"{run.info.artifact_uri}/multistart/val.json")
-    assert starts["starts"] == [4, 44, 84, 124, 164] and starts["members"] == 1
+    assert starts["starts"] == list(range(4, 185, 20)) and starts["members"] == 1
     assert np.mean(starts["crps"], axis=0) == pytest.approx([m.value for m in curve])
     assert mlflow.artifacts.load_dict(f"{run.info.artifact_uri}/multistart/train.a.json")
 
@@ -208,7 +208,7 @@ def test_the_validation_monitor_samples_its_members_monitor_batch_per_call(works
 
     monitor(model)
 
-    assert model.batches == calls  # configs/evaluation: monitor_batch 64
+    assert model.batches == calls  # configs/evaluation: monitor_batch 128
     assert sorted(model.seeds) == [500, 500, 501, 501, 502, 502, 503, 503]
 
 

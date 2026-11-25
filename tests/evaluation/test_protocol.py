@@ -362,8 +362,9 @@ def test_member_blocks_reject_what_cannot_be_streamed(kwargs, match):
 
 def test_skill_starts_are_every_stride_frames_from_the_context_that_fit_the_leads():
     # The validation dataset: 917 frames, the last start's leads end with it.
+    assert skill_starts(917, 80, 20, 237) == list(range(80, 681, 20))
+    assert len(skill_starts(1248, 80, 20, 237)) == 47  # re16k_t400_0
     assert skill_starts(917, 80, 40, 237) == list(range(80, 681, 40))
-    assert len(skill_starts(1248, 80, 40, 237)) == 24  # re16k_t400_0
     assert skill_starts(10, 3, 2, 7) == [3]
 
 
@@ -496,6 +497,17 @@ def test_start_blocks_put_several_starts_in_a_call_for_a_model_that_can():
     alone = starts_as_arrays(StartBlocks(Sampler(), series, [3, 5, 7], 2, seeds, 2))
     for k in range(3):
         np.testing.assert_allclose(joined(blocks, k), joined(alone, k))
+
+
+def test_start_blocks_hold_no_more_trajectories_per_call_than_the_model_can():
+    model = BatchDevice()
+    model.max_device_batch = 3  # what a call of it fits on the device
+
+    stream = StartBlocks(model, make_series(12), [3, 5, 7], 2, [[0, 1], [10, 11], [20, 21]], 2, 8)
+    blocks = starts_as_arrays(stream)
+
+    assert model.calls == [([2, 4], [[0, 1], [10]]), ([4, 6], [[11], [20, 21]])]
+    assert all(len(members) == 2 for _, ensembles in blocks for members in ensembles.values())
 
 
 def test_start_blocks_give_a_deterministic_batch_no_seeds():
