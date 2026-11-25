@@ -29,7 +29,8 @@ What is sampled, in which units:
   the rounding of a round trip through the standardization.
 - Each step's noise is drawn from the member's seed and the step's index
   (`flow.step_noise`), so a member draws the same noise streamed, alone or
-  in a batch (`predict_members`, one vectorized call for all of them).
+  in a batch (`predict_members`, one vectorized call for all of them;
+  `predict_device_batch`, one for the members of several contexts).
 
 The network (`VelocityMLP`): a linear layer from the context and x_t to
 `width` features, `depth` residual blocks (LayerNorm, FiLM from the time
@@ -213,22 +214,40 @@ def latent_flow_loss(
     return flow_matching_loss(network, scales.standardize(context), target, flow_key)
 
 
+def _trajectory(network, scales, window, key, first_step, n_steps, sampling_steps):
+    """`key`'s forecast steps `first_step` onward from `window` (window, r),
+    shape (n_steps, r)."""
+
+    def advance(window, step):
+        noise = step_noise(key, step, window.shape[1:])
+        change = euler_sample(network, scales.standardize(window), noise, sampling_steps)
+        latent = window[-1] + scales.step_rms * change
+        return jnp.concatenate([window[1:], latent[None]]), latent
+
+    _, latents = jax.lax.scan(advance, window, first_step + jnp.arange(n_steps))
+    return latents
+
+
 @eqx.filter_jit
 def _sample(network, scales, window, keys, first_step, n_steps, sampling_steps):
     """Each key's forecast steps `first_step` onward from `window` (window,
     r), shape (len(keys), n_steps, r)."""
 
     def member(key):
-        def advance(window, step):
-            noise = step_noise(key, step, window.shape[1:])
-            change = euler_sample(network, scales.standardize(window), noise, sampling_steps)
-            latent = window[-1] + scales.step_rms * change
-            return jnp.concatenate([window[1:], latent[None]]), latent
-
-        _, latents = jax.lax.scan(advance, window, first_step + jnp.arange(n_steps))
-        return latents
+        return _trajectory(network, scales, window, key, first_step, n_steps, sampling_steps)
 
     return jax.vmap(member)(keys)
+
+
+@eqx.filter_jit
+def _sample_trajectories(network, scales, windows, keys, first_step, n_steps, sampling_steps):
+    """Trajectory k's forecast steps `first_step` onward from `windows[k]`
+    for `keys[k]`, shape (len(keys), n_steps, r)."""
+
+    def trajectory(window, key):
+        return _trajectory(network, scales, window, key, first_step, n_steps, sampling_steps)
+
+    return jax.vmap(trajectory)(windows, keys)
 
 
 class LatentFlow(StochasticLatentSurrogate):
@@ -335,6 +354,28 @@ class LatentFlow(StochasticLatentSurrogate):
             self.sampling_steps,
         )
         return np.asarray(latents).reshape(len(seeds), n_steps, *window.shape[1:])
+
+    def sample_trajectories(
+        self, windows: np.ndarray, n_steps: int, seeds: Sequence[int], first_step: int = 0
+    ) -> np.ndarray:
+        """Every trajectory in one vectorized call, its own window and seed
+        (`StochasticLatentSurrogate.sample_trajectories`)."""
+        if self.network is None:
+            raise RuntimeError(f"{type(self).__name__} is not fitted")
+        windows = np.asarray(windows)
+        if len(windows) != len(seeds):
+            raise ValueError(f"{len(windows)} windows for {len(seeds)} seeds")
+        keys = jnp.stack([jax.random.key(seed) for seed in seeds])
+        latents = _sample_trajectories(
+            self.network,
+            self._scales(),
+            jnp.asarray(windows, dtype=jnp.float32).reshape(len(seeds), self.window, -1),
+            keys,
+            jnp.asarray(first_step),
+            n_steps,
+            self.sampling_steps,
+        )
+        return np.asarray(latents).reshape(len(seeds), n_steps, *windows.shape[2:])
 
     def latent_parameter_count(self) -> int:
         """The network's weights; the latent scales are normalization."""

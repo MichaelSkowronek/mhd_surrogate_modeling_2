@@ -41,6 +41,14 @@ rounding of its last step on the device, e.g. a latent model's decoding:
 the scores of a model are those of the forecast it serves. One without it
 is scored on its `predict` frames, copied to the device.
 
+Such a model may also implement `predict_device_batch(contexts, n_steps,
+block_steps)` (a stochastic one with `seeds=`, a list of seeds per
+context): the forecasts from several contexts in one call, as
+`DeviceBlock`s of all their trajectories, context by context. It is for
+throughput, the multi-start validations during training
+(`evaluation.protocol.StartBlocks`); batched, a forecast can round
+differently from its own call's, so the scoring forecasts each one alone.
+
 A model trained iteratively (a neural network) sets `iterative = True` and
 takes `fit(datasets, hooks)`: the `FitHooks` give it what a closed-form fit
 doesn't need -- a validation score to early-stop on, somewhere to log its

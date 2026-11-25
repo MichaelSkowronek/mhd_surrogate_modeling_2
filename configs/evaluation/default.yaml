@@ -10,7 +10,8 @@
 #
 # skill_threshold: CRPS in units of the training std (for a deterministic
 #   model, a one-member ensemble, its absolute error); the skill horizon is
-#   how many lead steps stay at or below it. On the CRPS rather than a
+#   how many lead steps stay at or below it (the selection rule's: of the
+#   CRPS averaged over the `multistart` starts). On the CRPS rather than a
 #   member's RMSE because pointwise error penalizes a realistic forecast twice
 #   once it has lost the truth's phase -- for missing the truth's features and
 #   for placing its own where the truth has none -- and so favors forecasts
@@ -25,7 +26,39 @@
 #   Persistence stays under it for one step (0.28 at lead 1; an RMSE of 0.51
 #   was just over 0.5), the mean field for none.
 # report_leads: lead times (1-based) also logged as scalars, besides the full
-#   per-step curve; 40 is the longest characteristic period found in the EDA.
+#   per-step curve, for the forecast from the context's end and the
+#   multi-start curve (`multistart_crps_lead_<n>`); 40 is the longest
+#   characteristic period found in the EDA.
+#
+# multistart: the skill the selection rule ranks by (CLAUDE.md, "Data
+#   analysis"; src/mhd_surrogate/evaluation/selection.py's start_ensembles).
+#   A forecast from every `stride` frames from the context's end, as many
+#   as are followed by `leads` frames of truth (16 on the validation
+#   dataset, frames 80-680; 24 on re16k_t400_0), each an ensemble
+#   (`monitor_members` at a validation during training, `ensemble_size`
+#   when scored), scored against the truth at the same frames; its CRPS
+#   averaged per lead over the starts. The horizon is that curve's, capped
+#   at `leads`; ties are broken by the averaged CRPS at `tie_break_lead`
+#   below the cap and by its mean over all `leads` at the cap. One
+#   trajectory's skill swings on its own events: every model's CRPS from
+#   frame 80 has a hump at leads 23-26, which a model ~0.04 better would
+#   clear, jumping from a horizon of ~12 to ~140, and frame 80 is the
+#   hardest of 32 starts for every flow-matching model (horizon 10-12, the
+#   median start's 42-50). Averaged over 16 starts the hump is gone
+#   (largest dip 0.007) and two disjoint halves of them rank the models
+#   alike. 237 = 917 - 680: every start reaches it, so every lead averages
+#   all of them. Past it only the earliest starts would remain, whose curve
+#   differs from the late ones' by ~0.02 at leads 151-200 (~0.01 on the
+#   average, ~50 leads of horizon on flow matching's flat curve), in
+#   opposite directions for the linear and the flow-matching models.
+#   bootstrap: the final scoring's interval of that horizon over the starts
+#   (`_p05`, `_p95`; src/mhd_surrogate/evaluation/bootstrap.py), a circular
+#   block bootstrap of runs of `block` consecutive starts (neighbours share
+#   the trajectory's events), `resamples` resamples drawn from `seed`.
+#   Each start's members have seeds of their own (`ensemble_size` below),
+#   so resampling the starts resamples the members' draws too: the interval
+#   covers which starts and which draws, not which network a refit trains.
+#   Reported, not selected on.
 #
 # stability: how long the forecast stays bounded
 #   (src/mhd_surrogate/evaluation/stability.py). The forecast is cut into
@@ -48,9 +81,16 @@
 #   network.
 #
 # ensemble_size: members a stochastic (generative) model forecasts when it
-#   is scored, seeds 0..n-1. The skill horizon and the ensemble scores (CRPS,
-#   spread vs error; see src/mhd_surrogate/evaluation/ensemble.py) are the
-#   ensemble's, and every score of a single trajectory -- RMSE, physics,
+#   is scored: from the context's end seeds 0..n-1, and from each
+#   `multistart` start seeds of its own, member m of the k-th start (the
+#   context's end the 0th) drawing 1000 k + m
+#   (src/mhd_surrogate/evaluation/protocol.py's start_seeds): one seed at
+#   every start would replay the same noise sequence from each (a step's
+#   noise comes from the seed and the step's index), and run 1's rollout
+#   failures clustered by seed, not by start. The skill horizon and the
+#   ensemble scores (CRPS, spread vs error; see
+#   src/mhd_surrogate/evaluation/ensemble.py) are the ensemble's, and every
+#   score of a single trajectory -- RMSE, physics,
 #   drift, stability -- is the median over its members: each member is one
 #   trajectory as `predict` gives it (the ensemble mean would be smooth and
 #   fail the physics), and no single member, lucky or blown up, decides.
@@ -60,10 +100,19 @@
 #   whatever this says, so it doesn't change their scores.
 # monitor_members: members a stochastic model forecasts at every validation
 #   during training (src/mhd_surrogate/training/run.py's ValidationMonitor:
-#   early stopping, the search), seeds 0..n-1, the same at every validation,
-#   scored like the ensemble above. 2, the fewest the CRPS is unbiased from,
-#   at twice a single forecast's cost; the stable fraction pools them (2
-#   members x 5 validations).
+#   early stopping, the search), from the context's end and from every
+#   `multistart` start, scored like the ensemble above, with seeds of their
+#   own: member m of the k-th start draws 1000 k + 500 + m, the same at
+#   every validation and never a scored member's. Early stopping keeps the
+#   epoch whose members look best, so scoring those again would flatter it:
+#   the kept flow-matching runs' selection seeds (0 and 1, from frame 80)
+#   scored 0.7-1.2 sd better at lead 10 than 31 fresh pairs at the kept
+#   epoch (2026-11-25). 4: with 2, the fewest the CRPS is unbiased
+#   from, one network's multi-start horizon moved by ~19 leads (sd) from
+#   one pair of seeds to the next on flow matching's flat curves (run 1:
+#   62-93 over 8 disjoint pairs), with 4 by ~11, for 6.1 s per validation
+#   instead of 5.0 (run 1, RTX 3060, 2026-11-24). The stable fraction pools
+#   them (4 members x 5 validations).
 # member_batch: members sampled per call in the scoring by a model that can
 #   batch them (`predict_members`, `predict_device_blocks`), 1 = one member
 #   per call. Batching can change float rounding, which a long forecast
@@ -75,18 +124,22 @@
 # monitor_batch: the same for the validations during training (early
 #   stopping, the search), where throughput matters and a member needn't be
 #   the served one: the members of a validation are sampled in one call up
-#   to this many. Measured for latent flow matching on the RTX 3060
-#   (2026-11-23): a step of 1 member takes 1.2 ms, of 2 members 2.0 ms, of
-#   32 members 4.7 ms, of 64 members 4.8 ms, so 32 cost hardly more than 2
-#   (16 starts x 2 members, the multi-start validation planned, would be one
-#   call). Part of what reproduces an iterative model's early stopping, so a
-#   DVC param of the train stage once a stochastic model is canonical; 1
-#   reproduces the validations of runs before it.
+#   to this many, the trajectories of several `multistart` starts together
+#   by a model that can (`predict_device_batch`). Measured for latent flow
+#   matching on the RTX 3060 (2026-11-23): a step of 1 member takes 1.2 ms,
+#   of 2 members 2.0 ms, of 32 members 4.7 ms, of 64 members 4.8 ms, so 64
+#   cost hardly more than 2, and the multi-start skill's 16 starts x 4
+#   members are one call (run 1's validation: 6.1 s, against 7.6 s in
+#   calls of 32). Part of what reproduces an iterative model's
+#   early stopping, so a DVC param of the train stage once a stochastic
+#   model is canonical; 1 samples every member alone, as the validations
+#   before it did.
 #
 # tie_break_lead: candidates are ranked by stable steps, then by stable
-#   fraction, then by skill horizon, ties broken by the CRPS at this lead
-#   (CLAUDE.md, "Data analysis"); early stopping and the hyperparameter
-#   search maximize the four combined (`selection_score`).
+#   fraction, then by the multi-start skill horizon, ties broken by its
+#   averaged CRPS at this lead below the cap (at the cap, its mean over the
+#   `multistart` leads; CLAUDE.md, "Data analysis"); early stopping and the
+#   hyperparameter search maximize the four combined (`selection_score`).
 #
 # gate: the bar the canonical model must still meet when the DVC pipeline
 #   retrains it (src/mhd_surrogate/evaluation/gate.py, the `gate` stage):
@@ -122,7 +175,7 @@
 #   fluctuation energy, a 1% energy error). The stable fraction's limit is
 #   absolute too: stable_fraction >= 0.8, at least 4 of the 5 validations
 #   nearest the kept epoch stable (`stability`'s neighbors; for a stochastic
-#   model 8 of their 10 members), so a refit for that many epochs is likely
+#   model 16 of their 20 members), so a refit for that many epochs is likely
 #   stable as well. Were each epoch stable with
 #   probability p, a p = 0.9 recipe would pass 92% of the time (a limit of
 #   1.0 would reject it 41% of the time by chance), a p = 0.5 one 19%. A
@@ -131,19 +184,28 @@
 #
 # train_datasets: train datasets also scored the same way, logged as
 #   `train.<name>.*` -- a sanity check of the fit and the train/val gap, not
-#   a basis for decisions. One by default (~35 s each); must be a subset of
+#   a basis for decisions, with the same multi-start skill (24 starts on
+#   re16k_t400_0). One by default (Hankel DMD: 15 s on the GPU, against
+#   12 s for the validation dataset); must be a subset of
 #   data.train_datasets.
 final: true
 skill_threshold: 0.32
 report_leads: [1, 10, 40, 100]
+multistart:
+  stride: 40
+  leads: 237
+  bootstrap:
+    block: 4
+    resamples: 1000
+    seed: 0
 stability:
   block_steps: 100
   max_ratio: 2.0
   neighbors: 2
 ensemble_size: 8
-monitor_members: 2
+monitor_members: 4
 member_batch: 1
-monitor_batch: 32
+monitor_batch: 64
 tie_break_lead: 10
 gate:
   rollout_steps: 3000

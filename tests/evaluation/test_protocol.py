@@ -5,13 +5,16 @@ import pytest
 
 from mhd_surrogate.evaluation.protocol import (
     MemberBlocks,
+    StartBlocks,
     check_readable,
     check_window,
     ensemble_size,
     forecast,
     forecast_members,
     predict_member,
+    skill_starts,
     split_context,
+    start_seeds,
 )
 from mhd_surrogate.models.base import DeviceBlock
 
@@ -355,3 +358,212 @@ def test_member_blocks_reject_what_cannot_be_streamed(kwargs, match):
     arguments = {"seeds": [0], "context_steps": 3, **kwargs}
     with pytest.raises(ValueError, match=match):
         MemberBlocks(Sampler(), np.zeros((7, 2, 3, 3)), **arguments)
+
+
+def test_skill_starts_are_every_stride_frames_from_the_context_that_fit_the_leads():
+    # The validation dataset: 917 frames, the last start's leads end with it.
+    assert skill_starts(917, 80, 40, 237) == list(range(80, 681, 40))
+    assert len(skill_starts(1248, 80, 40, 237)) == 24  # re16k_t400_0
+    assert skill_starts(10, 3, 2, 7) == [3]
+
+
+@pytest.mark.parametrize(
+    "args, match",
+    [
+        ((9, 3, 2, 7), "no start for 7 leads: the first, frame 3, needs 10"),
+        ((10, 3, 0, 7), "stride"),
+        ((10, 3, 2, 0), "leads"),
+        ((10, 0, 2, 7), "context_steps"),
+    ],
+)
+def test_skill_starts_reject_a_rule_the_series_cannot_meet(args, match):
+    with pytest.raises(ValueError, match=match):
+        skill_starts(*args)
+
+
+def test_start_seeds_give_each_start_its_own_and_the_validations_other_ones():
+    # Start 0 (the context's end) has seeds 0, 1, ... when scored.
+    assert start_seeds(3, 2) == [[0, 1], [1000, 1001], [2000, 2001]]
+    assert start_seeds(2, 4, monitor=True) == [[500, 501, 502, 503], [1500, 1501, 1502, 1503]]
+    scored = {s for start in start_seeds(24, 500) for s in start}
+    monitored = {s for start in start_seeds(24, 500, monitor=True) for s in start}
+    assert len(scored) == len(monitored) == 24 * 500
+    assert not scored & monitored
+
+
+@pytest.mark.parametrize(
+    "args, match",
+    [
+        ((0, 2, False), "n_starts"),
+        ((3, 0, False), "the scoring has seeds for 1 to 500"),
+        ((3, 501, False), "501 members per start: the scoring"),
+        ((3, 501, True), "a validation has seeds for 1 to 500"),
+    ],
+)
+def test_start_seeds_refuse_members_beyond_their_range(args, match):
+    with pytest.raises(ValueError, match=match):
+        start_seeds(*args)
+
+
+def starts_as_arrays(stream):
+    """Every block of a `StartBlocks` stream: (first, {start index: [each
+    member's frames]})."""
+    return [
+        (b.first, {k: [np.asarray(f) for f in members] for k, members in b.ensembles.items()})
+        for b in stream
+    ]
+
+
+def joined(blocks, k):
+    """Start `k`'s members, each its blocks joined."""
+    pieces = [members[k] for _, members in blocks if k in members]
+    return [np.concatenate([piece[m] for piece in pieces]) for m in range(len(pieces[0]))]
+
+
+def test_start_blocks_stream_each_starts_members_as_its_own_forecast_makes_them():
+    series = np.random.default_rng(0).normal(size=(14, 2, 3, 3)).astype(np.float32)
+
+    seeds = [[0, 1, 2], [10, 11, 12]]  # each start its own
+
+    stream = StartBlocks(BatchSampler(), series, [4, 6], 5, seeds, block_steps=2)
+    blocks = starts_as_arrays(stream)
+
+    assert stream.n_steps == 5 and len(stream) == 6  # 3 blocks for each start in turn
+    assert [(first, list(members)) for first, members in blocks] == [
+        (0, [0]),
+        (2, [0]),
+        (4, [0]),
+        (0, [1]),
+        (2, [1]),
+        (4, [1]),
+    ]
+    for k, start in enumerate([4, 6]):
+        expected = list(forecast_members(BatchSampler(), series[: start + 5], start, seeds[k]))
+        for member, frames in zip(expected, joined(blocks, k), strict=True):
+            np.testing.assert_allclose(frames, member, rtol=1e-6)
+
+
+def test_start_blocks_batch_a_starts_seeds_where_the_model_can():
+    model = BatchSampler()
+
+    stream = StartBlocks(model, np.zeros((9, 2, 3, 3)), [3, 5], 4, [range(3), range(10, 13)], 2, 2)
+    sizes = [len(ensemble) for block in stream for ensemble in block.ensembles.values()]
+
+    assert model.batches == [[0, 1], [2], [10, 11], [12]]
+    assert sizes == [3] * 4  # 2 starts x 2 blocks, of all 3 members
+
+
+class BatchDevice(Sampler):
+    """A stochastic model that forecasts several contexts per call on the
+    device, each with its own seeds: a trajectory is its context's last
+    frame plus its seed."""
+
+    def __init__(self):
+        super().__init__()
+        self.calls = []
+
+    def predict_device_batch(self, contexts, n_steps, block_steps, seeds):
+        self.calls.append((contexts[:, -1, 0, 0, 0].tolist(), [list(own) for own in seeds]))
+        last = np.stack(
+            [
+                np.asarray(context[-1], np.float32) + seed
+                for context, own in zip(contexts, seeds, strict=True)
+                for seed in own
+            ]
+        )
+        for start in range(0, n_steps, block_steps):
+            n = min(block_steps, n_steps - start)
+            yield DeviceBlock(np.repeat(last[:, None], n, axis=1))
+
+
+def test_start_blocks_put_several_starts_in_a_call_for_a_model_that_can():
+    series = make_series(12)  # frame t is t
+    model = BatchDevice()
+
+    seeds = [[0, 1], [10, 11], [20, 21]]
+
+    stream = StartBlocks(model, series, [3, 5, 7], 2, seeds, block_steps=2, batch_size=4)
+    blocks = starts_as_arrays(stream)
+
+    # Trajectories (start, seed) in order, 4 per call: starts 3 and 5, then
+    # 7, each start's context once with its seeds.
+    assert model.calls == [([2, 4], [[0, 1], [10, 11]]), ([6], [[20, 21]])]
+    assert [list(members) for _, members in blocks] == [[0, 1], [2]]
+    first = blocks[0][1]
+    assert [float(m[0, 0, 0, 0]) for m in first[1]] == [14.0, 15.0]  # frame 4, seeds 10 and 11
+    assert model.seeds == []
+    # Alone (batch_size 1) the same model forecasts a start's members per call.
+    alone = starts_as_arrays(StartBlocks(Sampler(), series, [3, 5, 7], 2, seeds, 2))
+    for k in range(3):
+        np.testing.assert_allclose(joined(blocks, k), joined(alone, k))
+
+
+def test_start_blocks_give_a_deterministic_batch_no_seeds():
+    class Deterministic:
+        window = 1
+
+        def __init__(self):
+            self.calls = []
+
+        def predict_device_batch(self, contexts, n_steps, block_steps):
+            self.calls.append(len(contexts))
+            yield DeviceBlock(np.repeat(np.asarray(contexts[:, -1:], np.float32), n_steps, 1))
+
+    model = Deterministic()
+
+    blocks = starts_as_arrays(
+        StartBlocks(model, make_series(12), [3, 5, 7], 2, start_seeds(3, 1), 4, 8)
+    )
+
+    assert model.calls == [3]  # all three starts in one call, no seeds passed
+    assert [float(blocks[0][1][k][0][0, 0, 0, 0]) for k in range(3)] == [2.0, 4.0, 6.0]
+
+
+def test_start_blocks_stream_together_the_starts_that_share_a_call():
+    model = BatchDevice()
+
+    seeds = [[0, 1], [10, 11], [20, 21]]
+
+    stream = StartBlocks(model, make_series(12), [3, 5, 7], 3, seeds, 2, batch_size=3)
+    blocks = starts_as_arrays(stream)
+
+    # Calls (3, 3, 5) and (5, 7, 7) share start 5: one wave of 2 blocks.
+    assert model.calls == [([2, 4], [[0, 1], [10]]), ([4, 6], [[11], [20, 21]])]
+    assert len(stream) == 2
+    assert [first for first, _ in blocks] == [0, 2]
+    assert all(sorted(members) == [0, 1, 2] for _, members in blocks)
+    assert all(len(members[1]) == 2 for _, members in blocks)
+
+
+def test_start_blocks_check_what_a_batch_gives():
+    class Short(BatchDevice):
+        def predict_device_batch(self, contexts, n_steps, block_steps, seeds):
+            yield from list(super().predict_device_batch(contexts, n_steps, block_steps, seeds))[:1]
+
+    class Long(BatchDevice):
+        def predict_device_batch(self, contexts, n_steps, block_steps, seeds):
+            yield from super().predict_device_batch(contexts, n_steps + 1, block_steps, seeds)
+
+    series = make_series(12)
+    with pytest.raises(ValueError, match="block from lead 3"):
+        starts_as_arrays(StartBlocks(Short(), series, [3, 5], 4, [[0], [1]], 2, 2))
+    with pytest.raises(ValueError, match="more blocks than the forecast's 2"):
+        starts_as_arrays(StartBlocks(Long(), series, [3, 5], 4, [[0], [1]], 2, 2))
+
+
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        ({"starts": []}, "no starts"),
+        ({"seeds": [[]]}, "no seeds"),
+        ({"seeds": [[0], [1]]}, "2 lists of seeds for 1 starts"),
+        ({"n_steps": 0}, "n_steps"),
+        ({"starts": [0, 3], "seeds": [[0], [1]]}, r"starts \[0\] leave no context"),
+        ({"block_steps": 0}, "block_steps"),
+        ({"batch_size": 0}, "batch_size"),
+    ],
+)
+def test_start_blocks_reject_what_cannot_be_streamed(kwargs, match):
+    arguments = {"starts": [3], "n_steps": 2, "seeds": [[0]], **kwargs}
+    with pytest.raises(ValueError, match=match):
+        StartBlocks(Sampler(), np.zeros((7, 2, 3, 3)), **arguments)

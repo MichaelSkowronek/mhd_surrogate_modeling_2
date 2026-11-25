@@ -2,7 +2,8 @@
 
 Early stopping and the hyperparameter search score a model in training by
 `selection_scores`, and choose between a run's validations with
-`RunSelection`; `evaluate.evaluate` scores the final model in full. In a
+`RunSelection`; `evaluate.evaluate` scores the final model in full, its
+multi-start skill by the same `start_ensembles`. In a
 module of its own (with `metrics`, `protocol`, `stability` and
 `quantities`), so that training -- and the DVC `train` stage's
 dependencies -- reach only this part of the evaluation code: a change to
@@ -12,12 +13,13 @@ stored checkpoint instead of retraining the model.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 
 import numpy as np
 
 from mhd_surrogate.evaluation.metrics import (
     DeviceCrpsAccumulator,
+    capped_skill,
     member_median,
     selection_score,
     skill_horizon,
@@ -26,8 +28,11 @@ from mhd_surrogate.evaluation.metrics import (
 from mhd_surrogate.evaluation.protocol import (
     ForecastModel,
     MemberBlocks,
+    StartBlocks,
     ensemble_size,
+    skill_starts,
     split_context,
+    start_seeds,
 )
 from mhd_surrogate.evaluation.quantities import DEFAULT_CHUNK_T, to_device
 from mhd_surrogate.evaluation.stability import (
@@ -48,34 +53,54 @@ def selection_scores(
     dy: float,
     block_steps: int,
     max_ratio: float,
+    stride: int,
+    leads: int,
     members: int = 1,
     member_batch: int = 1,
     chunk_t: int = DEFAULT_CHUNK_T,
 ) -> dict[str, float]:
     """The scores the selection rule ranks by, without the physics
-    guardrails: `crps_skill_horizon` and `crps_lead_<tie_break_lead>`, the
-    stability scores (`stable_steps` and the peak ratios), their
-    combination `selection_score` (of this forecast alone; `RunSelection`
-    adds the stable fraction) and the forecast's length, `forecast_steps`.
-    Cheap enough to run during training (early stopping, the
-    hyperparameter search); `evaluate` scores the final model in full.
-    The forecast is scored on the device as it streams, `chunk_t` lead
-    times at a time (`protocol.MemberBlocks`), so its frames never reach
-    the host.
+    guardrails: the multi-start skill, the stability scores (`stable_steps`
+    and the peak ratios), their combination `selection_score` (of this
+    validation alone; `RunSelection` adds the stable fraction) and the
+    stability forecast's length, `forecast_steps`. Cheap enough to run
+    during training (early stopping, the hyperparameter search); `evaluate`
+    scores the final model in full. Every forecast is scored on the device
+    as it streams, `chunk_t` lead times at a time, so its frames never
+    reach the host.
 
-    A stochastic model is scored as an ensemble of `members` (seeds 0, 1,
-    ..., the same at every validation; a deterministic model has one
-    member, whatever `members`), sampled `member_batch` per call where the
-    model can: the skill horizon and tie-break on the ensemble's CRPS, each
-    stability score the median over the members (`metrics.member_median`),
-    and `members` and `stable_members` (how many are stable over the whole
-    forecast), which `RunSelection` pools into the stable fraction."""
+    The skill comes from many starts (CLAUDE.md, "Data analysis"): every
+    `stride` frames from the context's end, as many as fit `leads` lead
+    times (`protocol.skill_starts`), each forecast for those leads and
+    scored against the truth at the same frames (`start_ensembles`). Its
+    CRPS averaged per lead over the starts gives
+    `multistart_crps_skill_horizon` (capped at `leads`) and the tie-break
+    (`metrics.capped_skill`): `multistart_crps_lead_<tie_break_lead>` below
+    the cap, `multistart_crps_mean` at it. The stability scores are the
+    forecast of the whole series from the context's end, as before; that
+    one trajectory's skill is reported too, under its old names
+    (`crps_skill_horizon`, `crps_lead_<tie_break_lead>`).
+
+    A stochastic model is scored as an ensemble of `members` at every start
+    (the validations' seeds, `protocol.start_seeds`: each start's own, never
+    the scoring's, the same at every validation; a deterministic model has
+    one member, whatever `members`), sampled `member_batch` per call
+    where the model can (several starts' at once by a model with
+    `predict_device_batch`): the skill on the ensembles' CRPS, each
+    stability score the median over the members
+    (`metrics.member_median`), and `members` and `stable_members` (how many
+    are stable over the whole forecast), which `RunSelection` pools into
+    the stable fraction."""
+    starts = skill_starts(series.shape[0], context_steps, stride, leads)
+    if not 1 <= tie_break_lead <= leads:
+        raise ValueError(f"tie_break_lead {tie_break_lead} is not one of the {leads} skill leads")
     _, targets = split_context(series, context_steps)
-    seeds = range(ensemble_size(model, members))
-    stream = MemberBlocks(model, series, context_steps, seeds, chunk_t, member_batch)
+    # Start 0 is the end of the context: the stability forecast's members are its.
+    seeds = start_seeds(len(starts), ensemble_size(model, members), monitor=True)
+    stream = MemberBlocks(model, series, context_steps, seeds[0], chunk_t, member_batch)
     crps = DeviceCrpsAccumulator(stream.n_steps, scale)
     truth = DeviceQuantities(dx, dy)
-    quantities = [DeviceQuantities(dx, dy) for _ in seeds]
+    quantities = [DeviceQuantities(dx, dy) for _ in seeds[0]]
     for block in stream:
         target = to_device(targets[block.first : block.first + block.steps])
         truth.add(target)
@@ -86,21 +111,78 @@ def selection_scores(
     ]
     curve = crps.crps()
     n_steps = len(curve)
-    skill = skill_horizon(curve, skill_threshold)
-    tie_break = float(curve[min(tie_break_lead, n_steps) - 1])
+    averaged = np.mean(
+        [
+            start.crps()
+            for start in start_ensembles(
+                model,
+                series,
+                starts,
+                leads,
+                seeds,
+                scale,
+                DeviceCrpsAccumulator,
+                member_batch,
+                chunk_t,
+            )
+        ],
+        axis=0,
+    )
+    skill, tie_break = capped_skill(averaged, skill_threshold, tie_break_lead)
     scores = {key: member_median([s[key] for s in stability]) for key in stability[0]}
     # A member's peak ratio is the larger of its two, NaN if either is
     # (np.max propagates NaN).
     peak = member_median([np.max([s[f"{q}_peak_ratio"] for q in QUANTITIES]) for s in stability])
     return {
-        "crps_skill_horizon": float(skill),
-        f"crps_lead_{tie_break_lead}": tie_break,
+        "multistart_crps_skill_horizon": float(skill),
+        f"multistart_crps_lead_{tie_break_lead}": float(averaged[tie_break_lead - 1]),
+        "multistart_crps_mean": float(averaged.mean()),
+        "crps_skill_horizon": float(skill_horizon(curve, skill_threshold)),
+        f"crps_lead_{tie_break_lead}": float(curve[tie_break_lead - 1]),
         **scores,
         "selection_score": selection_score(skill, tie_break, scores["stable_steps"], n_steps, peak),
         "forecast_steps": float(n_steps),
         "members": float(len(stability)),
         "stable_members": float(sum(s["stable_steps"] >= n_steps for s in stability)),
     }
+
+
+def start_ensembles(
+    model: ForecastModel,
+    frames,
+    starts: Sequence[int],
+    leads: int,
+    seeds: Iterable[Iterable[int]],
+    scale: np.ndarray,
+    accumulator: Callable = DeviceCrpsAccumulator,
+    batch_size: int = 1,
+    chunk_t: int = DEFAULT_CHUNK_T,
+) -> list:
+    """The multi-start skill's forecasts, scored: an `accumulator(leads,
+    scale)` per start of `starts` (`metrics.DeviceCrpsAccumulator`, or
+    `ensemble.DeviceEnsembleAccumulator` for the spread too), fed that
+    start's members for its own `seeds` (a list per start,
+    `protocol.start_seeds`) over `leads` lead times against the truth
+    at the same frames of `frames`, as they stream on the device
+    (`protocol.StartBlocks`, `batch_size` trajectories per call where the
+    model can)."""
+    late = [s for s in starts if s + leads > frames.shape[0]]
+    if late:
+        raise ValueError(
+            f"starts {late} have no truth for {leads} leads in {frames.shape[0]} frames"
+        )
+    stream = StartBlocks(model, frames, starts, leads, seeds, chunk_t, batch_size)
+    accumulators = [accumulator(leads, scale) for _ in stream.starts]
+    # Every start's truth on the device at once (837 frames on the
+    # validation dataset, ~1 GB): copied a block per start instead, the
+    # starts' overlapping leads would move ~4.7 GB per validation (~1 s).
+    first = min(starts)
+    truth = to_device(frames[first : max(starts) + leads])
+    for block in stream:
+        for k, members in block.ensembles.items():
+            lead = stream.starts[k] - first + block.first
+            accumulators[k].add_block(block.first, truth[lead : lead + block.steps], members)
+    return accumulators
 
 
 def _tracked(members: Iterable, quantities: list[DeviceQuantities]) -> Iterator:

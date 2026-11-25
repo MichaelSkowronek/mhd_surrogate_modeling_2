@@ -110,20 +110,20 @@ stages:
       size: 0
     - path: src/mhd_surrogate/evaluation/metrics.py
       hash: md5
-      md5: 7067654d6414ee7960f5601d9389b1d7
-      size: 18055
+      md5: 96ce37a66a7907f8d8940096d3c397a9
+      size: 19305
     - path: src/mhd_surrogate/evaluation/protocol.py
       hash: md5
-      md5: f293717b948beff0794ca75200fc51ff
-      size: 13175
+      md5: 6bfc2db739ed817a072631d6b4febad9
+      size: 24181
     - path: src/mhd_surrogate/evaluation/quantities.py
       hash: md5
       md5: 4b7e6dcf32eb99293b420aa635cd29fd
       size: 3057
     - path: src/mhd_surrogate/evaluation/selection.py
       hash: md5
-      md5: 9079ac053aed9425972469c92039fafd
-      size: 8547
+      md5: 97886f88f773aafb6b4f29da7222617b
+      size: 12196
     - path: src/mhd_surrogate/evaluation/stability.py
       hash: md5
       md5: 0dc0367193d28f150bd9de2cfb87a3dd
@@ -134,8 +134,8 @@ stages:
       size: 0
     - path: src/mhd_surrogate/models/base.py
       hash: md5
-      md5: c31ac53bba7461189f128ca03c1b13aa
-      size: 7359
+      md5: 422a9f1f452c4556c0782ab4f0307fc4
+      size: 7831
     - path: src/mhd_surrogate/models/dmd.py
       hash: md5
       md5: 9264ddb4fa9088b140d3dad6b523a6a9
@@ -170,8 +170,8 @@ stages:
       size: 4221
     - path: src/mhd_surrogate/training/run.py
       hash: md5
-      md5: 51b13f16e625fe061d75222f4ebe0948
-      size: 7827
+      md5: de62a7a48b6989bf4434f61536fcfb16
+      size: 8018
     - path: src/mhd_surrogate/training/startup.py
       hash: md5
       md5: 6294a36299cccb2b3df42388eea29701
@@ -214,6 +214,8 @@ stages:
         val_dataset: re16k_t400_6
         zarr_store: data/processed/re16k_t400.zarr
       configs/evaluation/default.yaml:
+        multistart.leads: 237
+        multistart.stride: 40
         skill_threshold: 0.32
         stability:
           block_steps: 100
@@ -294,17 +296,17 @@ stages:
       size: 1480
     - path: src/mhd_surrogate/evaluation
       hash: md5
-      md5: 6a218a117cc742fae154ea3908539a80.dir
-      size: 92643
-      nfiles: 12
+      md5: e41e5a427fde829b6df07aa293f28b2c.dir
+      size: 118684
+      nfiles: 13
     - path: src/mhd_surrogate/models/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
       size: 0
     - path: src/mhd_surrogate/models/base.py
       hash: md5
-      md5: c31ac53bba7461189f128ca03c1b13aa
-      size: 7359
+      md5: 422a9f1f452c4556c0782ab4f0307fc4
+      size: 7831
     - path: src/mhd_surrogate/models/dmd.py
       hash: md5
       md5: 9264ddb4fa9088b140d3dad6b523a6a9
@@ -335,8 +337,8 @@ stages:
       size: 4221
     - path: src/mhd_surrogate/training/scoring.py
       hash: md5
-      md5: 25c7379bed6a3f9480543670493ec571
-      size: 7649
+      md5: 2398c55482333b854f25b0d2057f5a45
+      size: 8486
     - path: src/mhd_surrogate/training/startup.py
       hash: md5
       md5: 6294a36299cccb2b3df42388eea29701
@@ -379,6 +381,13 @@ stages:
         val_dataset: re16k_t400_6
         zarr_store: data/processed/re16k_t400.zarr
       configs/evaluation/default.yaml:
+        multistart:
+          stride: 40
+          leads: 237
+          bootstrap:
+            block: 4
+            resamples: 1000
+            seed: 0
         report_leads:
         - 1
         - 10
@@ -396,8 +405,8 @@ stages:
     outs:
     - path: models/hankel_dmd/metrics.json
       hash: md5
-      md5: 45d7860e2598268e8cfc93e149eed6b3
-      size: 1869
+      md5: dbbcf2d9ea8e6ba7e51aa709cdfef9b0
+      size: 2605
   gate:
     cmd: uv run scripts/evaluation/gate_checkpoint.py 
       checkpoint=models/hankel_dmd/model export.dir=models/hankel_dmd 
@@ -414,8 +423,8 @@ stages:
       nfiles: 293
     - path: models/hankel_dmd/metrics.json
       hash: md5
-      md5: 45d7860e2598268e8cfc93e149eed6b3
-      size: 1869
+      md5: dbbcf2d9ea8e6ba7e51aa709cdfef9b0
+      size: 2605
     - path: models/hankel_dmd/model
       hash: md5
       md5: 1b2c82643d30780cc4dce9e42436041f.dir
@@ -463,12 +472,12 @@ stages:
       size: 5809
     - path: src/mhd_surrogate/evaluation/metrics.py
       hash: md5
-      md5: 7067654d6414ee7960f5601d9389b1d7
-      size: 18055
+      md5: 96ce37a66a7907f8d8940096d3c397a9
+      size: 19305
     - path: src/mhd_surrogate/evaluation/protocol.py
       hash: md5
-      md5: f293717b948beff0794ca75200fc51ff
-      size: 13175
+      md5: 6bfc2db739ed817a072631d6b4febad9
+      size: 24181
     - path: src/mhd_surrogate/evaluation/quantities.py
       hash: md5
       md5: 4b7e6dcf32eb99293b420aa635cd29fd
@@ -487,8 +496,8 @@ stages:
       size: 0
     - path: src/mhd_surrogate/models/base.py
       hash: md5
-      md5: c31ac53bba7461189f128ca03c1b13aa
-      size: 7359
+      md5: 422a9f1f452c4556c0782ab4f0307fc4
+      size: 7831
     - path: src/mhd_surrogate/models/dmd.py
       hash: md5
       md5: 9264ddb4fa9088b140d3dad6b523a6a9
@@ -619,8 +628,8 @@ stages:
       size: 0
     - path: src/mhd_surrogate/evaluation/protocol.py
       hash: md5
-      md5: f293717b948beff0794ca75200fc51ff
-      size: 13175
+      md5: 6bfc2db739ed817a072631d6b4febad9
+      size: 24181
     - path: src/mhd_surrogate/evaluation/quantities.py
       hash: md5
       md5: 4b7e6dcf32eb99293b420aa635cd29fd
@@ -639,8 +648,8 @@ stages:
       size: 0
     - path: src/mhd_surrogate/models/base.py
       hash: md5
-      md5: c31ac53bba7461189f128ca03c1b13aa
-      size: 7359
+      md5: 422a9f1f452c4556c0782ab4f0307fc4
+      size: 7831
     - path: src/mhd_surrogate/models/dmd.py
       hash: md5
       md5: 9264ddb4fa9088b140d3dad6b523a6a9

@@ -90,6 +90,7 @@ def training_config(workspace, *overrides):
                 "evaluation.train_datasets=[a]",
                 "evaluation.report_leads=[1,2]",
                 "evaluation.tie_break_lead=2",
+                "evaluation.multistart.leads=20",
                 "jax.compilation_cache_dir=null",
                 *overrides,
             ],
@@ -197,7 +198,7 @@ def test_a_generative_latent_model_validates_and_is_scored_as_an_ensemble(worksp
     client = MlflowClient(f"sqlite:///{workspace / 'mlruns.db'}")
     (run,) = client.search_runs([mlflow.get_experiment_by_name("test").experiment_id])
     # Every validation during training forecasts evaluation.monitor_members.
-    assert run.data.metrics["val_monitor.members"] == 2
+    assert run.data.metrics["val_monitor.members"] == 4
     assert "fit.stable_fraction" in run.data.metrics
     (model,) = mlflow.search_logged_models(
         experiment_ids=[run.info.experiment_id], output_format="list"

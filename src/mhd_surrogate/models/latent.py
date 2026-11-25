@@ -34,7 +34,8 @@ the training entry point's `FitHooks` (`base.py`) and passes them on to
 `StochasticLatentSurrogate` and samples latents for a batch of seeds at
 once (`sample_latents`); its `predict`, `predict_members` and
 `predict_blocks` all go through that one method, so a member draws the
-same noise whichever of them asks for it.
+same noise whichever of them asks for it, and the trajectories of several
+contexts too (`sample_trajectories`, `predict_device_batch`).
 """
 
 from __future__ import annotations
@@ -258,6 +259,46 @@ class StochasticLatentSurrogate(LatentSurrogate):
         and a member at a time when read."""
         latents = self.sample_latents(self._encode_window(context), n_steps, list(seeds))
         yield from self._device_blocks(latents, block_steps)
+
+    def sample_trajectories(
+        self, windows: np.ndarray, n_steps: int, seeds: Sequence[int], first_step: int = 0
+    ) -> np.ndarray:
+        """The latents of trajectory k, from `windows[k]` for `seeds[k]`, as
+        `sample_latents(windows[k], n_steps, [seeds[k]], first_step)` samples
+        them, shape (len(seeds), n_steps, *latent_shape): one call per
+        trajectory, unless a subclass vectorizes them (whose batch can then
+        round differently)."""
+        if len(windows) != len(seeds):
+            raise ValueError(f"{len(windows)} windows for {len(seeds)} seeds")
+        return np.stack(
+            [
+                self.sample_latents(window, n_steps, [seed], first_step)[0]
+                for window, seed in zip(windows, seeds)
+            ]
+        )
+
+    def predict_device_batch(
+        self,
+        contexts: np.ndarray,
+        n_steps: int,
+        block_steps: int,
+        seeds: Sequence[Sequence[int]],
+    ) -> Iterator[DeviceBlock]:
+        """The forecasts from several contexts, for each of `contexts` its
+        `seeds` (a list per context), on the device `block_steps` frames at
+        a time, the trajectories context by context: their latents in one
+        `sample_trajectories` call, each context encoded once, decoded on the
+        device a block and a trajectory at a time when read. For throughput
+        (the multi-start validations during training): a member's rounding
+        in a batch can differ from its own call's."""
+        if len(contexts) != len(seeds):
+            raise ValueError(f"{len(contexts)} contexts for {len(seeds)} lists of seeds")
+        encoded = [self._encode_window(context) for context in contexts]
+        windows = np.stack([w for w, own in zip(encoded, seeds) for _ in own])
+        flat = [seed for own in seeds for seed in own]
+        yield from self._device_blocks(
+            self.sample_trajectories(windows, n_steps, flat), block_steps
+        )
 
     def predict_blocks(
         self, context: np.ndarray, n_steps: int, block_steps: int, seed: int = 0
