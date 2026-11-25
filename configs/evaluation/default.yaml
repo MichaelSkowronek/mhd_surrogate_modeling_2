@@ -33,8 +33,8 @@
 # multistart: the skill the selection rule ranks by (CLAUDE.md, "Data
 #   analysis"; src/mhd_surrogate/evaluation/selection.py's start_ensembles).
 #   A forecast from every `stride` frames from the context's end, as many
-#   as are followed by `leads` frames of truth (16 on the validation
-#   dataset, frames 80-680; 24 on re16k_t400_0), each an ensemble
+#   as are followed by `leads` frames of truth (31 on the validation
+#   dataset, frames 80-680; 47 on re16k_t400_0), each an ensemble
 #   (`monitor_members` at a validation during training, `ensemble_size`
 #   when scored), scored against the truth at the same frames; its CRPS
 #   averaged per lead over the starts. The horizon is that curve's, capped
@@ -51,10 +51,23 @@
 #   differs from the late ones' by ~0.02 at leads 151-200 (~0.01 on the
 #   average, ~50 leads of horizon on flow matching's flat curve), in
 #   opposite directions for the linear and the flow-matching models.
+#   stride 20 (40 until 2026-11-25): twice the starts, each with its own
+#   members' draws, halve the per-epoch horizon's noise (`monitor_members`
+#   below), and the starts' phases of the flow's coherent oscillation
+#   (domain-mean u_y) spread on any dataset. Its period is 24.8-36.3 frames
+#   on the readable datasets (25.1 on validation) and its phase drifts
+#   little, so a stride near a whole period bunches the starts: 40 would
+#   for a period of ~38 or more, which the test dataset's could be (it
+#   can't be looked at); 20 advances 0.5-0.83 cycles for any period of
+#   24-40. The starts' mean resultant length (1 = one phase) is 0.00-0.08
+#   with 20, 0.05-0.21 with 40 (up to 0.55 with 44). Insurance, not a
+#   measured bias: over the 31 starts the phase explains 2-20% of a
+#   start's CRPS at lead 10 (README, "The stride").
 #   bootstrap: the final scoring's interval of that horizon over the starts
 #   (`_p05`, `_p95`; src/mhd_surrogate/evaluation/bootstrap.py), a circular
 #   block bootstrap of runs of `block` consecutive starts (neighbours share
-#   the trajectory's events), `resamples` resamples drawn from `seed`.
+#   the trajectory's events; 8, 160 frames, as 4 were at stride 40),
+#   `resamples` resamples drawn from `seed`.
 #   Each start's members have seeds of their own (`ensemble_size` below),
 #   so resampling the starts resamples the members' draws too: the interval
 #   covers which starts and which draws, not which network a refit trains.
@@ -110,9 +123,11 @@
 #   epoch (2026-11-25). 4: with 2, the fewest the CRPS is unbiased
 #   from, one network's multi-start horizon moved by ~19 leads (sd) from
 #   one pair of seeds to the next on flow matching's flat curves (run 1:
-#   62-93 over 8 disjoint pairs), with 4 by ~11, for 6.1 s per validation
-#   instead of 5.0 (run 1, RTX 3060, 2026-11-24). The stable fraction pools
-#   them (4 members x 5 validations).
+#   62-93 over 8 disjoint pairs, at stride 40), with 4 by ~11; at stride
+#   20, with each start's own seeds, 4 members move it by 4.4-7.4 over 8
+#   groups of seeds (2 by 6.6-18), for 8.8 s per validation (run 1, RTX
+#   3060, 2026-11-25). The stable fraction pools them (4 members x 5
+#   validations).
 # member_batch: members sampled per call in the scoring by a model that can
 #   batch them (`predict_members`, `predict_device_blocks`), 1 = one member
 #   per call. Batching can change float rounding, which a long forecast
@@ -128,9 +143,11 @@
 #   by a model that can (`predict_device_batch`). Measured for latent flow
 #   matching on the RTX 3060 (2026-11-23): a step of 1 member takes 1.2 ms,
 #   of 2 members 2.0 ms, of 32 members 4.7 ms, of 64 members 4.8 ms, so 64
-#   cost hardly more than 2, and the multi-start skill's 16 starts x 4
-#   members are one call (run 1's validation: 6.1 s, against 7.6 s in
-#   calls of 32). Part of what reproduces an iterative model's
+#   cost hardly more than 2; 128 makes the multi-start skill's 31 starts x
+#   4 members one call (run 1's validation: 8.8 s, against 9.7 s in calls
+#   of 64). A model that holds its forecasts' frames on the device bounds
+#   it (`max_device_batch`: the U-Net's 16, which then takes 37.5 s per
+#   validation). Part of what reproduces an iterative model's
 #   early stopping, so a DVC param of the train stage once a stochastic
 #   model is canonical; 1 samples every member alone, as the validations
 #   before it did.
@@ -192,10 +209,10 @@ final: true
 skill_threshold: 0.32
 report_leads: [1, 10, 40, 100]
 multistart:
-  stride: 40
+  stride: 20
   leads: 237
   bootstrap:
-    block: 4
+    block: 8
     resamples: 1000
     seed: 0
 stability:
@@ -205,7 +222,7 @@ stability:
 ensemble_size: 8
 monitor_members: 4
 member_batch: 1
-monitor_batch: 64
+monitor_batch: 128
 tie_break_lead: 10
 gate:
   rollout_steps: 3000

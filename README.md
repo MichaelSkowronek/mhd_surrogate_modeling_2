@@ -737,9 +737,10 @@ is the hardest of 32 starts (every 20 frames) for every flow-matching
 model: horizon 10-12 against a median start's 42-50, one model's
 per-start horizons spanning ~10-150 (Hankel DMD: 7, median 9). So the
 skill is now measured from many starts (`evaluation.multistart`,
-`protocol.skill_starts`): one every 40 frames from the end of the
-context, as many as are followed by 237 frames of truth (16 on the
-validation dataset, frames 80 to 680), each forecast for 237 leads (8
+`protocol.skill_starts`): one every 20 frames from the end of the
+context, as many as are followed by 237 frames of truth (31 on the
+validation dataset, frames 80 to 680; every 40 frames until 2026-11-25,
+see "The stride" below), each forecast for 237 leads (8
 members when scored, 4 at a validation during training) and scored
 against the truth at the same frames. The CRPS averaged per lead over the
 starts has no hump left (its largest dip 0.007), and the horizon is that
@@ -750,76 +751,79 @@ disjoint halves of 16 starts (every 40 frames from 80 and from 100) ranked
 three flow-matching runs alike (horizons 71/85, 64/77 and 85/91), where
 frame 80 alone had put the worst of them first by CRPS at lead 10.
 
-237 is 917 - 680: every start reaches it, so every lead averages all 16.
-Past it only the earliest starts would be left, one fewer every 40 leads,
-and they aren't typical: at leads 151-200 the early 8 score 0.02 worse
-than the late 8 for every flow-matching model and 0.02 better for both
-linear models, so the average would drift by ~0.01 as the late starts
-dropped out -- ~50 leads of horizon on flow matching's flat curve there
-(it rises ~0.0002 a lead), in opposite directions for the two families. No
-model reaches the cap yet; if models routinely do, the metric needs
-rethinking, not a longer cap on this dataset. The rule defines the starts,
-not a list of frames, so the test dataset will get its own without being
-read before the final evaluation.
+237 is 917 - 680: every start reaches it, so every lead averages all 31.
+Past it only the earliest starts would be left, one fewer every 20 leads,
+and they aren't typical: at leads 151-200 the early 8 of stride 40's 16
+starts score 0.02 worse than the late 8 for every flow-matching model and
+0.02 better for both linear models, so the average would drift by ~0.01 as
+the late starts dropped out -- ~50 leads of horizon on flow matching's
+flat curve there (it rises ~0.0002 a lead), in opposite directions for the
+two families. No model reaches the cap yet; if models routinely do, the
+metric needs rethinking, not a longer cap on this dataset. The rule
+defines the starts, not a list of frames, so the test dataset will get its
+own without being read before the final evaluation.
 
 The final scoring logs the result under new names, `multistart_*` (MLflow
 and `metrics.json`): `multistart_crps_skill_horizon`,
 `multistart_crps_lead_<n>` at the report leads, `multistart_crps_mean`
 (the tie-break at the cap) and `multistart_starts`. The forecast from the
 context's end keeps its scores under their old names
-(`crps_skill_horizon`, `crps_lead_<n>`, ...): the stability scores and
-the guardrails are still its, and its skill is reported, not ranked on;
+(`crps_skill_horizon`, `crps_lead_<n>`, ...): the stability scores and the
+guardrails are still its, and its skill is reported, not ranked on;
 `selection_score`, the rule as one number, changes with the rule as it
-always has. Scored this way on the validation dataset, horizon (5-95%
-over the starts; from frame 80 alone): Hankel DMD 9 (8-11; 7),
-latent_linear 11 (10-12; 7), the U-Net baseline 17 (16-18; 13), and the
-flow-matching runs: run 1 71 (62-93; 10), seed 43 66 (57-72; 12), noise
-0.03 80 (68-97; 11), each start with its own seeds (below; with seeds
-0-7 at every start, as the overhaul's test had them, 71, 64 and 85, and
-with 128 members per start 71, 66 and 72). The interval is a circular
-block bootstrap over the starts (`evaluation/bootstrap.py`: runs of 4
-consecutive starts, which share the trajectory's events, 1000 resamples,
-seeded: `_p05`/`_p95`), reported, not ranked on. Each start's members
-having seeds of their own, resampling the starts resamples their draws
-too: the interval covers which starts and which members, not which
-network a refit trains (run 1 and seed 43 are one recipe, 71 and 66 with
-128 members per start). The averaged curve of flow
-matching is flat near the cutoff (0.28-0.31 from lead 15 to 80, where
-0.01 of CRPS is 25-50 leads of horizon), so finalists closer than their
-intervals are compared on the same resampled starts:
-`scripts/evaluation/compare_multistart.py RUN_ID RUN_ID` reads the runs'
-per-start curves (the run artifact `multistart/val.json`) and prints how
-often each ranks first by the rule. Calibration over the same forecasts is
-reported too (`multistart_spread_skill_lead_<n>`, the spread and the
-ensemble mean's error pooled over the starts), not ranked or gated: the
-CRPS already penalizes an overconfident ensemble, and a limit would reject
-every flow-matching model so far (run 1: 0.29 at lead 1, 0.57 at lead 10).
-The training dataset gets the same protocol (24 starts on
-`re16k_t400_0`), so the train/val gap compares like with like.
+always has. Scored this way on the validation dataset, horizon (5-95% over
+the starts; from frame 80 alone): Hankel DMD 9 (8-10; 7), latent_linear 11
+(10-11; 7), the U-Net baseline 17 (16-19; 13), and the flow-matching runs:
+run 1 77 (64-95; 10), seed 43 68 (44-74; 12), noise 0.03 75 (63-98; 11),
+each start with its own seeds (below). At stride 40 they were 71 (62-93),
+66 (57-72) and 80 (68-97); with seeds 0-7 at every start, as the
+overhaul's test had them, 71, 64 and 85; and with 128 members per start
+(stride 40) 71, 66 and 72. The interval is a circular block bootstrap over
+the starts (`evaluation/bootstrap.py`: runs of 8 consecutive starts, 160
+frames, which share the trajectory's events, 1000 resamples, seeded:
+`_p05`/`_p95`), reported, not ranked on. Each start's members having seeds
+of their own, resampling the starts resamples their draws too: the
+interval covers which starts and which members, not which network a refit
+trains (run 1 and seed 43 are one recipe, 71 and 66 with 128 members per
+start). The averaged curve of flow matching is flat near the cutoff
+(0.28-0.31 from lead 15 to 80, where 0.01 of CRPS is 25-50 leads of
+horizon), so finalists closer than their intervals are compared on the
+same resampled starts: `scripts/evaluation/compare_multistart.py RUN_ID
+RUN_ID` reads the runs' per-start curves (the run artifact
+`multistart/val.json`) and prints how often each ranks first by the rule.
+Calibration over the same forecasts is reported too
+(`multistart_spread_skill_lead_<n>`, the spread and the ensemble mean's
+error pooled over the starts), not ranked or gated: the CRPS already
+penalizes an overconfident ensemble, and a limit would reject every
+flow-matching model so far (run 1: 0.29 at lead 1, 0.57 at lead 10). The
+training dataset gets the same protocol (47 starts on `re16k_t400_0`), so
+the train/val gap compares like with like.
 
-What it costs: a validation during training forecasts 64 trajectories
-more (16 starts x 4 members) of 237 leads.
-For flow matching they are one call (`predict_device_batch`, several
-starts at once, up to `evaluation.monitor_batch`), so run 1's validation
-takes 6.1 s (2.1 s before; 7.6 s in calls of 32 trajectories, which take
-2.8 s against 12.2 s one by one): ~3 min of a 30-epoch fit. The U-Net
-already fills the GPU with one forecast, so batching saves it only a
-quarter (17 s against 22 s; 22 s per validation in all). The final
-scoring forecasts each of the 128 trajectories (16 starts x 8 members)
-alone, as served: run 1's takes 62-67 s on the GPU (11 s before) and 5.7
-min on the CPU, Hankel DMD's 12 s (1.7 s); the
-training dataset, with 24 starts, takes about a third longer (Hankel
-DMD: 15 s).
+What it costs: a validation during training forecasts 124 trajectories
+more (31 starts x 4 members) of 237 leads. For flow matching they are
+one call (`predict_device_batch`, several starts at once, up to
+`evaluation.monitor_batch`, 128), so run 1's validation takes 8.8 s (2.1
+s before the starts; 9.7 s in two calls of 64; 32 trajectories take 2.8 s
+in one call against 12.2 s one by one): ~4.5 min of a 30-epoch fit. The
+U-Net holds its forecasts' frames on the device and fills the GPU with
+one, so it forecasts at most 16 per call (`max_device_batch`; 31 ran out
+of memory) and takes 37.5 s per validation (5.1 s before the starts).
+The final scoring forecasts each of the 248 trajectories (31 starts x 8
+members) alone, as served: run 1's takes ~107 s on the GPU (11 s before
+the starts) and 9.5 min on the CPU, Hankel DMD's 20 s (1.7 s); the
+training dataset, with 47 starts, Hankel DMD 33 s.
 
 Four members per start, because two made the per-epoch horizon noisy
-on flow matching's flat curves: for one network, disjoint pairs of
-members (seeds 0-1, 2-3, ..., 14-15 at every start) give horizons of
-62-93 (run 1), 36-94 (seed 43) and 63-144 (noise 0.03), a spread of ~19
-leads (sd), against ~11 for four members (`evaluation.monitor_members`;
-6.1 s per validation against 5.0 s for two); with each start's own
-seeds, 8 groups of four give 9-14, one group high for all three
-networks (99, 89 and 111: similar networks draw alike from the same
-seeds). The tie-break, the CRPS at lead 10, varies by ~0.004. A
+on flow matching's flat curves: for one network at stride 40, disjoint
+pairs of members (seeds 0-1, 2-3, ..., 14-15 at every start) give
+horizons of 62-93 (run 1), 36-94 (seed 43) and 63-144 (noise 0.03), a
+spread of ~19 leads (sd), against ~11 for four members
+(`evaluation.monitor_members`); with each start's own seeds, 8 groups of
+four give 9-14, one group high for all three networks (99, 89 and 111:
+similar networks draw alike from the same seeds). At stride 20, twice
+the starts, each with its own draws, halve it: four members give
+4.4-7.4 over 8 groups, two 6.6-18. The tie-break, the CRPS at lead 10,
+varies by ~0.004. A
 validation's seeds are the same at every epoch, so each draws the same
 noise, which keeps similar networks' forecasts comparable only while
 they stay close. Early stopping and the search's ranking of trials
@@ -827,34 +831,56 @@ carry the remaining noise; the final scoring's 8 members, other seeds
 than the validations', and the paired bootstrap of finalists measure
 again.
 
+**The stride** (2026-11-25): 20 frames instead of 40, for two reasons.
+The per-epoch skill's noise halves (above): every start adds its own
+members' draws. The final scoring's interval is no narrower (run 1: 77
+(64-95) against 71 (62-93)), being bounded by the one trajectory, not by
+how many starts sample it. And the starts' phases spread on any dataset.
+The flow's coherent oscillation, the domain-mean u_y the EDA found, has
+a period of 24.8-36.3 frames on the readable datasets (25.1 on
+validation), and its phase drifts little, so a stride near a whole
+period bunches the starts at a few phases: 40 would for any period of
+~38 or more, beyond what the 8 datasets show but not excluded by the
+rule, and the test dataset's period can't be looked at. 20 frames
+advance 0.5-0.83 cycles for any period of 24-40. The starts' mean
+resultant length (1 = one phase, ~0.16 for 31 random ones) is 0.00-0.08
+at stride 20 and 0.05-0.21 at 40 on the 8 datasets; 44, the other
+stride between whole periods, reaches 0.55. That is insurance, not a
+measured bias: a first look at stride 40's 16 starts suggested the phase
+explains a third of a start's CRPS at lead 10, but over the 31 starts it
+explains 2-20% (one model of six at p < 0.05), the 15 new starts not
+bearing the 16 out. What it costs is above: +2.7 s per flow-matching
+validation and +15 s per U-Net one, and the final scoring takes ~1.7
+times as long.
+
 **Seeds.** Each start draws its own members, and the validations during
-training draw other ones than the scoring (`protocol.start_seeds`):
-member m of the k-th start (the context's end is the 0th) has seed
-1000 k + m when scored, so the forecast from the context's end keeps
-seeds 0-7, the gate's members, among them seed 0, the one served by
-default; and 1000 k + 500 + m at a validation, the same at every
-validation. A generative model draws each step's noise from the seed
-and the step's index (`flow.step_noise`), so one seed at every start
-would replay one noise sequence from each, and that matters. Rolled out
-3000 steps from the 16 starts with seeds 0-7, run 1's 39 failures of 128
-clustered by seed (10, 1, 5, 1, 5, 1, 4 and 12 per seed; p < 0.001 in a
-permutation test) and not by start (p = 0.49), seed 0 failing in the same
-block from 6 starts: 128 such rollouts would have been 8 draws. And the
-starts' average then carries a noise common to all of them, which a
-bootstrap over the starts can't see: with seeds 0-7 at every start, run
-1 against noise 0.03 came out 71 against 85, noise 0.03 first in 96% of
-the resamples, where 128 members per start tie them (71, 72); over 16
-groups of 8 seeds such a comparison gave a verdict of 90% or more in 6
-groups, one of them the other way, and with each start's own seeds in
-1. The validations' seeds are their own because early stopping keeps the
-epoch whose members look best, and scored again they would flatter it.
-The kept flow-matching runs, selected before this change on seeds 0 and
-1 from frame 80, show it: at their kept epochs those two scored 0.7-1.2
-sd better at lead 10 than 31 fresh pairs (ranks 5, 7 and 12 of 32),
-while on what the rule had not looked at, the CRPS over all 237 leads,
-they ranked 18, 19 and 11. Diluted among the 8 members scored, of which
-they were two, the flattering was 0.002-0.004 of CRPS at lead 10, against
-differences of ~0.01 between epochs.
+training draw other ones than the scoring (`protocol.start_seeds`): member
+m of the k-th start (the context's end is the 0th) has seed 1000 k + m
+when scored, so the forecast from the context's end keeps seeds 0-7, the
+gate's members, among them seed 0, the one served by default; and 1000 k +
+500 + m at a validation, the same at every validation. A generative model
+draws each step's noise from the seed and the step's index
+(`flow.step_noise`), so one seed at every start would replay one noise
+sequence from each, and that matters. Rolled out 3000 steps from stride
+40's 16 starts with seeds 0-7, run 1's 39 failures of 128 clustered by
+seed (10, 1, 5, 1, 5, 1, 4 and 12 per seed; p < 0.001 in a permutation
+test) and not by start (p = 0.49), seed 0 failing in the same block from 6
+starts: 128 such rollouts would have been 8 draws. And the starts' average
+then carries a noise common to all of them, which a bootstrap over the
+starts can't see: with seeds 0-7 at every start, run 1 against noise 0.03
+came out 71 against 85, noise 0.03 first in 96% of the resamples, where
+128 members per start tie them (71, 72); over 16 groups of 8 seeds such a
+comparison gave a verdict of 90% or more in 6 groups, one of them the
+other way, and with each start's own seeds in 1. The validations' seeds
+are their own because early stopping keeps the epoch whose members look
+best, and scored again they would flatter it. The kept flow-matching runs,
+selected before this change on seeds 0 and 1 from frame 80, show it: at
+their kept epochs those two scored 0.7-1.2 sd better at lead 10 than 31
+fresh pairs (ranks 5, 7 and 12 of 32), while on what the rule had not
+looked at, the CRPS over all 237 leads, they ranked 18, 19 and 11. Diluted
+among the 8 members scored, of which they were two, the flattering was
+0.002-0.004 of CRPS at lead 10, against differences of ~0.01 between
+epochs.
 
 One limit stays: all of this rests on one 917-frame validation
 trajectory. The starts use it better, not more: their events are its
@@ -2167,7 +2193,7 @@ ensemble's scores. A model without it gets one call per member. The
 scoring stays at one, since a member is the one served for its seed only
 when sampled alone (see "Latent flow matching"). The validations during
 training don't need the served members, only their scores, so they batch
-theirs (`evaluation.monitor_batch`, 64): a flow-matching step of 2
+theirs (`evaluation.monitor_batch`, 128): a flow-matching step of 2
 members costs 2.0 ms against 1.2 ms for one, of 32 members 4.7 ms and of
 64 4.8 ms (RTX 3060).
 
