@@ -92,7 +92,7 @@ src/mhd_surrogate/   importable package, split by pipeline stage
   training/          mlflow_utils, tracking, startup, export, mlflow_model, run, scoring, gating, trainer, tuning,
                      mlflow_codec, codec_run
   evaluation/        protocol, metrics, quantities, stability, selection, rollout, gate, diagnostics, ensemble, evaluate,
-                     reconstruction
+                     bootstrap, reconstruction
   models/            base (interface), baselines, snapshots, dmd, hankel_dmd, neural, unet, registry,
                      codec (codec interface + registry), pod_codec, latent, latent_linear, flow, latent_flow
   serving/           promotion, fetch, stream, schemas, app, client, metrics
@@ -102,7 +102,7 @@ scripts/             CLI entry points, same split (plus viz/)
   analysis/          check_*.py, run_all_checks, benchmark_backends
   viz/               make_video, make_all_videos, make_forecast_video
   training/          train, tune, train_codec
-  evaluation/        check_rollout_stability, evaluate_checkpoint, gate_checkpoint
+  evaluation/        check_rollout_stability, evaluate_checkpoint, gate_checkpoint, compare_multistart
   serving/           promote, fetch_model, check_parity, image_tag, smoke_model, smoke_check
 tests/               mirrors src/ and scripts/ (data/, analysis/, training/, evaluation/, models/, serving/, utils/, viz/)
 deploy/              Kubernetes: kind/ (the local cluster), k8s/ (Kustomize base, overlays,
@@ -671,8 +671,10 @@ steps of the forecast stay bounded (see "Forecast evaluation"; the whole
 (neural) training run, the **stable fraction**: the share of the 5
 validations nearest its epoch (2 either side, shifted inward at the ends
 of the run; `evaluation.stability.neighbors`) that are stable too. Then the
-validation **skill horizon** (lead steps with CRPS <= 0.32), ties broken by
-**CRPS at lead 10**. Stability comes
+validation **skill horizon** (lead steps with CRPS <= 0.32, averaged over
+16 starts and capped at 237 leads; see "Skill from many starts" below),
+ties broken by **CRPS at lead 10** (at the cap, by the mean CRPS over the
+237 leads). Stability comes
 first because the short-horizon scores can't see a blow-up: the first
 U-Net search picked, by skill horizon alone, models whose energy is 1000x
 the truth's by the end of the validation forecast (see "First search").
@@ -724,6 +726,142 @@ its horizon of 7 and the U-Nets gain 0 to 3 steps (their sharper forecasts
 have heavier-tailed errors, which the RMSE squares). Persistence now has
 one step of skill (CRPS 0.28 at lead 1, RMSE 0.51), the mean field none.
 
+**Skill from many starts** (2026-11-24). Until then the skill horizon was
+that of one forecast, from the end of the context (frame 80), and one
+trajectory's skill swings on its own events. Every model's CRPS from frame
+80 has a hump at leads 23-26 (Hankel DMD 0.46, latent_linear 0.47, the
+flow-matching runs 0.36-0.40), an event of that trajectory: the 0.32
+cutoff sat on the rise before it, so a model ~0.04 better at leads 13-28
+would clear the hump and jump from a horizon of ~12 to ~140. And frame 80
+is the hardest of 32 starts (every 20 frames) for every flow-matching
+model: horizon 10-12 against a median start's 42-50, one model's
+per-start horizons spanning ~10-150 (Hankel DMD: 7, median 9). So the
+skill is now measured from many starts (`evaluation.multistart`,
+`protocol.skill_starts`): one every 40 frames from the end of the
+context, as many as are followed by 237 frames of truth (16 on the
+validation dataset, frames 80 to 680), each forecast for 237 leads (8
+members when scored, 4 at a validation during training) and scored
+against the truth at the same frames. The CRPS averaged per lead over the
+starts has no hump left (its largest dip 0.007), and the horizon is that
+curve's: the leads it stays at or below 0.32, capped at 237. Below the cap
+ties are broken by its CRPS at lead 10, as before; at the cap, where lead
+10 no longer separates anything, by its mean over all 237 leads. Two
+disjoint halves of 16 starts (every 40 frames from 80 and from 100) ranked
+three flow-matching runs alike (horizons 71/85, 64/77 and 85/91), where
+frame 80 alone had put the worst of them first by CRPS at lead 10.
+
+237 is 917 - 680: every start reaches it, so every lead averages all 16.
+Past it only the earliest starts would be left, one fewer every 40 leads,
+and they aren't typical: at leads 151-200 the early 8 score 0.02 worse
+than the late 8 for every flow-matching model and 0.02 better for both
+linear models, so the average would drift by ~0.01 as the late starts
+dropped out -- ~50 leads of horizon on flow matching's flat curve there
+(it rises ~0.0002 a lead), in opposite directions for the two families. No
+model reaches the cap yet; if models routinely do, the metric needs
+rethinking, not a longer cap on this dataset. The rule defines the starts,
+not a list of frames, so the test dataset will get its own without being
+read before the final evaluation.
+
+The final scoring logs the result under new names, `multistart_*` (MLflow
+and `metrics.json`): `multistart_crps_skill_horizon`,
+`multistart_crps_lead_<n>` at the report leads, `multistart_crps_mean`
+(the tie-break at the cap) and `multistart_starts`. The forecast from the
+context's end keeps its scores under their old names
+(`crps_skill_horizon`, `crps_lead_<n>`, ...): the stability scores and
+the guardrails are still its, and its skill is reported, not ranked on;
+`selection_score`, the rule as one number, changes with the rule as it
+always has. Scored this way on the validation dataset, horizon (5-95%
+over the starts; from frame 80 alone): Hankel DMD 9 (8-11; 7),
+latent_linear 11 (10-12; 7), the U-Net baseline 17 (16-18; 13), and the
+flow-matching runs: run 1 71 (62-93; 10), seed 43 66 (57-72; 12), noise
+0.03 80 (68-97; 11), each start with its own seeds (below; with seeds
+0-7 at every start, as the overhaul's test had them, 71, 64 and 85, and
+with 128 members per start 71, 66 and 72). The interval is a circular
+block bootstrap over the starts (`evaluation/bootstrap.py`: runs of 4
+consecutive starts, which share the trajectory's events, 1000 resamples,
+seeded: `_p05`/`_p95`), reported, not ranked on. Each start's members
+having seeds of their own, resampling the starts resamples their draws
+too: the interval covers which starts and which members, not which
+network a refit trains (run 1 and seed 43 are one recipe, 71 and 66 with
+128 members per start). The averaged curve of flow
+matching is flat near the cutoff (0.28-0.31 from lead 15 to 80, where
+0.01 of CRPS is 25-50 leads of horizon), so finalists closer than their
+intervals are compared on the same resampled starts:
+`scripts/evaluation/compare_multistart.py RUN_ID RUN_ID` reads the runs'
+per-start curves (the run artifact `multistart/val.json`) and prints how
+often each ranks first by the rule. Calibration over the same forecasts is
+reported too (`multistart_spread_skill_lead_<n>`, the spread and the
+ensemble mean's error pooled over the starts), not ranked or gated: the
+CRPS already penalizes an overconfident ensemble, and a limit would reject
+every flow-matching model so far (run 1: 0.29 at lead 1, 0.57 at lead 10).
+The training dataset gets the same protocol (24 starts on
+`re16k_t400_0`), so the train/val gap compares like with like.
+
+What it costs: a validation during training forecasts 64 trajectories
+more (16 starts x 4 members) of 237 leads.
+For flow matching they are one call (`predict_device_batch`, several
+starts at once, up to `evaluation.monitor_batch`), so run 1's validation
+takes 6.1 s (2.1 s before; 7.6 s in calls of 32 trajectories, which take
+2.8 s against 12.2 s one by one): ~3 min of a 30-epoch fit. The U-Net
+already fills the GPU with one forecast, so batching saves it only a
+quarter (17 s against 22 s; 22 s per validation in all). The final
+scoring forecasts each of the 128 trajectories (16 starts x 8 members)
+alone, as served: run 1's takes 62-67 s on the GPU (11 s before) and 5.7
+min on the CPU, Hankel DMD's 12 s (1.7 s); the
+training dataset, with 24 starts, takes about a third longer (Hankel
+DMD: 15 s).
+
+Four members per start, because two made the per-epoch horizon noisy
+on flow matching's flat curves: for one network, disjoint pairs of
+members (seeds 0-1, 2-3, ..., 14-15 at every start) give horizons of
+62-93 (run 1), 36-94 (seed 43) and 63-144 (noise 0.03), a spread of ~19
+leads (sd), against ~11 for four members (`evaluation.monitor_members`;
+6.1 s per validation against 5.0 s for two); with each start's own
+seeds, 8 groups of four give 9-14, one group high for all three
+networks (99, 89 and 111: similar networks draw alike from the same
+seeds). The tie-break, the CRPS at lead 10, varies by ~0.004. A
+validation's seeds are the same at every epoch, so each draws the same
+noise, which keeps similar networks' forecasts comparable only while
+they stay close. Early stopping and the search's ranking of trials
+carry the remaining noise; the final scoring's 8 members, other seeds
+than the validations', and the paired bootstrap of finalists measure
+again.
+
+**Seeds.** Each start draws its own members, and the validations during
+training draw other ones than the scoring (`protocol.start_seeds`):
+member m of the k-th start (the context's end is the 0th) has seed
+1000 k + m when scored, so the forecast from the context's end keeps
+seeds 0-7, the gate's members, among them seed 0, the one served by
+default; and 1000 k + 500 + m at a validation, the same at every
+validation. A generative model draws each step's noise from the seed
+and the step's index (`flow.step_noise`), so one seed at every start
+would replay one noise sequence from each, and that matters. Rolled out
+3000 steps from the 16 starts with seeds 0-7, run 1's 39 failures of 128
+clustered by seed (10, 1, 5, 1, 5, 1, 4 and 12 per seed; p < 0.001 in a
+permutation test) and not by start (p = 0.49), seed 0 failing in the same
+block from 6 starts: 128 such rollouts would have been 8 draws. And the
+starts' average then carries a noise common to all of them, which a
+bootstrap over the starts can't see: with seeds 0-7 at every start, run
+1 against noise 0.03 came out 71 against 85, noise 0.03 first in 96% of
+the resamples, where 128 members per start tie them (71, 72); over 16
+groups of 8 seeds such a comparison gave a verdict of 90% or more in 6
+groups, one of them the other way, and with each start's own seeds in
+1. The validations' seeds are their own because early stopping keeps the
+epoch whose members look best, and scored again they would flatter it.
+The kept flow-matching runs, selected before this change on seeds 0 and
+1 from frame 80, show it: at their kept epochs those two scored 0.7-1.2
+sd better at lead 10 than 31 fresh pairs (ranks 5, 7 and 12 of 32),
+while on what the rule had not looked at, the CRPS over all 237 leads,
+they ranked 18, 19 and 11. Diluted among the 8 members scored, of which
+they were two, the flattering was 0.002-0.004 of CRPS at lead 10, against
+differences of ~0.01 between epochs.
+
+One limit stays: all of this rests on one 917-frame validation
+trajectory. The starts use it better, not more: their events are its
+events. A second validation dataset would cost a seventh of the training
+data and reset every comparison, so it stays out unless finalists turn
+out inseparable.
+
 A **generative** model is judged as an ensemble, by the same rule. Its
 skill horizon and tie-break are its ensemble's CRPS. The absolute
 guardrails -- stable over the validation forecast, stable over the
@@ -742,11 +880,11 @@ enstrophy, spectra, a typical member against the incumbent) -- is the
 median over its members, so no single member, lucky or blown up, decides.
 Its stable fraction pools the members of the validations around its epoch
 (a stable sample is as much a lucky draw as a stable epoch). During
-training each validation forecasts 2 members
-(`evaluation.monitor_members`, seeds 0 and 1 at every validation, so
-epochs differ only by the network), the fewest the CRPS is unbiased from,
-at twice a single forecast's cost; the stable fraction then counts 10
-forecasts, and 0.8 means 8 of them. A closed-form generative fit's stable
+training each validation forecasts 4 members
+(`evaluation.monitor_members`, the same seeds at every validation, so
+epochs differ only by the network, and never the scored ones; why 4 and
+why seeds of their own, see "Skill from many starts"); the
+stable fraction then counts 20 forecasts, and 0.8 means 16 of them. A closed-form generative fit's stable
 fraction is the share of its members stable. The evaluation writes each
 member's own validation scores as `val.member_<seed>` (in MLflow and
 `metrics.json`), which the gate checks member by member.
@@ -1899,7 +2037,9 @@ neither achievable nor the only thing worth measuring.
   scaled per channel by the training std, and the skill horizon: how many
   steps the CRPS stays under a threshold (0.32), the CRPS of a deterministic
   model being its absolute error (see "Ensembles" below and "How candidates
-  are ranked"). A NaN error counts as over it, so a forecast that blows up
+  are ranked"). The selection rule's is measured from 16 starts, every 40
+  frames, its CRPS averaged per lead over them (`multistart_*`, see "Skill
+  from many starts"). A NaN error counts as over it, so a forecast that blows up
   loses its skill there instead of scoring the whole length.
 - *Long horizon* (`diagnostics.py`): does the forecast stay on the attractor?
   Relative error of the time-averaged kinetic energy and enstrophy, the ratio
@@ -1994,7 +2134,9 @@ diffusion) samples one, and its forecast is a distribution. The contract is
 ready for it without changing anything for the others: a model with
 `stochastic = True` takes `predict(context, n_steps, seed=...)` and returns
 its sample for that seed, an ensemble is the samples for seeds 0, 1, ...,
-`evaluation.ensemble_size` (8), and a deterministic model is a one-member
+`evaluation.ensemble_size` (8; from the context's end, each start of the
+multi-start skill having its own, see "Skill from many starts"), and a
+deterministic model is a one-member
 ensemble. Every score of a trajectory above -- RMSE, the long-horizon and
 temporal scores, stability -- is the median over the members (each one
 trajectory, as `predict` gives it; the ensemble *mean* would be smooth and
@@ -2011,7 +2153,8 @@ members that pass (see "How candidates are ranked"). The ensemble adds:
 - *Spread vs error* (`spread_skill_lead_<n>`, more than one member):
   sqrt((M + 1) / M) times the ensemble's spread over the RMSE of its mean,
   ~1 for a calibrated ensemble of M members (Fortin et al. 2014), below 1
-  for an overconfident one.
+  for an overconfident one; over the multi-start skill's forecasts,
+  `multistart_spread_skill_lead_<n>`.
 
 A model can also sample several members per call (`predict_members`;
 `evaluation.member_batch`, 1 by default), for a GPU with room to spare --
@@ -2024,9 +2167,9 @@ ensemble's scores. A model without it gets one call per member. The
 scoring stays at one, since a member is the one served for its seed only
 when sampled alone (see "Latent flow matching"). The validations during
 training don't need the served members, only their scores, so they batch
-theirs (`evaluation.monitor_batch`, 32): a flow-matching step of 2
-members costs 2.0 ms against 1.2 ms for one, of 32 members 4.7 ms (RTX
-3060).
+theirs (`evaluation.monitor_batch`, 64): a flow-matching step of 2
+members costs 2.0 ms against 1.2 ms for one, of 32 members 4.7 ms and of
+64 4.8 ms (RTX 3060).
 
 The members advance through the forecast together, a block of lead times
 at a time (an 837-step member is ~1 GB; the device holds a block of the
@@ -2545,9 +2688,11 @@ of the domain.
   checkpointing, so it's kept short enough that early stopping (and the
   hyperparameter search's pruning) can follow the curve.
 - *Early stopping on validation:* every `eval_every` epochs the model
-  forecasts the whole validation dataset under the protocol, and is scored
-  with `evaluation.selection_scores`: stable steps, skill horizon and CRPS
-  at lead 10, folded into one `selection_score`,
+  forecasts the whole validation dataset under the protocol and 237 leads
+  from each of the multi-start skill's 16 starts, and is scored with
+  `evaluation.selection_scores`: stable steps, skill horizon and its
+  tie-break CRPS (see "Skill from many starts"), folded into one
+  `selection_score`,
   `(n + 1) * stable_steps + skill - c / (1 + c)` for an `n`-step forecast,
   which orders like the rule exactly (one more stable step outweighs any
   skill, one more skill step any CRPS); an unstable forecast scores
@@ -2578,8 +2723,9 @@ of the domain.
 **What's logged.** Training curves go to MLflow with the optimizer step as
 the step: `loss`, `grad_norm`, `lr` and `samples_per_second` every
 `log_every` steps, and `epoch_loss`, `epoch_seconds` and
-`val_monitor.{crps_skill_horizon,crps_lead_10,stable_steps,energy_peak_ratio,enstrophy_peak_ratio,selection_score,forecast_steps,members,stable_members}`
-every epoch, with the run's best validation so far (`best_epoch`,
+`val_monitor.{multistart_crps_skill_horizon,multistart_crps_lead_10,multistart_crps_mean,crps_skill_horizon,crps_lead_10,stable_steps,energy_peak_ratio,enstrophy_peak_ratio,selection_score,forecast_steps,members,stable_members}`
+every epoch (the `multistart_*` ones since 2026-11-24), with the run's
+best validation so far (`best_epoch`,
 `best_selection_score`, `best_stable_fraction`). After
 training, the model is checkpointed, logged and scored like every model
 (`val.*`, `train.<dataset>.*`, `fit.*`, where `fit.best_epoch`,

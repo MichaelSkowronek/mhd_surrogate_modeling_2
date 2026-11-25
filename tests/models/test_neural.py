@@ -306,6 +306,26 @@ def test_device_blocks_are_the_streamed_forecast_left_on_the_device():
     )
 
 
+def test_a_device_batch_forecasts_every_context_as_its_own_blocks():
+    datasets = wave_datasets()
+    model = small_model()
+    model.fit(datasets)
+    contexts = np.stack([datasets["d1"][:3], datasets["d0"][4:7], datasets["d1"][2:5]])
+
+    blocks = list(model.predict_device_batch(contexts, 7, 3))
+
+    assert [(len(b), b.steps) for b in blocks] == [(3, 3), (3, 3), (3, 1)]
+    for k, context in enumerate(contexts):
+        np.testing.assert_allclose(
+            np.concatenate([np.asarray(b.frames(k)) for b in blocks]),
+            np.concatenate(
+                [np.asarray(b.frames(0)) for b in model.predict_device_blocks(context, 7, 3)]
+            ),
+            rtol=1e-5,
+            atol=1e-6,
+        )
+
+
 class OneConv(AutoregressiveSurrogate):
     name = "one_conv"
 

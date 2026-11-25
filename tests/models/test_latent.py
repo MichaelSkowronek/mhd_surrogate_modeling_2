@@ -222,6 +222,34 @@ def test_a_stochastic_latent_models_device_blocks_are_its_members(codec_dir):
         np.testing.assert_allclose(streamed, members[k], rtol=1e-5, atol=1e-4)
 
 
+def test_a_stochastic_latent_models_trajectories_are_each_windows_sample(codec_dir):
+    model = drift(codec_dir)
+    data = noisy_datasets(seed=2)["d0"]
+    contexts = np.stack([data[:4], data[3:7]])
+    windows = np.stack([model._encode_window(context) for context in contexts])
+
+    latents = model.sample_trajectories(windows, 5, [7, 0], first_step=2)
+    # Context 0 with seed 7, context 1 with seeds 0 and 3.
+    blocks = list(model.predict_device_batch(contexts, 5, 2, seeds=[[7], [0, 3]]))
+
+    for k, seed in enumerate([7, 0]):
+        np.testing.assert_array_equal(
+            latents[k], model.sample_latents(windows[k], 5, [seed], first_step=2)[0]
+        )
+    assert [(len(b), b.steps) for b in blocks] == [(3, 2), (3, 2), (3, 1)]
+    for k, (context, seed) in enumerate([(0, 7), (1, 0), (1, 3)]):
+        np.testing.assert_allclose(
+            np.concatenate([np.asarray(b.frames(k)) for b in blocks]),
+            model.predict(contexts[context], 5, seed=seed),
+            rtol=1e-5,
+            atol=1e-4,
+        )
+    with pytest.raises(ValueError, match="2 windows for 1 seeds"):
+        model.sample_trajectories(windows, 5, [7])
+    with pytest.raises(ValueError, match="2 contexts for 1 lists of seeds"):
+        next(model.predict_device_batch(contexts, 5, 2, seeds=[[7]]))
+
+
 def test_a_stochastic_latent_model_must_supply_its_sampling():
     with pytest.raises(NotImplementedError):
         StochasticLatentSurrogate("unused").sample_latents(np.zeros((1, 2)), 1, [0])

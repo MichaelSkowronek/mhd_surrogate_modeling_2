@@ -142,8 +142,9 @@ def run_training(
 
 class ValidationMonitor:
     """`FitHooks.validate` for an iterative model: its selection scores on
-    the validation dataset (`evaluation.selection_scores`; a stochastic
-    model's on `evaluation.monitor_members` members, sampled up to
+    the validation dataset (`evaluation.selection_scores`, the skill from
+    the starts of `evaluation.multistart`; a stochastic model's on
+    `evaluation.monitor_members` members per start, sampled up to
     `evaluation.monitor_batch` per call), read into memory on first use
     (~1 GB) instead of from zarr at every evaluation."""
 
@@ -156,6 +157,7 @@ class ValidationMonitor:
         self.skill_threshold = cfg.evaluation.skill_threshold
         self.tie_break_lead = cfg.evaluation.tie_break_lead
         self.stability = cfg.evaluation.stability
+        self.multistart = cfg.evaluation.multistart
         self.members = cfg.evaluation.monitor_members
         self.monitor_batch = cfg.evaluation.monitor_batch
 
@@ -173,6 +175,8 @@ class ValidationMonitor:
             self.dy,
             self.stability.block_steps,
             self.stability.max_ratio,
+            self.multistart.stride,
+            self.multistart.leads,
             members=self.members,
             member_batch=self.monitor_batch,
         )

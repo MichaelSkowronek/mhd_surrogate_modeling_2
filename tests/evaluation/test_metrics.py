@@ -5,6 +5,7 @@ import pytest
 
 from mhd_surrogate.evaluation.metrics import (
     CrpsAccumulator,
+    capped_skill,
     member_median,
     peak_ratio_term,
     rmse_per_step,
@@ -63,6 +64,26 @@ def crps_of(targets, members, scale=(1.0, 1.0), chunk_t=4):
     for member in members:
         accumulator.add(member)
     return accumulator.crps()
+
+
+def test_capped_skill_breaks_ties_at_the_tie_break_lead_below_the_cap():
+    curve = np.array([0.1, 0.2, 0.3, 0.6, 0.2])
+
+    assert capped_skill(curve, 0.5, 2) == (3, pytest.approx(0.2))
+
+
+def test_capped_skill_breaks_ties_by_the_mean_at_the_cap():
+    curve = np.array([0.1, 0.2, 0.3, 0.4])
+
+    assert capped_skill(curve, 0.5, 2) == (4, pytest.approx(0.25))
+
+
+def test_capped_skill_counts_a_nan_as_over_and_needs_the_tie_break_lead_in_the_curve():
+    assert capped_skill(np.array([0.1, np.nan, 0.1]), 0.5, 1) == (1, pytest.approx(0.1))
+    with pytest.raises(ValueError, match="tie_break_lead 4 is not one of the curve's 3"):
+        capped_skill(np.zeros(3), 0.5, 4)
+    with pytest.raises(ValueError, match="tie_break_lead 0"):
+        capped_skill(np.zeros(3), 0.5, 0)
 
 
 def test_the_crps_of_a_single_member_is_its_absolute_error():

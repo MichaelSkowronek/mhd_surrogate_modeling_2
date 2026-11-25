@@ -229,6 +229,28 @@ def test_a_member_is_its_seed_alone_or_in_a_batch(fitted):
         )
 
 
+def test_trajectories_of_several_windows_are_sampled_in_one_call(fitted):
+    data = noisy_datasets(seed=2)["d0"]
+    contexts = np.stack([data[:2], data[4:6], data[1:3]])
+    windows = np.stack([fitted.codec.encode(c) for c in contexts])
+    seeds = [3, 3, 8]
+
+    latents = fitted.sample_trajectories(windows, 6, seeds, first_step=2)
+    blocks = list(fitted.predict_device_batch(contexts, 6, 4, seeds=[[s] for s in seeds]))
+
+    assert [(len(b), b.steps) for b in blocks] == [(3, 4), (3, 2)]
+    batch = fitted.sample_trajectories(windows, 6, seeds)
+    for k, seed in enumerate(seeds):
+        # Each its own window's and seed's sample, up to the batch's rounding.
+        alone = fitted.sample_latents(windows[k], 6, [seed], first_step=2)[0]
+        np.testing.assert_allclose(latents[k], alone, rtol=1e-5, atol=1e-6)
+        np.testing.assert_array_equal(
+            np.concatenate([np.asarray(b.states[k]) for b in blocks]), batch[k]
+        )
+    with pytest.raises(ValueError, match="3 windows for 2 seeds"):
+        fitted.sample_trajectories(windows, 6, [3, 8])
+
+
 def test_streamed_blocks_are_the_one_forecast(fitted):
     window = fitted.codec.encode(context()[-2:])
     whole = fitted.sample_latents(window, 11, [4])[0]
@@ -392,3 +414,5 @@ def test_use_before_fit_is_rejected(codec_dir):
         small_model(codec_dir).predict(context(), 3, seed=0)
     with pytest.raises(RuntimeError, match="not fitted"):
         small_model(codec_dir).sample_latents(np.zeros((2, RANK)), 3, [0])
+    with pytest.raises(RuntimeError, match="not fitted"):
+        small_model(codec_dir).sample_trajectories(np.zeros((1, 2, RANK)), 3, [0])

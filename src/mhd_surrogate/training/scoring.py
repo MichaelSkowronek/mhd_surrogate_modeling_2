@@ -20,6 +20,7 @@ from omegaconf import DictConfig, OmegaConf
 
 import mlflow
 from mhd_surrogate.data.grid import grid_spacing
+from mhd_surrogate.evaluation.bootstrap import BlockBootstrap
 from mhd_surrogate.evaluation.evaluate import (
     Evaluation,
     candidate_stable_fraction,
@@ -43,6 +44,8 @@ log = logging.getLogger(__name__)
 # The config groups that decide a checkpoint's scores: logged as the
 # evaluation run's params (the model's own config is in the checkpoint).
 EVALUATION_CONFIG = ("data", "normalization", "evaluation", "jax", "checkpoint")
+# The run's artifact directory of each dataset's per-start skill curves.
+MULTISTART_ARTIFACTS = "multistart"
 
 
 def run_evaluation(cfg: DictConfig, log_file: Path | None) -> dict[str, dict[str, float]]:
@@ -134,7 +137,11 @@ def _score_one(
 ) -> Evaluation:
     """Score `model` on one dataset under the forecast protocol and log the
     scalar scores as `<prefix>.*` metrics and the RMSE curve as `<prefix>.rmse`,
-    on the run and linked to the logged model `model_id`."""
+    on the run and linked to the logged model `model_id`; the multi-start
+    skill's averaged CRPS curve as `<prefix>.multistart_crps`, and its
+    per-start curves as the run's artifact `multistart/<prefix>.json`
+    (`evaluate.StartSkill.as_dict`), which paired comparisons of runs
+    resample (scripts/evaluation/compare_multistart.py)."""
     dx, dy = grid_spacing(series.shape[2], series.shape[3])
     start = time.perf_counter()
     result = evaluate(
@@ -148,8 +155,11 @@ def _score_one(
         report_leads=list(cfg.evaluation.report_leads),
         block_steps=cfg.evaluation.stability.block_steps,
         max_ratio=cfg.evaluation.stability.max_ratio,
+        stride=cfg.evaluation.multistart.stride,
+        leads=cfg.evaluation.multistart.leads,
         n_members=cfg.evaluation.ensemble_size,
         member_batch=cfg.evaluation.member_batch,
+        bootstrap=BlockBootstrap(**cfg.evaluation.multistart.bootstrap),
     )
     eval_seconds = time.perf_counter() - start
     log.info("evaluated on %s in %.1f s", name, eval_seconds)
@@ -170,6 +180,10 @@ def _score_one(
         log.info("%s: undefined for this model, not logged: %s", prefix, ", ".join(undefined))
     log_metric_series(f"{prefix}.rmse", result.rmse, start_step=1, model_id=model_id)
     log_metric_series(f"{prefix}.crps", result.ensemble.crps, start_step=1, model_id=model_id)
+    log_metric_series(
+        f"{prefix}.multistart_crps", result.multistart.curve, start_step=1, model_id=model_id
+    )
+    mlflow.log_dict(result.multistart.as_dict(), f"{MULTISTART_ARTIFACTS}/{prefix}.json")
     if result.ensemble.size > 1:
         for name in ("spread", "ensemble_mean_rmse"):
             curve = getattr(result.ensemble, name)

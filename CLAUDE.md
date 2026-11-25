@@ -70,16 +70,33 @@ conventions below; it shifts which tools are worth reaching for at all.
   `RunSelection`), then skill horizon, ties broken by CRPS at lead 10 (both
   on the CRPS, which for a deterministic model is its absolute error); an
   unstable candidate by stable steps, then by its peak ratio (how far its
-  energy or enstrophy strayed, lower first) instead of skill. A generative
-  model is judged as an ensemble (8 members when scored, 2 at each
-  validation during training): skill on the ensemble's CRPS; the absolute
+  energy or enstrophy strayed, lower first) instead of skill. The skill is
+  measured from many starts (`evaluation.multistart`,
+  `protocol.skill_starts`): a forecast from every 40 frames from the
+  context's end, as many as are followed by 237 frames of truth (16 on the
+  validation dataset), each scored against the truth at the same frames;
+  the horizon is that of the CRPS averaged per lead over the starts,
+  capped at 237, and at the cap ties are broken by its mean over the 237
+  leads instead of lead 10. One trajectory's skill swings on its own
+  events (frame 80 is the hardest start for every flow-matching model),
+  so the forecast from the context's end only reports its skill, under
+  the old names (`crps_skill_horizon`); the stability scores stay on it.
+  The rule, not a list of frames, defines the starts, so the test dataset
+  gets its own without being read before the final evaluation. A
+  generative model is judged as an ensemble (8 members when scored, 4 at
+  each validation during training, from every start, each start's members
+  with seeds of their own and a validation's never the scored ones,
+  `protocol.start_seeds`: a seed shared by the starts replays one noise
+  sequence from each, and members early stopping chose an epoch on would
+  flatter it if scored again): skill on the ensemble's CRPS; the absolute
   guardrails below (stable over the validation forecast and the 3000-step
   rollout, the domain-mean velocity in the truth's band) must all hold for
   at least 80% of its members (7 of 8; a member failing any of them is a
-  broken forecast, served to whoever asks for its seed); every other
-  per-member score (stable steps and peak ratio for ranking, the relative
-  physics guardrails) is the median over its members; and its stable
-  fraction pools the members of the validations around its epoch. Mean
+  broken forecast, served to whoever
+  asks for its seed); every other per-member score (stable steps and peak
+  ratio for ranking, the relative physics guardrails) is the median over
+  its members; and its stable fraction pools the members of the
+  validations around its epoch. Mean
   RMSE over all leads is not a selection metric: it rewards forecasts that
   smooth toward the mean. The physics scores are
   guardrails, not objectives: a candidate replaces the incumbent only if it
@@ -249,7 +266,9 @@ conventions below; it shifts which tools are worth reaching for at all.
   otherwise the gate checks other forecasts than the ones served. The
   validations during training batch their members
   (`evaluation.monitor_batch`): early stopping needs their scores, not the
-  served members. `latent_flow`'s network still asks for float32 matmuls
+  served members, so several starts' trajectories share a call where the
+  model implements `predict_device_batch`; the scoring forecasts every
+  trajectory alone. `latent_flow`'s network still asks for float32 matmuls
   (`jax.default_matmul_precision("float32")`): with TF32, the GPU's
   default, even a short forecast depends on its batch.
 - Neural models build on `models/neural.py`'s `AutoregressiveSurrogate` (a

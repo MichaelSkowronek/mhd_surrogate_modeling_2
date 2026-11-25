@@ -180,6 +180,12 @@ def _forecast(network, frame, window, n_steps, dtype):
     return rollout(network, frame, window, n_steps, dtype)
 
 
+@eqx.filter_jit
+def _forecast_batch(network, frame, windows, n_steps, dtype):
+    """`_forecast` from each of `windows` at once, (B, n_steps, C, Hp, Wp)."""
+    return jax.vmap(lambda window: rollout(network, frame, window, n_steps, dtype))(windows)
+
+
 class AutoregressiveSurrogate:
     """Base class; a subclass sets `name`, `pad_multiple()` and
     `build_network(in_channels, out_channels, key)`."""
@@ -389,6 +395,21 @@ class AutoregressiveSurrogate:
             predictions = _forecast(self.network, self.frame, window, n, dtype)
             window = jnp.concatenate([window, predictions])[-self.window :]
             yield DeviceBlock(self._device_output(predictions)[None])
+
+    def predict_device_batch(
+        self, contexts: np.ndarray, n_steps: int, block_steps: int
+    ) -> Iterator[DeviceBlock]:
+        """`predict_device_blocks` from several contexts in one call,
+        trajectory k from `contexts[k]`. For throughput (the multi-start
+        validations during training): batched, a forecast can round
+        differently from its own call's, and a rollout amplifies that."""
+        windows = jnp.stack([self._input_window(context) for context in contexts])
+        dtype = DTYPES[self.compute_dtype]
+        for start in range(0, n_steps, block_steps):
+            n = min(block_steps, n_steps - start)
+            predictions = _forecast_batch(self.network, self.frame, windows, n, dtype)
+            windows = jnp.concatenate([windows, predictions], axis=1)[:, -self.window :]
+            yield DeviceBlock(self._device_output(predictions))
 
     def _input_window(self, context: np.ndarray) -> jax.Array:
         """The last `window` context frames as the network sees them."""

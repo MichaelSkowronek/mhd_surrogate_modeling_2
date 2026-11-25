@@ -6,7 +6,8 @@ these metrics are the short-horizon half of the evaluation, and
 `diagnostics` is the long-horizon half (does the forecast stay on the
 attractor). The CRPS (`CrpsAccumulator`) scores a forecast as an ensemble,
 a deterministic one as a single member; the skill horizon and the selection
-rule's tie-break are measured on it.
+rule's tie-break are measured on it, averaged over many starts
+(`capped_skill`).
 
 The scoring computes them on the device as a forecast streams
 (`DeviceCrpsAccumulator`, `DeviceRmse`), from per-channel float32 means over
@@ -294,6 +295,23 @@ def skill_horizon(curve: np.ndarray, threshold: float) -> int:
     return int(above[0]) if above.size else len(curve)
 
 
+def capped_skill(curve: np.ndarray, threshold: float, tie_break_lead: int) -> tuple[int, float]:
+    """The selection rule's skill from a CRPS curve averaged over the
+    multi-start skill's starts (CLAUDE.md, "Data analysis"): its skill
+    horizon, capped at the curve's length (the leads every start
+    forecasts), and the CRPS that breaks ties between equal horizons, lower
+    first -- at lead `tie_break_lead` below the cap, and at the cap, where
+    the curve never exceeds the threshold, its mean over all the leads: a
+    model at the cap is ahead of one below it whatever lead 10 says, and
+    among capped ones the mean credits every lead that got it there."""
+    curve = np.asarray(curve, dtype=np.float64)
+    if not 1 <= tie_break_lead <= len(curve):
+        raise ValueError(f"tie_break_lead {tie_break_lead} is not one of the curve's {len(curve)}")
+    horizon = skill_horizon(curve, threshold)
+    tie_break = curve.mean() if horizon == len(curve) else curve[tie_break_lead - 1]
+    return horizon, float(tie_break)
+
+
 def selection_score(
     skill: float,
     crps_at_tie_break_lead: float,
@@ -306,19 +324,21 @@ def selection_score(
     """One number that ranks candidates like the selection rule (CLAUDE.md,
     "Data analysis"): by stable steps (how long the forecast stays bounded,
     `evaluation.stability`); then a stable forecast by stable fraction, by
-    skill horizon and, as a tie-break, by the CRPS at the tie-break lead,
-    and an unstable one by its peak ratio, lower first. A higher score is a
-    better candidate under the rule; early stopping and the hyperparameter
-    search maximize it.
+    skill horizon and, as a tie-break, by a CRPS (`capped_skill`'s, of the
+    multi-start skill), and an unstable one by its peak ratio, lower first.
+    A higher score is a better candidate under the rule; early stopping and
+    the hyperparameter search maximize it.
 
     The CRPS term c / (1 + c) lies in [0, 1) and grows with c, so it orders
     equal skill horizons without ever outweighing one step of skill (an
     infinite CRPS scores 1, at worst tying the next skill down). Skill minus
-    that term lies in (-1, n_steps] for a forecast of `n_steps` steps, so
-    weighting the stable steps by n_steps + 1 makes one more stable step
-    outweigh any skill and CRPS (again tying at worst for an infinite CRPS).
-    Scores are therefore comparable only between forecasts of the same
-    length, i.e. on the same dataset.
+    that term lies in (-1, n_steps] for a skill of at most the `n_steps`
+    steps the stable steps count (the multi-start skill is capped at its
+    leads, fewer than the scored forecast's), so weighting the stable steps
+    by n_steps + 1 makes one more stable step outweigh any skill and CRPS
+    (again tying at worst for an infinite CRPS). Scores are therefore
+    comparable only between forecasts of the same length, i.e. on the same
+    dataset.
 
     `peak_ratio` is how far the forecast strayed: its largest block mean of
     energy or enstrophy over the truth's (`stability.stability_scores`'
@@ -345,8 +365,9 @@ def selection_score(
     stable forecast with no bonus still scores at least any unstable one.
     Scores with a fraction are comparable only for the same `n_forecasts`
     too, and only under the same rule: the score follows the rule as it
-    changes (the stable fraction, the peak ratio and the CRPS each changed
-    it), so runs scored before a change don't compare with runs after."""
+    changes (the stable fraction, the peak ratio, the CRPS and the
+    multi-start skill each changed it), so runs scored before a change
+    don't compare with runs after."""
     bonus = stable_fraction_bonus(stable_fraction, stable_steps, n_steps, n_forecasts)
     c = crps_at_tie_break_lead
     if math.isnan(c):

@@ -90,9 +90,10 @@ stages:
       - src/mhd_surrogate/utils/hydra_resolvers.py
     # The keys that change the fitted model: its own, the data it's fitted
     # on, and what early stopping scores on (the validation dataset and the
-    # selection rule) for a model trained iteratively. Performance knobs
-    # (chunk sizes) are left out so tuning them doesn't retrain, and so are
-    # monitor_members and member_batch while the canonical model is
+    # selection rule, the multi-start skill's starts and leads too) for a
+    # model trained iteratively. Performance knobs (chunk sizes) are left out
+    # so tuning them doesn't retrain, and so are monitor_members,
+    # member_batch and monitor_batch while the canonical model is
     # deterministic (they can't change its fit).
     params:
       - configs/model/hankel_dmd.yaml:
@@ -110,6 +111,8 @@ stages:
       - configs/evaluation/default.yaml:
           - skill_threshold
           - tie_break_lead
+          - multistart.stride
+          - multistart.leads
           - stability
     outs:
       - models/hankel_dmd/model
@@ -166,6 +169,7 @@ stages:
       - configs/evaluation/default.yaml:
           - skill_threshold
           - report_leads
+          - multistart
           - stability
           - train_datasets
     metrics:

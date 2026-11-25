@@ -67,6 +67,7 @@ def config(workspace, *overrides):
                 "evaluation.train_datasets=[a]",
                 "evaluation.report_leads=[1,2]",
                 "evaluation.tie_break_lead=2",
+                "evaluation.multistart.leads=20",
                 "jax.compilation_cache_dir=null",
                 *overrides,
             ],
@@ -106,6 +107,16 @@ def test_a_closed_form_model_is_fitted_scored_and_tracked(workspace):
     assert run.data.metrics["n_parameters"] == 0
     assert not (workspace / "out" / "training_state").exists()
     assert (workspace / "out" / "model" / "model.json").exists()
+    # The multi-start skill: its scores, the averaged curve and, as an
+    # artifact, every start's curve (210 frames, 4 of context, 20 leads,
+    # every 40 frames: starts 4 to 164).
+    assert scores["val"]["multistart_starts"] == 5
+    curve = client.get_metric_history(run.info.run_id, "val.multistart_crps")
+    assert [m.step for m in curve] == list(range(1, 21))
+    starts = mlflow.artifacts.load_dict(f"{run.info.artifact_uri}/multistart/val.json")
+    assert starts["starts"] == [4, 44, 84, 124, 164] and starts["members"] == 1
+    assert np.mean(starts["crps"], axis=0) == pytest.approx([m.value for m in curve])
+    assert mlflow.artifacts.load_dict(f"{run.info.artifact_uri}/multistart/train.a.json")
 
 
 def test_deterministic_ops_are_enabled_before_the_run_when_configured(workspace, monkeypatch):
@@ -171,8 +182,12 @@ def test_the_validation_monitor_scores_a_stochastic_model_on_its_monitor_members
 
     scores = monitor(model)
 
-    assert model.seeds == [0, 1]  # configs/evaluation: monitor_members
-    assert scores["members"] == 2
+    # configs/evaluation: monitor_members, from the context's end, then from
+    # the one start 30 frames fit (20 leads, the test config's), with the
+    # validations' seeds, never the scoring's (protocol.start_seeds).
+    assert model.seeds == [500, 501, 502, 503] * 2
+    assert scores["members"] == 4
+    assert scores["multistart_crps_skill_horizon"] <= 20
 
 
 class BatchedNoisy(Noisy):
@@ -185,7 +200,7 @@ class BatchedNoisy(Noisy):
         return np.stack([Noisy.predict(self, context, n_steps, seed=s) for s in seeds])
 
 
-@pytest.mark.parametrize("batch, calls", [(None, [[0, 1]]), (1, [])])
+@pytest.mark.parametrize("batch, calls", [(None, [[500, 501, 502, 503]] * 2), (1, [])])
 def test_the_validation_monitor_samples_its_members_monitor_batch_per_call(workspace, batch, calls):
     model = BatchedNoisy()
     overrides = [] if batch is None else [f"evaluation.monitor_batch={batch}"]
@@ -193,8 +208,8 @@ def test_the_validation_monitor_samples_its_members_monitor_batch_per_call(works
 
     monitor(model)
 
-    assert model.batches == calls  # configs/evaluation: monitor_batch 32
-    assert sorted(model.seeds) == [0, 1]
+    assert model.batches == calls  # configs/evaluation: monitor_batch 64
+    assert sorted(model.seeds) == [500, 500, 501, 501, 502, 502, 503, 503]
 
 
 def test_an_ensembles_members_are_scored_one_group_each_on_validation(workspace):
