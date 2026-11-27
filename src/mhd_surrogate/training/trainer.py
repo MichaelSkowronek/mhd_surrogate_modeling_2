@@ -213,13 +213,16 @@ def train(
     sampler: WindowSampler,
     config: TrainerConfig,
     hooks: FitHooks,
-    validate: Callable[[eqx.Module], dict[str, float]] | None = None,
+    validate: Callable[[eqx.Module, int], dict[str, float]] | None = None,
     fingerprint: dict[str, Any] | None = None,
 ) -> TrainResult:
     """Train `network` to minimize `loss_fn` over the sampler's batches.
 
-    `validate` (None: no early stopping) scores a network; `hooks` gives the
-    neighbors early stopping judges a validation with, where to report each
+    `validate` (None: no early stopping) scores a network, given the
+    validation's index in the run (0 for the first; a resumed run goes on
+    from its count, so a validation that draws seeds from it draws the same
+    ones); `hooks` gives the neighbors and the usable-fraction threshold
+    early stopping judges a validation with, where to report each
     validation, the metrics sink and the state directory. `fingerprint`
     (e.g. the model's hyperparameters) is saved with the state, and a resume
     is refused if it, `config` or the neighbors differ: the saved weights
@@ -229,6 +232,7 @@ def train(
         "trainer": asdict(config),
         "model": fingerprint or {},
         "neighbors": hooks.neighbors,
+        "usable_threshold": hooks.usable_threshold,
     }
     steps_per_epoch = sampler.steps_per_epoch(config.batch_size, config.samples_per_epoch)
     if steps_per_epoch == 0:
@@ -260,7 +264,7 @@ def train(
             state.best_epoch,
         )
     resumed_at = state.epoch
-    selection = RunSelection(hooks.neighbors, state.validations)
+    selection = RunSelection(hooks.neighbors, state.validations, hooks.usable_threshold)
 
     base_key = jax.random.key(config.seed)
 
@@ -313,7 +317,7 @@ def train(
         # What's validated, kept and returned: the weight average if there is one.
         current = ema if ema is not None else network
         if validate is not None and (epoch % config.eval_every == 0 or epoch == config.max_epochs):
-            scores = validate(current)
+            scores = validate(current, len(selection))
             epoch_metrics.update({f"val_monitor.{k}": v for k, v in scores.items()})
             selection.add({**scores, "epoch": epoch})
             state.validations = selection.history
@@ -334,8 +338,8 @@ def train(
                 ", ".join(f"{k} {v:.4g}" for k, v in scores.items()),
                 state.best_score,
                 state.best_epoch,
-                f", stable fraction {run_best['best_stable_fraction']:.2f}"
-                if "best_stable_fraction" in run_best
+                f", usable fraction {run_best['best_usable_fraction']:.2f}"
+                if "best_usable_fraction" in run_best
                 else "",
             )
         else:
@@ -362,8 +366,8 @@ def train(
     best = selection.best()
     run_best = _run_best(selection, best)
     info["best_selection_score"] = run_best["best_selection_score"]
-    if "best_stable_fraction" in run_best:
-        info["stable_fraction"] = run_best["best_stable_fraction"]
+    if "best_usable_fraction" in run_best:
+        info["usable_fraction"] = run_best["best_usable_fraction"]
     return TrainResult(network=candidates[best], info=info)
 
 
@@ -374,7 +378,7 @@ def _run_best(selection: RunSelection, best: int) -> dict[str, float]:
         "best_epoch": float(selection.history[best]["epoch"]),
     }
     if selection.neighbors > 0:
-        out["best_stable_fraction"] = selection.stable_fraction(best)
+        out["best_usable_fraction"] = selection.usable_fraction(best)
     return out
 
 
@@ -386,7 +390,7 @@ def _drop_settled_losers(selection: RunSelection, candidates: dict[int, Any]) ->
     settled = [i for i in candidates if selection.settled(i)]
     if not settled:
         return
-    top = max(settled, key=lambda i: (selection.score(i), -i))
+    top = max(settled, key=lambda i: (selection.rank(i), -i))
     for i in settled:
         if i != top:
             del candidates[i]

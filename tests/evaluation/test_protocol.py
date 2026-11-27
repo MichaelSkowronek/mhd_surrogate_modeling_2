@@ -12,6 +12,7 @@ from mhd_surrogate.evaluation.protocol import (
     forecast,
     forecast_members,
     predict_member,
+    rollout_seed,
     skill_starts,
     split_context,
     start_seeds,
@@ -404,6 +405,32 @@ def test_start_seeds_give_each_start_its_own_and_the_validations_other_ones():
 def test_start_seeds_refuse_members_beyond_their_range(args, match):
     with pytest.raises(ValueError, match=match):
         start_seeds(*args)
+
+
+def test_a_validations_rollout_seed_is_new_at_every_validation_and_never_a_members():
+    # Start k's validation range is 1000 k + 500 on; its 4 members take the first 4.
+    assert rollout_seed(0, 4, 0) == 504
+    assert rollout_seed(16, 4, 3) == 16507
+    members = {s for start in start_seeds(17, 4, monitor=True) for s in start}
+    scored = {s for start in start_seeds(17, 8) for s in start}
+    seeds = {rollout_seed(k, 4, v) for k in range(17) for v in range(30)}
+    assert len(seeds) == 17 * 30
+    assert not seeds & members and not seeds & scored
+    # Past the range's room the seeds come round again.
+    assert rollout_seed(0, 4, 496) == rollout_seed(0, 4, 0)
+
+
+@pytest.mark.parametrize(
+    "args, match",
+    [
+        ((-1, 4, 0), "must be >= 0"),
+        ((0, 4, -1), "must be >= 0"),
+        ((0, 500, 0), "no validation seeds"),
+    ],
+)
+def test_rollout_seeds_refuse_impossible_arguments(args, match):
+    with pytest.raises(ValueError, match=match):
+        rollout_seed(*args)
 
 
 def starts_as_arrays(stream):

@@ -13,8 +13,8 @@ around it.
 - After every validation the trial reports its selection scores to Tune,
   plus its best validation so far as early stopping ranks it
   (`FitHooks.report`): `best_selection_score`, which is the metric, and
-  `best_stable_fraction`. That is the selection rule (stable steps, then
-  stable fraction, then skill horizon, ties broken by the CRPS at lead 10)
+  `best_usable_fraction`. That is the selection rule (usable fraction,
+  then stable steps, then skill horizon, ties broken by the CRPS at lead 10)
   as one number, judging each validation with its nearest neighbors
   (`evaluation.selection.RunSelection`), so the search optimizes what
   models are chosen by. The run's best, not the latest validation's score,
@@ -53,10 +53,10 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 # One validation's score of its forecast alone, and the metric Tune compares
-# trials by: the trial's best validation so far, with its stable fraction.
+# trials by: the trial's best validation so far, with its usable fraction.
 SCORE = "selection_score"
 METRIC = "best_selection_score"
-STABLE_FRACTION = "best_stable_fraction"
+USABLE_FRACTION = "best_usable_fraction"
 MODE = "max"
 TRIAL_LOG = "train.log"
 
@@ -240,7 +240,7 @@ def close_stopped_runs(
 
 def summary_rows(results: Sequence[Any], params: Sequence[str]) -> list[dict[str, Any]]:
     """One row per trial, best first: its sampled `params`, how many
-    validations it reported, the score and stable fraction of its best
+    validations it reported, the score and usable fraction of its best
     validation (as of its last report), its last validation's score, and
     whether it ended with an error. Results without a reported score
     (failed before the first validation) come last."""
@@ -252,7 +252,7 @@ def summary_rows(results: Sequence[Any], params: Sequence[str]) -> list[dict[str
                 **{p: (result.config or {}).get(p) for p in params},
                 "validations": metrics.get("training_iteration", 0),
                 "best_score": metrics.get(METRIC),
-                "stable_fraction": metrics.get(STABLE_FRACTION),
+                "usable_fraction": metrics.get(USABLE_FRACTION),
                 "last_score": metrics.get(SCORE),
                 "error": result.error is not None,
             }

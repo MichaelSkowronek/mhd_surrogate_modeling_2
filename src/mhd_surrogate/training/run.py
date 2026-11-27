@@ -21,8 +21,10 @@ import numpy as np
 from omegaconf import DictConfig, OmegaConf
 
 import mlflow
+from mhd_surrogate.data.climatology import Climatology
 from mhd_surrogate.data.grid import grid_spacing
 from mhd_surrogate.evaluation.selection import selection_scores
+from mhd_surrogate.evaluation.usable import UsableCheck
 from mhd_surrogate.models.base import FitHooks, fit_model
 from mhd_surrogate.models.registry import build_model
 from mhd_surrogate.training.export import write_metrics
@@ -93,6 +95,7 @@ def run_training(
             hooks = FitHooks(
                 validate=ValidationMonitor(root[cfg.data.val_dataset], scale, cfg),
                 neighbors=cfg.evaluation.stability.neighbors,
+                usable_threshold=cfg.evaluation.usable_threshold,
                 log_metrics=lambda metrics, step: mlflow.log_metrics(metrics, step=step),
                 state_dir=state_dir,
                 **report,
@@ -142,11 +145,16 @@ def run_training(
 
 class ValidationMonitor:
     """`FitHooks.validate` for an iterative model: its selection scores on
-    the validation dataset (`evaluation.selection_scores`, the skill from
-    the starts of `evaluation.multistart`; a stochastic model's on
-    `evaluation.monitor_members` members per start, sampled up to
-    `evaluation.monitor_batch` per call), read into memory on first use
-    (~1 GB) instead of from zarr at every evaluation."""
+    the validation dataset (`evaluation.selection_scores`: the skill from
+    the starts of `evaluation.multistart`, a stochastic model's on
+    `evaluation.monitor_members` members per start; the rollouts of
+    `evaluation.rollouts` from `monitor_starts`, judged against the
+    stability threshold and the climatological drift band of
+    `evaluation.drift_band`), sampled up to `evaluation.monitor_batch` per
+    call. The validation dataset is read into memory on first use (~1 GB)
+    instead of from zarr at every evaluation; the climatology is loaded
+    once, and refused unless it was computed from exactly the training
+    datasets with the band's window (a stale one: `dvc repro`)."""
 
     def __init__(self, series, scale: np.ndarray, cfg: DictConfig) -> None:
         self.series = series
@@ -156,12 +164,30 @@ class ValidationMonitor:
         self.context_steps = cfg.data.context_steps
         self.skill_threshold = cfg.evaluation.skill_threshold
         self.tie_break_lead = cfg.evaluation.tie_break_lead
-        self.stability = cfg.evaluation.stability
         self.multistart = cfg.evaluation.multistart
         self.members = cfg.evaluation.monitor_members
         self.monitor_batch = cfg.evaluation.monitor_batch
+        self.threshold = cfg.evaluation.usable_threshold
+        self.rollout_starts = list(cfg.evaluation.rollouts.monitor_starts)
+        band = cfg.evaluation.drift_band
+        climatology = Climatology.load(band.climatology)
+        climatology.check_source(cfg.data.train_datasets, cfg.data.test_dataset)
+        if climatology.window_steps != band.window_steps:
+            raise ValueError(
+                f"{band.climatology} has {climatology.window_steps}-step windows, the band "
+                f"{band.window_steps}: recompute it (dvc repro)"
+            )
+        self.check = UsableCheck(
+            climatology,
+            steps=cfg.evaluation.rollouts.steps,
+            block_steps=cfg.evaluation.stability.block_steps,
+            max_ratio=cfg.evaluation.stability.max_ratio,
+            max_offset=band.max_offset,
+            max_std_ratio=band.max_std_ratio,
+            slow_from=band.slow_from,
+        )
 
-    def __call__(self, model) -> dict[str, float]:
+    def __call__(self, model, index: int) -> dict[str, float]:
         if self.frames is None:
             self.frames = np.asarray(self.series)
         return selection_scores(
@@ -173,10 +199,12 @@ class ValidationMonitor:
             self.tie_break_lead,
             self.dx,
             self.dy,
-            self.stability.block_steps,
-            self.stability.max_ratio,
             self.multistart.stride,
             self.multistart.leads,
+            self.check,
+            rollout_starts=self.rollout_starts,
+            validation=index,
+            threshold=self.threshold,
             members=self.members,
             member_batch=self.monitor_batch,
         )

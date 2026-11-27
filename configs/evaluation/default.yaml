@@ -73,25 +73,80 @@
 #   covers which starts and which draws, not which network a refit trains.
 #   Reported, not selected on.
 #
-# stability: how long the forecast stays bounded
+# stability: how long a forecast stays bounded
 #   (src/mhd_surrogate/evaluation/stability.py). The forecast is cut into
 #   `block_steps`-step blocks; a block fails when its mean kinetic energy or
-#   enstrophy exceeds `max_ratio` times the truth's largest block mean, and
-#   `stable_steps` counts the steps before the first failing block. The
-#   truth's own 100-step block means vary by ~5% (energy) and ~18%
-#   (enstrophy) on the validation dataset, so 2x is a blow-up, not noise.
+#   enstrophy exceeds `max_ratio` times the validation truth's largest
+#   block mean, and `stable_steps` counts the steps before the first
+#   failing block. The truth's own 100-step block means vary by ~5%
+#   (energy) and ~18% (enstrophy) on the validation dataset, so 2x is a
+#   blow-up, not noise. The same blocks and threshold judge the validation
+#   forecast and the `rollouts`.
 #   `neighbors`: early stopping and the search judge a validation with the
 #   2 * neighbors + 1 validations nearest it (shifted inward at the ends of
-#   the run), its `stable_fraction` being the share of their forecasts
-#   stable over their whole length -- a stochastic model's members of all of
-#   them, pooled (src/mhd_surrogate/evaluation/selection.py's RunSelection):
-#   a network stable at one epoch and not the next is a lucky draw a refit
-#   for the same epochs is unlikely to repeat, and so is a stable sample.
-#   2 (5 validations, a sixth of a 30-epoch schedule) separates a lone
-#   stable epoch (0.2) from a stable stretch (0.6-1.0) in the U-Net runs; 1
-#   can't tell a lone one (0.33) from much, 3 spans enough of the
-#   learning-rate schedule that the neighbors are no longer much the same
-#   network.
+#   the run), its usable fraction being the share of their rollouts usable
+#   (`rollouts` below), all of them pooled
+#   (src/mhd_surrogate/evaluation/selection.py's RunSelection): a network
+#   usable at one epoch and not the next is a lucky draw a refit for the
+#   same epochs is unlikely to repeat, and so is a usable sample. 2 (5
+#   validations, a sixth of a 30-epoch schedule) separated a lone stable
+#   epoch (0.2) from a stable stretch (0.6-1.0) in the U-Net runs; 1 can't
+#   tell a lone one (0.33) from much, 3 spans enough of the learning-rate
+#   schedule that the neighbors are no longer much the same network.
+#
+# rollouts: what early stopping and the search judge stability by (CLAUDE.md,
+#   "Data analysis"; selection.py's monitor_rollouts): every validation
+#   rolls a model out for `steps` steps, past the data, from each of
+#   `monitor_starts` frames after the context's end (frames 80 and 400 of
+#   the validation dataset; multiples of `multistart.stride`, each drawing
+#   its seed from that start's range), with a new seed at every validation
+#   (protocol.py's rollout_seed: failures follow the seed, so with one seed
+#   at every validation the usable fraction would measure that seed). A
+#   rollout is usable if it is stable over all `steps` and, over its first
+#   `drift_band.window_steps`, in the climatological drift band;
+#   `rollout_stable_steps` is the median over a validation's rollouts
+#   (`usable_threshold` below for how they rank).
+#   3000 is the gate's rollout length (`gate.rollout_steps`, until the
+#   final scoring's pooled rollouts replace the gate's own).
+#
+# drift_band: the climatological drift band (src/mhd_surrogate/evaluation/
+#   usable.py): over a rollout's first `window_steps` steps, each channel's
+#   domain-mean velocity within `max_offset` units of the real flow's level
+#   and its std over time at most `max_std_ratio` units, the units and
+#   level those of `climatology` (src/mhd_surrogate/data/climatology.py,
+#   the compute_climatology DVC stage: the training datasets'
+#   `window_steps`-frame windows every `stride` frames). Against the
+#   climatology rather than the validation truth because the truth covers
+#   frames 80-916 only, which a rollout from a later start doesn't, while
+#   the real bulk flow declines through every record (~0.6 units per 1000
+#   frames); the first `window_steps` steps only, since later ones reach
+#   times since the records' start that no record shows. 837 = the
+#   validation forecast's length. The unit is the windows' median std over
+#   time (u_x: 0.36% of the bulk flow, u_y: 0.0055). The limits keep the
+#   old band's: 1 unit is ~2.6x the largest real window's offset (u_x:
+#   0.34 in the 66 training windows, 0.30-0.38 for the validation ones; u_y
+#   <= 0.09), as the old 1 was ~3x a different realization's; 2 lets a
+#   forecast vary at most twice as much as the truth within a window (real
+#   windows: 0.85-1.19 on u_x, 0.97-1.02 on u_y). Measured on the kept
+#   checkpoints' 3000-step rollouts from all 31 starts (2026-11-26): in the
+#   band Hankel DMD and latent_linear 100%, flow matching 73-98% (seed 43's
+#   bulk flow sits ~0.6 units high). `block_steps` and `slow_from`: the
+#   slow-variability ratio, logged only -- the std of a rollout's
+#   `block_steps`-step block means within each `window_steps` window from
+#   step `slow_from` on, over the real windows' (flow matching 1.35-1.54,
+#   the real validation windows 0.76-1.57).
+#
+# usable_threshold: the selection rule's first key (metrics.py's
+#   selection_score): every validation whose window's rollouts (pooled over
+#   the `stability.neighbors` window, 10 rollouts) are usable at least this
+#   often ranks above every one that aren't, these by their fraction; then
+#   the pooled rollouts' median stable steps, then the validation's own
+#   skill. Pooled because a validation's own two rollouts, with new seeds,
+#   are largely luck (both survive with p^2 for a per-rollout survival p).
+#   0.8 as the stable fraction's floor was: 8 of a window's 10 rollouts.
+#   A validation neither of whose own two is usable doesn't count as
+#   reaching it (ranked by its fraction below the threshold, still above
+#   every window short of it): they are the only direct look at its network.
 #
 # ensemble_size: members a stochastic (generative) model forecasts when it
 #   is scored: from the context's end seeds 0..n-1, and from each
@@ -126,8 +181,8 @@
 #   62-93 over 8 disjoint pairs, at stride 40), with 4 by ~11; at stride
 #   20, with each start's own seeds, 4 members move it by 4.4-7.4 over 8
 #   groups of seeds (2 by 6.6-18), for 8.8 s per validation (run 1, RTX
-#   3060, 2026-11-25). The stable fraction pools them (4 members x 5
-#   validations).
+#   3060, 2026-11-25). The usable fraction pools the validations'
+#   `rollouts`, not these members.
 # member_batch: members sampled per call in the scoring by a model that can
 #   batch them (`predict_members`, `predict_device_blocks`), 1 = one member
 #   per call. Batching can change float rounding, which a long forecast
@@ -198,6 +253,9 @@
 #   1.0 would reject it 41% of the time by chance), a p = 0.5 one 19%. A
 #   closed-form fit (Hankel DMD) is the same model on every refit: 1.0 if
 #   its forecast is stable (a stochastic one's: the share of its members).
+#   An iterative model trained since the rule judges rollouts reports the
+#   kept window's `usable_fraction` instead, which this check doesn't read
+#   yet: the gate moves to the final scoring's pooled rollouts first.
 #
 # train_datasets: train datasets also scored the same way, logged as
 #   `train.<name>.*` -- a sanity check of the fit and the train/val gap, not
@@ -219,6 +277,18 @@ stability:
   block_steps: 100
   max_ratio: 2.0
   neighbors: 2
+rollouts:
+  steps: 3000
+  monitor_starts: [0, 320]
+drift_band:
+  climatology: data/processed/climatology.json
+  window_steps: 837
+  stride: 20
+  block_steps: 100
+  slow_from: 300
+  max_offset: 1.0
+  max_std_ratio: 2.0
+usable_threshold: 0.8
 ensemble_size: 8
 monitor_members: 4
 member_batch: 1

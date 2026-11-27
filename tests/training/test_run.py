@@ -12,6 +12,7 @@ from hydra import compose, initialize_config_dir
 
 import mhd_surrogate.utils.hydra_resolvers  # noqa: F401
 import mlflow
+from mhd_surrogate.data.climatology import climatology_from_series, domain_mean_series
 from mhd_surrogate.data.normalization import compute_normalization_stats
 from mhd_surrogate.training import startup
 from mhd_surrogate.training.export import checkpoint_digest
@@ -22,6 +23,17 @@ from mlflow import MlflowClient
 ROOT = Path(__file__).resolve().parents[2]
 SHAPE = (2, 8, 6)
 TRAIN = ["a", "b"]
+# The drift band's windows (steps, stride, block) and the rollouts, short
+# enough for the 25-frame training dataset and the test series.
+BAND_WINDOW = (20, 5, 5)
+ROLLOUTS = [
+    "evaluation.drift_band.window_steps=20",
+    "evaluation.drift_band.stride=5",
+    "evaluation.drift_band.block_steps=5",
+    "evaluation.drift_band.slow_from=0",
+    "evaluation.rollouts.steps=40",
+    "evaluation.rollouts.monitor_starts=[0,20]",
+]
 
 
 def wave(n, phase):
@@ -44,6 +56,10 @@ def workspace(tmp_path, monkeypatch):
         store.create_array(name, data=frames)
     stats = compute_normalization_stats({k: series[k] for k in TRAIN}, ["u_x", "u_y"])
     stats.save(tmp_path / "stats.json")
+    climatology = climatology_from_series(
+        {k: domain_mean_series(series[k]) for k in TRAIN}, ["u_x", "u_y"], *BAND_WINDOW
+    )
+    climatology.save(tmp_path / "climatology.json")
     (tmp_path / "configs" / "analysis").mkdir(parents=True)
     shutil.copy(ROOT / "configs" / "analysis" / "grid.yaml", tmp_path / "configs" / "analysis")
     (tmp_path / "dvc.lock").write_text("schema: '2.0'\n")
@@ -69,6 +85,8 @@ def config(workspace, *overrides):
                 "evaluation.tie_break_lead=2",
                 "evaluation.multistart.leads=20",
                 "jax.compilation_cache_dir=null",
+                f"evaluation.drift_band.climatology={workspace / 'climatology.json'}",
+                *ROLLOUTS,
                 *overrides,
             ],
         )
@@ -151,10 +169,15 @@ def test_an_iterative_model_reports_every_validation_and_records_its_run(workspa
     assert {run_id for _, run_id in reported} == {run.info.run_id}
     assert "selection_score" in reported[0][0]
     # With the run's best so far, judged with its neighbors (configs/evaluation).
-    assert {"best_selection_score", "best_epoch", "best_stable_fraction"} <= set(reported[-1][0])
+    assert {"best_selection_score", "best_epoch", "best_usable_fraction"} <= set(reported[-1][0])
     assert run.data.tags["sweep"] == "s1"
     assert "val_monitor.selection_score" in run.data.metrics
-    assert "fit.stable_fraction" in run.data.metrics
+    assert {"val_monitor.rollout_stable_steps", "val_monitor.usable_rollouts"} <= set(
+        run.data.metrics
+    )
+    assert "fit.usable_fraction" in run.data.metrics
+    # The final scoring reports the kept window's usable fraction.
+    assert scores["val"]["usable_fraction"] == run.data.metrics["fit.usable_fraction"]
     record = json.loads((workspace / "out" / "training_state" / "mlflow_run.json").read_text())
     assert record["run_id"] == run.info.run_id
     assert "resume" not in record["config"]
@@ -180,13 +203,17 @@ def test_the_validation_monitor_scores_a_stochastic_model_on_its_monitor_members
     model = Noisy()
     monitor = ValidationMonitor(wave(30, 2.0), np.ones(2), config(workspace))
 
-    scores = monitor(model)
+    scores = monitor(model, 0)
 
-    # configs/evaluation: monitor_members, from the context's end, then from
-    # the one start 30 frames fit (20 leads, the test config's), with the
-    # validations' seeds, never the scoring's (protocol.start_seeds).
-    assert model.seeds == [500, 501, 502, 503] * 2
-    assert scores["members"] == 4
+    # configs/evaluation: monitor_members from the one start 30 frames fit
+    # (20 leads, the test config's), with the validations' seeds, never the
+    # scoring's (protocol.start_seeds); then the rollouts from frames 4 and
+    # 24 (the test config's monitor_starts), past those members.
+    assert model.seeds == [500, 501, 502, 503, 504, 1504]
+    assert scores["members"] == 4 and scores["rollouts"] == 2
+    # Validation 2's rollouts draw new seeds.
+    monitor(model, 2)
+    assert model.seeds[-2:] == [506, 1506]
     assert scores["multistart_crps_skill_horizon"] <= 20
 
 
@@ -200,16 +227,16 @@ class BatchedNoisy(Noisy):
         return np.stack([Noisy.predict(self, context, n_steps, seed=s) for s in seeds])
 
 
-@pytest.mark.parametrize("batch, calls", [(None, [[500, 501, 502, 503]] * 2), (1, [])])
+@pytest.mark.parametrize("batch, calls", [(None, [[500, 501, 502, 503], [504], [1504]]), (1, [])])
 def test_the_validation_monitor_samples_its_members_monitor_batch_per_call(workspace, batch, calls):
     model = BatchedNoisy()
     overrides = [] if batch is None else [f"evaluation.monitor_batch={batch}"]
     monitor = ValidationMonitor(wave(30, 2.0), np.ones(2), config(workspace, *overrides))
 
-    monitor(model)
+    monitor(model, 0)
 
     assert model.batches == calls  # configs/evaluation: monitor_batch 128
-    assert sorted(model.seeds) == [500, 500, 501, 501, 502, 502, 503, 503]
+    assert sorted(model.seeds) == [500, 501, 502, 503, 504, 1504]
 
 
 def test_an_ensembles_members_are_scored_one_group_each_on_validation(workspace):

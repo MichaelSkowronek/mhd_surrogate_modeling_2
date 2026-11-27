@@ -23,7 +23,7 @@ from mhd_surrogate.data.grid import grid_spacing
 from mhd_surrogate.evaluation.bootstrap import BlockBootstrap
 from mhd_surrogate.evaluation.evaluate import (
     Evaluation,
-    candidate_stable_fraction,
+    candidate_fraction,
     evaluate,
     train_eval_datasets,
 )
@@ -104,8 +104,8 @@ def score_and_log(
     Validation is what decisions are made on; the training dataset(s) are
     scored the same way as a sanity check (can the model fit at all, and how
     big is the train/val gap). Validation also gets the model's
-    `stable_fraction` (`evaluate.candidate_stable_fraction`), left out if
-    unknown, and, for an ensemble of more than one member, each member's own
+    `usable_fraction` or `stable_fraction` (`evaluate.candidate_fraction`),
+    left out if unknown, and, for an ensemble of more than one member, each member's own
     scores (`val.member_<seed>`, `evaluation.gate.member_group`): the
     absolute guardrails are checked member by member."""
     targets = [(cfg.data.val_dataset, "val")] + [
@@ -119,10 +119,11 @@ def score_and_log(
         for name, prefix in targets
     }
     scores = {prefix: result.scores for prefix, result in results.items()}
-    fraction = candidate_stable_fraction(model, results["val"])
+    fraction = candidate_fraction(model, results["val"])
     if fraction is not None:
-        scores["val"]["stable_fraction"] = fraction
-        mlflow.log_metric("val.stable_fraction", fraction, model_id=model_id)
+        name, value = fraction
+        scores["val"][name] = value
+        mlflow.log_metric(f"val.{name}", value, model_id=model_id)
     if results["val"].ensemble.size > 1:
         for seed, member in enumerate(results["val"].members):
             group = member_group("val", seed)

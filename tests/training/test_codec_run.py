@@ -12,6 +12,7 @@ from hydra import compose, initialize_config_dir
 
 import mhd_surrogate.utils.hydra_resolvers  # noqa: F401
 import mlflow
+from mhd_surrogate.data.climatology import climatology_from_series, domain_mean_series
 from mhd_surrogate.data.normalization import compute_normalization_stats
 from mhd_surrogate.models.latent_linear import LatentLinear
 from mhd_surrogate.models.registry import load_model
@@ -26,6 +27,17 @@ from mlflow import MlflowClient
 ROOT = Path(__file__).resolve().parents[2]
 SHAPE = (2, 8, 6)
 TRAIN = ["a", "b"]
+# The drift band's windows (steps, stride, block) and the rollouts, short
+# enough for the 25-frame training dataset and the test series.
+BAND_WINDOW = (20, 5, 5)
+ROLLOUTS = [
+    "evaluation.drift_band.window_steps=20",
+    "evaluation.drift_band.stride=5",
+    "evaluation.drift_band.block_steps=5",
+    "evaluation.drift_band.slow_from=0",
+    "evaluation.rollouts.steps=40",
+    "evaluation.rollouts.monitor_starts=[0,20]",
+]
 
 
 def wave(n, phase):
@@ -48,6 +60,10 @@ def workspace(tmp_path, monkeypatch):
         store.create_array(name, data=frames)
     stats = compute_normalization_stats({k: series[k] for k in TRAIN}, ["u_x", "u_y"])
     stats.save(tmp_path / "stats.json")
+    climatology = climatology_from_series(
+        {k: domain_mean_series(series[k]) for k in TRAIN}, ["u_x", "u_y"], *BAND_WINDOW
+    )
+    climatology.save(tmp_path / "climatology.json")
     (tmp_path / "configs" / "analysis").mkdir(parents=True)
     shutil.copy(ROOT / "configs" / "analysis" / "grid.yaml", tmp_path / "configs" / "analysis")
     (tmp_path / "dvc.lock").write_text("schema: '2.0'\n")
@@ -92,6 +108,8 @@ def training_config(workspace, *overrides):
                 "evaluation.tie_break_lead=2",
                 "evaluation.multistart.leads=20",
                 "jax.compilation_cache_dir=null",
+                f"evaluation.drift_band.climatology={workspace / 'climatology.json'}",
+                *ROLLOUTS,
                 *overrides,
             ],
         )
@@ -199,7 +217,7 @@ def test_a_generative_latent_model_validates_and_is_scored_as_an_ensemble(worksp
     (run,) = client.search_runs([mlflow.get_experiment_by_name("test").experiment_id])
     # Every validation during training forecasts evaluation.monitor_members.
     assert run.data.metrics["val_monitor.members"] == 4
-    assert "fit.stable_fraction" in run.data.metrics
+    assert "fit.usable_fraction" in run.data.metrics
     (model,) = mlflow.search_logged_models(
         experiment_ids=[run.info.experiment_id], output_format="list"
     )

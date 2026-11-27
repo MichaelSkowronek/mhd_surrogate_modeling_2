@@ -317,9 +317,9 @@ class LatentFlow(StochasticLatentSurrogate):
         validate = None
         if hooks.validate is not None:
 
-            def validate(network):
+            def validate(network, index):
                 self.network = network
-                return hooks.validate(self)
+                return hooks.validate(self, index)
 
         result = train(
             self.network,

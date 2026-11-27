@@ -309,7 +309,7 @@ def test_fit_trains_validates_logs_and_saves_resumable_state(tmp_path, codec_dir
     validated = []
     logged = []
     hooks = FitHooks(
-        validate=lambda m: (
+        validate=lambda m, index: (
             validated.append(m.predict(context(), 4, seed=0))
             or {"selection_score": -float(len(validated))}
         ),

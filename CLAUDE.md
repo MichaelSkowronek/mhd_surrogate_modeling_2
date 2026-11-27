@@ -63,14 +63,35 @@ conventions below; it shifts which tools are worth reaching for at all.
   seeds stable on test and each score's median over them, every seed's
   scores listed and none picked. Nothing is changed or
   chosen after seeing test scores.
-- Candidates are ranked by validation stable steps (how long the forecast
-  stays bounded, `evaluation/stability.py`), then, for an iterative run's
-  stable candidate, stable fraction (the share of the validations nearest
-  its epoch that are stable too, `evaluation/selection.py`'s
-  `RunSelection`), then skill horizon, ties broken by CRPS at lead 10 (both
-  on the CRPS, which for a deterministic model is its absolute error); an
-  unstable candidate by stable steps, then by its peak ratio (how far its
-  energy or enstrophy strayed, lower first) instead of skill. The skill is
+- Candidates are ranked on validation, first by whether the usable
+  fraction of their 3000-step rollouts reaches 0.8 (usable: stable over
+  all 3000 steps, `evaluation/usable.py`, and over their first 837 in the
+  climatological drift band below) -- every candidate that reaches it
+  above every one that doesn't, these by their fraction -- then by those
+  rollouts' median stable steps, then a stable candidate by its skill
+  horizon, ties broken by CRPS at lead 10 (both on the CRPS, which for a
+  deterministic model is its absolute error), an unstable one by its
+  peak ratio (how far its energy or enstrophy strayed, lower first)
+  instead of skill. During training each validation rolls out twice,
+  from frames 80 and 400, with new seeds at every validation
+  (`protocol.rollout_seed`: rollout failures follow the seed), and is
+  judged with the rollouts of the validations nearest its epoch pooled
+  (`evaluation/selection.py`'s `RunSelection`): an epoch's own two
+  rollouts are largely luck (both survive with p^2 for a per-rollout
+  survival p), so neither its fraction nor its stability rests on them;
+  its skill is its own, its members' seeds being the same at every
+  validation, and only validations sharing a window (at a run's ends) are
+  told apart by their own rollouts -- except that an epoch none of whose
+  own rollouts is usable doesn't count as reaching the threshold
+  (`metrics.usable_fraction_bonus`): they are the only direct look at its
+  network, and the best skill among the epochs at the threshold is where
+  a less stable one would win. The climatological drift band judges a rollout's bulk flow
+  against the real flow's range rather than the validation truth, which
+  covers only the frames a rollout from the context's end does: each
+  channel's domain-mean velocity within 1 unit of the training records'
+  level and its std over time at most 2 units, the units those records'
+  837-frame windows' (`data/climatology.py`, a DVC output from the
+  training datasets only; real windows stray at most 0.38). The skill is
   measured from many starts (`evaluation.multistart`,
   `protocol.skill_starts`): a forecast from every 20 frames from the
   context's end, as many as are followed by 237 frames of truth (31 on the
@@ -85,7 +106,9 @@ conventions below; it shifts which tools are worth reaching for at all.
   trajectory's skill swings on its own events (frame 80 is the hardest
   start for every flow-matching model), so the forecast from the
   context's end only reports its skill, under the old names
-  (`crps_skill_horizon`); the stability scores stay on it.
+  (`crps_skill_horizon`; during training from the multi-start skill's
+  first start, over its 237 leads), and the final scoring's stability
+  scores stay on it.
   The rule, not a list of frames, defines the starts, so the test dataset
   gets its own without being read before the final evaluation. A
   generative model is judged as an ensemble (8 members when scored, 4 at
@@ -100,7 +123,7 @@ conventions below; it shifts which tools are worth reaching for at all.
   broken forecast, served to whoever
   asks for its seed); every other per-member score (stable steps and peak
   ratio for ranking, the relative physics guardrails) is the median over
-  its members; and its stable fraction pools the members of the
+  its members; and its usable fraction pools the rollouts of the
   validations around its epoch. Mean
   RMSE over all leads is not a selection metric: it rewards forecasts that
   smooth toward the mean. The physics scores are
@@ -109,7 +132,10 @@ conventions below; it shifts which tools are worth reaching for at all.
   from the validation context (`scripts/evaluation/check_rollout_stability.py`,
   no 100-step block over 2x the truth's energy or enstrophy), its stable
   fraction is at least 0.8 (absolute; a closed-form fit's is 1 if it is
-  stable, being the same model on every refit), its energy and
+  stable, being the same model on every refit; an iterative model trained
+  since the ranking judges rollouts reports the kept window's usable
+  fraction instead, which the gate reads once it moves to the final
+  scoring's pooled rollouts), its energy and
   enstrophy errors are no more than 0.03 worse and its spectrum distances no
   more than 0.05 worse (about the spread a different realization scores),
   and its domain-mean velocity stays in the truth's band in both channels
@@ -138,8 +164,9 @@ conventions below; it shifts which tools are worth reaching for at all.
 ## Data versioning
 
 - The raw `.npy` files are versioned with DVC (`data/raw.dvc`); the
-  pipeline is `dvc.yaml` (raw -> zarr -> normalization stats -> the
-  canonical model's `train` stage, which stores the checkpoint -> its
+  pipeline is `dvc.yaml` (raw -> zarr -> normalization stats and the
+  climatology, both from the training datasets only -> the canonical
+  model's `train` stage, which stores the checkpoint -> its
   `evaluate` stage, which scores it into `metrics.json` -> its `gate`
   stage, which fails `dvc repro` unless the checkpoint still meets the bar
   that made it canonical; and `serve_parity`, which fails unless the
@@ -157,7 +184,8 @@ conventions below; it shifts which tools are worth reaching for at all.
   stored in DVC's cache or the remote). The raw data, small outputs like the
   stats file, and the canonical model's checkpoint are cached and pushed.
 - The test dataset rule applies to the pipeline too: no stage may read
-  `re16k_t400_5`, and `compute_stats` reads `train_datasets` only. DVC moving
+  `re16k_t400_5`, and `compute_stats` and `compute_climatology` read
+  `train_datasets` only. DVC moving
   the raw directory's bytes (it includes that file) is versioning, not
   reading.
 - Training entry points log the data version they were started against

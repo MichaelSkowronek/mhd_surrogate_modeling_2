@@ -87,18 +87,18 @@ uv run pre-commit run --all-files
 
 ```
 src/mhd_surrogate/   importable package, split by pipeline stage
-  data/              dataset, grid, normalization, versioning, conversion
+  data/              dataset, grid, normalization, climatology, versioning, conversion
   analysis/          fields, summary, spectral
   training/          mlflow_utils, tracking, startup, export, mlflow_model, run, scoring, gating, trainer, tuning,
                      mlflow_codec, codec_run
-  evaluation/        protocol, metrics, quantities, stability, selection, rollout, gate, diagnostics, ensemble, evaluate,
+  evaluation/        protocol, metrics, quantities, stability, usable, selection, rollout, gate, diagnostics, ensemble, evaluate,
                      bootstrap, reconstruction
   models/            base (interface), baselines, snapshots, dmd, hankel_dmd, neural, unet, registry,
                      codec (codec interface + registry), pod_codec, latent, latent_linear, flow, latent_flow
   serving/           promotion, fetch, stream, schemas, app, client, metrics
   utils/             logging_config, parallel, jax_cache, jax_determinism, hydra_resolvers
 scripts/             CLI entry points, same split (plus viz/)
-  data/              explore_data, convert_to_zarr, compute_stats
+  data/              explore_data, convert_to_zarr, compute_stats, compute_climatology
   analysis/          check_*.py, run_all_checks, benchmark_backends
   viz/               make_video, make_all_videos, make_forecast_video
   training/          train, tune, train_codec
@@ -108,7 +108,7 @@ tests/               mirrors src/ and scripts/ (data/, analysis/, training/, eva
 deploy/              Kubernetes: kind/ (the local cluster), k8s/ (Kustomize base, overlays,
                      smoke-check, monitoring),
                      argocd/ (Argo CD install + Applications), install-tools.sh, validate.sh
-dvc.yaml, dvc.lock  data pipeline (raw -> zarr -> stats) and its pinned hashes
+dvc.yaml, dvc.lock  data pipeline (raw -> zarr -> stats, climatology) and its pinned hashes
 data/raw.dvc         DVC pointer to the raw .npy files (.dvc/ holds the remote config)
 configs/             Hydra tree: config.yaml (tune.yaml for the search, train_codec.yaml for codecs) + data/, dataset/, normalization/, model/, codec/, evaluation/, mlflow/, search/ groups
   analysis/          plain-YAML configs (split.yaml, grid.yaml)
@@ -365,7 +365,10 @@ uv run dvc push                               # after changing tracked data
 
 **Pipeline (`dvc.yaml`).** `convert_to_zarr` turns `data/raw` into the zarr
 store, and `compute_stats` turns the zarr store plus the train split into
-`data/processed/normalization_stats.json`. DVC re-runs a stage only when its
+`data/processed/normalization_stats.json`; `compute_climatology` turns the
+same into `data/processed/climatology.json`, the real flow's range of its
+domain-mean velocity that the drift band judges rollouts against (see
+"Usable rollouts"). DVC re-runs a stage only when its
 dependencies changed: the stats stage depends on just the `train_datasets` and
 `zarr_store` keys of `configs/data/re16k.yaml` (via `params`), so editing the
 val/test names doesn't invalidate it. `dvc.lock` pins the hash of every input
@@ -469,8 +472,9 @@ diagnostics re-runs `evaluate` on the stored checkpoint (about a minute)
 instead of refitting the model (minutes for Hankel DMD, half an hour or more
 for a neural network), and the `metrics.json` diff then shows the change's
 effect on the *same* model. What early stopping needs from the evaluation
-code (`evaluation/selection.py`: the selection score, the stability check)
-is a `train` dep; the rest (diagnostics, ensemble scores, the full
+code (`evaluation/selection.py`: the selection score, the stability check
+and the rollouts' drift band, with the climatology it reads) is a `train`
+dep; the rest (diagnostics, ensemble scores, the full
 `evaluate`) is only `evaluate`'s, because `run.py` imports the final scoring
 (`training/scoring.py`) by name and only when a run scores itself, which the
 `train` stage doesn't. Both stages still log to MLflow like any run: the
@@ -633,12 +637,12 @@ read once, at the end:
    validation.
 2. Refit each on train + val. A refit can't early-stop (there is no held-out
    data left), so it uses the epoch count from its tuned run, unscaled: the
-   stable fraction that vouches for that epoch count was measured per epoch,
+   usable fraction that vouches for that epoch count was measured per epoch,
    and the validation dataset lengthens an epoch by only 13% (917 frames on
    7115). An iteratively trained finalist is refit five times, with seeds
    0-4, fixed before any test score exists. One refit is one draw, and a
-   stable validation epoch is often a lucky one (see the stable fraction
-   below): the U-Net baseline's is 0.2, so a single refit of it would come
+   stable validation epoch is often a lucky one (see the usable fraction
+   below): the U-Net baseline's stable fraction is 0.2, so a single refit of it would come
    out stable about one time in five, and on that draw the table would show
    it beating Hankel DMD against all the validation evidence; on the others,
    a rerun with another seed would be choosing after seeing test. A
@@ -653,7 +657,7 @@ read once, at the end:
    fair.
 3. Score all of them on test in one evaluation, and report that table. For
    an iterative finalist it gives the share of its seeds stable on test
-   (beside its validation stable fraction, the prediction) and each score's
+   (beside its validation usable fraction, the prediction) and each score's
    median over the seeds, every seed's scores listed with it; a mean would
    be meaningless once one seed's energy error is in the hundreds. No seed
    is picked. A generative finalist's seeds are training seeds; each
@@ -665,23 +669,31 @@ what would spoil the test set is going back to iterate after looking at it.
 
 **How candidates are ranked.** A surrogate is useful for as long as its
 forecast stays close to the truth, and only if it stays bounded after that.
-The primary criterion is the validation **stable steps**: how many leading
-steps of the forecast stay bounded (see "Forecast evaluation"; the whole
-837 for a stable forecast). Then, for a stable candidate of an iterative
-(neural) training run, the **stable fraction**: the share of the 5
-validations nearest its epoch (2 either side, shifted inward at the ends
-of the run; `evaluation.stability.neighbors`) that are stable too. Then the
-validation **skill horizon** (lead steps with CRPS <= 0.32, averaged over
-16 starts and capped at 237 leads; see "Skill from many starts" below),
-ties broken by **CRPS at lead 10** (at the cap, by the mean CRPS over the
-237 leads). Stability comes
+The primary criterion is the **usable fraction** of the candidate's
+3000-step rollouts: the share that stay bounded over all their steps (see
+"Forecast evaluation") and, over their first 837, in the climatological
+drift band (see "Usable rollouts" below), as a threshold at 0.8 -- every
+candidate reaching it ranks above every one that doesn't, these by their
+fraction. Then the rollouts' **stable steps** (their median: how many
+leading steps stay bounded, 3000 for a stable one), then the validation
+**skill horizon** (lead steps with CRPS <= 0.32, averaged over 31 starts
+and capped at 237 leads; see "Skill from many starts" below), ties broken
+by **CRPS at lead 10** (at the cap, by the mean CRPS over the 237 leads).
+During training, a validation of an iterative (neural) run rolls out
+twice and is judged with the rollouts of the 5 validations nearest its
+epoch (2 either side, shifted inward at the ends of the run;
+`evaluation.stability.neighbors`), all 10 pooled for the fraction and the
+stable steps, while the skill is its own; validations sharing a window
+(the first and last 3 of a run) are told apart by their own two rollouts
+and skill, and an epoch neither of whose own two is usable doesn't count
+as reaching the threshold, whatever its window's fraction. Stability comes
 first because the short-horizon scores can't see a blow-up: the first
 U-Net search picked, by skill horizon alone, models whose energy is 1000x
 the truth's by the end of the validation forecast (see "First search").
-Among stable forecasts, which is what a usable candidate has to be, the
-rule is stable fraction, skill horizon and CRPS at lead 10; among unstable ones,
+Among stable candidates, which is what a usable one has to be, the
+rule is usable fraction, skill horizon and CRPS at lead 10; among unstable ones,
 lasting longer wins, then straying less: the **peak ratio** (the
-forecast's largest 100-step block mean of energy or enstrophy over the
+rollouts' largest 100-step block mean of energy or enstrophy over the
 truth's), lower first, in place of skill. Most unstable forecasts last 0
 or 100 steps (362 of the U-Net runs' 524 unstable validations) while
 their peaks range from 3x to 60,000x; skill can't tell a forecast that
@@ -689,18 +701,37 @@ strays 3x from one that blows up 1000x, and optimizing it among unstable
 models is what picked the first search's blow-ups. So early stopping and
 the search are pushed toward stability even while nothing is stable yet.
 A stable forecast's peak ratio isn't used: below the truth's range it
-means damping, which the stability check is deliberately one-sided about. The stable fraction is there
-because a stable epoch is usually a lucky one: the median U-Net run was
-stable on the validation forecast at 2 of its 30 epochs, mostly isolated
-ones, and only 1 of 21 runs ended on a stable epoch. Keeping the best epoch
-picks such a draw, and the final refit (above) trains for that many epochs
-with no validation left to pick with, so each of its seeds lands on
-whatever that epoch gives. The fraction around the kept epoch is how often its neighborhood
-gives a stable network. It does not predict long rollouts: of the U-Net
-checkpoints kept by stable steps and skill alone, seven isolated ones
-(fraction 0.2) passed the 3000-step rollout and three of the EMA runs'
-long stable stretches (0.6) didn't, so the rollout guardrail below stays.
-A closed-form fit (DMD) has no epochs: it is the same model on every refit.
+means damping, which the stability check is deliberately one-sided about.
+The window is there because a stable epoch is usually a lucky one, and
+each validation's own rollouts are luck too: with new seeds at every
+validation both of its two survive with probability p^2 for a recipe
+whose rollouts survive with p (27% for flow matching run 1, 85% for seed
+43), so an epoch judged by its own two would be ranked mostly by its
+draws, and the window pools them for both the fraction and the stable
+steps. The pooled fraction speaks for the neighbors' networks, though,
+and an epoch's own two rollouts are the only direct look at its network:
+an epoch whose two both fail reaches 0.8 only with all 8 of its
+neighbors' usable, and among the epochs at the threshold the best skill
+is where a less stable network would win. So such an epoch is ranked by its
+window's fraction as if below the threshold, still above every window
+that is: it is kept only if no epoch reaches the threshold with a
+usable rollout of its own. Under equal networks the window's two
+failures land on that one epoch 1 time in 45, and the case arises at
+(1 - p)^2 p^8 of the epochs (0.3% for p = 0.92, 0.7% for 0.8); a wrong
+demotion moves the pick to a neighboring validation's network, whose
+window usually reaches the threshold too. Before rollouts were judged, the median U-Net run was stable on the
+validation forecast at 2 of its 30 epochs, mostly isolated ones, and only 1 of 21
+runs ended on a stable epoch. Keeping the best epoch picks such a draw,
+and the final refit (above) trains for that many epochs with no
+validation left to pick with, so each of its seeds lands on whatever that
+epoch gives. The fraction around the kept epoch is how often its
+neighborhood gives a usable network (until 2026-11-27 it was the
+**stable fraction**, the share of the window's 837-step validation
+forecasts stable, which did not predict long rollouts: of the U-Net
+checkpoints kept by stable steps and skill alone, seven isolated ones,
+fraction 0.2, passed the 3000-step rollout and three of the EMA runs'
+long stable stretches, 0.6, didn't). A closed-form fit (DMD) has no
+epochs: it is the same model on every refit.
 
 The skill is measured on the **CRPS** (2026-10-27; it was the RMSE
 before, `<= 0.5`, and the skill horizons in the result tables further down
@@ -882,6 +913,69 @@ among the 8 members scored, of which they were two, the flattering was
 0.002-0.004 of CRPS at lead 10, against differences of ~0.01 between
 epochs.
 
+**Usable rollouts** (2026-11-27). The stable steps used to come from the
+837-step validation forecast from the context's end, and the 3000-step
+rollout the guardrails require was checked only on a finished candidate
+(`check_rollout_stability.py`), so early stopping and the search could keep
+an epoch whose rollouts blow up. Every validation now rolls the model out
+3000 steps from two of the multi-start starts, frames 80 and 400
+(`evaluation.rollouts`), with new seeds at each validation
+(`protocol.rollout_seed`): failures follow the seed (above), so with the
+same seeds at every validation a window's fraction would measure those
+seeds. A rollout is **usable** if it is stable over all 3000 steps and its
+bulk flow stays in the **climatological drift band** over its first 837
+steps: each channel's domain-mean velocity within 1 unit of the training
+records' level and its std over time at most 2 units, the unit the median
+std over time of the training records' 837-frame windows (u_x: 0.36% of
+the bulk flow; `data/climatology.py`, the `compute_climatology` DVC stage,
+from the training datasets only).
+
+Why a climatology: the validation truth exists for frames 80-916 only. A
+rollout from the context's end covers them in its first 837 steps, one
+from frame 400 covers 517 of them, and the real bulk flow declines
+through every record (all 8 readable ones, by 0.02-1.27 units per 1000
+frames; validation 0.94), so a fixed truth window would judge later
+starts against frames they don't cover: a model tracking the truth
+exactly would start 0.3 units off from frame 400 and 0.56 from frame 680.
+The climatology judges every start's rollout alike; the first 837 steps
+only, because later ones reach times since the records' start that no
+record shows (whether the decline goes on past 1248 frames can't be
+checked). The limits keep the old band's numbers, now against the
+climatology: 1 unit is ~2.6x the largest real window's offset (u_x: 0.34
+in the 66 training windows, 0.30-0.38 in the validation ones; u_y at most
+0.09), as the old limit was ~3x a different realization's, and a std
+ratio of 2 against real windows' 0.85-1.19. On the kept checkpoints'
+3000-step rollouts from all 31 starts with the scoring's seeds (62 per
+flow-matching run, 31 per deterministic model):
+
+| model | stable over 3000 | in the band | usable |
+|---|---|---|---|
+| Hankel DMD | 100% | 100% | 100% |
+| latent_linear | 100% | 100% | 100% |
+| flow matching run 1 | 52% | 98% | 52% |
+| flow matching seed 43 | 92% | 73% | 65% |
+| flow matching noise 0.03 | 98% | 98% | 97% |
+| U-Net baseline | 77% | 0% | 0% |
+
+Seed 43's bulk flow sits ~0.6 units above the climatology (up to 1.9),
+where no real window passes 0.38; the old validation reference hid that,
+the validation trajectory's own level being 0.30 above the climatology.
+The U-Net's 7% loss of bulk flow is ~46 units. Logged, neither ranked nor
+gated (decided at the canonical switch, its numbers then): the band over
+the 4 windows covering a rollout (all 4 in it for the stable rollouts:
+run 1 97%, seed 43 49%, noise 0.03 75%), the slow-variability ratio (the
+std of the bulk flow's 100-step block means within 837-step windows from
+step 300, over the real windows': flow matching 1.35-1.54, the real
+validation windows 0.76-1.57, so at the top of the real range), and the
+energy and enstrophy errors over the first 837 steps, as
+`val_monitor.rollout_*`. What it costs: two 3000-step rollouts per
+validation, in one call for flow matching: run 1's validation takes 14.2 s
+(8.8 s before), ~7 min of a 30-epoch fit, the U-Net's 63 s (37.5 s).
+Until the final scoring rolls models out too, it and the gate keep their
+checks: the context-end forecast's stability and drift band, the gate's
+own rollout and, for a closed-form model, the stable fraction; an
+iterative model trained since reports its kept window's `usable_fraction`.
+
 One limit stays: all of this rests on one 917-frame validation
 trajectory. The starts use it better, not more: their events are its
 events. A second validation dataset would cost a seventh of the training
@@ -904,14 +998,14 @@ let that last one pass 65% of the time. Every other per-member score --
 stable steps and peak ratio for ranking, the relative guardrails (energy,
 enstrophy, spectra, a typical member against the incumbent) -- is the
 median over its members, so no single member, lucky or blown up, decides.
-Its stable fraction pools the members of the validations around its epoch
-(a stable sample is as much a lucky draw as a stable epoch). During
-training each validation forecasts 4 members
+Its usable fraction pools the rollouts of the validations around its
+epoch, each validation's drawing new seeds (a usable sample is as much a
+lucky draw as a usable epoch): 10 rollouts, and 0.8 means 8 of them.
+During training each validation forecasts 4 members for the skill
 (`evaluation.monitor_members`, the same seeds at every validation, so
 epochs differ only by the network, and never the scored ones; why 4 and
-why seeds of their own, see "Skill from many starts"); the
-stable fraction then counts 20 forecasts, and 0.8 means 16 of them. A closed-form generative fit's stable
-fraction is the share of its members stable. The evaluation writes each
+why seeds of their own, see "Skill from many starts"). A closed-form
+generative fit's stable fraction is the share of its members stable. The evaluation writes each
 member's own validation scores as `val.member_<seed>` (in MLflow and
 `metrics.json`), which the gate checks member by member.
 
@@ -2714,20 +2808,22 @@ of the domain.
   checkpointing, so it's kept short enough that early stopping (and the
   hyperparameter search's pruning) can follow the curve.
 - *Early stopping on validation:* every `eval_every` epochs the model
-  forecasts the whole validation dataset under the protocol and 237 leads
-  from each of the multi-start skill's 16 starts, and is scored with
-  `evaluation.selection_scores`: stable steps, skill horizon and its
-  tie-break CRPS (see "Skill from many starts"), folded into one
-  `selection_score`,
-  `(n + 1) * stable_steps + skill - c / (1 + c)` for an `n`-step forecast,
-  which orders like the rule exactly (one more stable step outweighs any
-  skill, one more skill step any CRPS); an unstable forecast scores
-  `(n + 1) * stable_steps + n / (1 + log10 peak_ratio)` instead, so one
-  more stable step still outweighs any peak. The validations are then ranked by
-  `evaluation.selection.RunSelection`, which judges each with its nearest
-  validations: a stable one's score gains its stable fraction times
-  `(n + 1) * m^2` for windows of `m` forecasts, enough for a larger
-  fraction to outweigh any skill and CRPS. A validation's score is
+  forecasts 237 leads from each of the multi-start skill's 31 starts and
+  rolls out 3000 steps from frames 80 and 400, and is scored with
+  `evaluation.selection_scores`: skill horizon and its tie-break CRPS (see
+  "Skill from many starts"), the rollouts' stable steps, peak ratios and
+  usable flags (see "Usable rollouts"), folded into one `selection_score`,
+  `T + (n + 1) * stable_steps + skill - c / (1 + c)` for `n`-step
+  rollouts, which orders like the rule exactly (one more stable step
+  outweighs any skill, one more skill step any CRPS); an unstable median
+  scores `T + (n + 1) * stable_steps + n / (1 + log10 peak_ratio)`
+  instead, so one more stable step still outweighs any peak. `T`, the
+  usable fraction's tier, is `(n + 1)^2 * m^2` for `m` rollouts whose
+  fraction reaches the threshold (0.8) and the fraction times that for
+  ones short of it, enough to outrank everything after it. A validation
+  scored alone uses its own two rollouts; `evaluation.selection.RunSelection`
+  ranks it with its nearest validations' rollouts pooled (the fraction,
+  the median stable steps and peak ratio) and its own skill. A validation's score is
   provisional until its 2 later neighbors are in, so its network is kept
   until then (with the best one already final); a stable epoch can still
   lose its lead to an unstable one after it. Training stops once the best
@@ -2749,13 +2845,17 @@ of the domain.
 **What's logged.** Training curves go to MLflow with the optimizer step as
 the step: `loss`, `grad_norm`, `lr` and `samples_per_second` every
 `log_every` steps, and `epoch_loss`, `epoch_seconds` and
-`val_monitor.{multistart_crps_skill_horizon,multistart_crps_lead_10,multistart_crps_mean,crps_skill_horizon,crps_lead_10,stable_steps,energy_peak_ratio,enstrophy_peak_ratio,selection_score,forecast_steps,members,stable_members}`
-every epoch (the `multistart_*` ones since 2026-11-24), with the run's
-best validation so far (`best_epoch`,
-`best_selection_score`, `best_stable_fraction`). After
+`val_monitor.{multistart_crps_skill_horizon,multistart_crps_lead_10,multistart_crps_mean,crps_skill_horizon,crps_lead_10,rollout_stable_steps,rollout_peak_ratio,rollouts,usable_rollouts,in_band_rollouts,selection_score,members}`
+every epoch with the rollouts' logged medians (`rollout_<channel>_clim_offset`,
+`rollout_windows_in_band`, `rollout_u_x_slow_std_ratio`, ...; the
+`multistart_*` ones since 2026-11-24, the `rollout_*` ones since
+2026-11-27, which replaced `stable_steps`, `forecast_steps` and
+`stable_members`), with the run's best validation so far (`best_epoch`,
+`best_selection_score`, `best_usable_fraction`, `best_stable_fraction`
+before 2026-11-27). After
 training, the model is checkpointed, logged and scored like every model
 (`val.*`, `train.<dataset>.*`, `fit.*`, where `fit.best_epoch`,
-`fit.stable_fraction` and `fit.stopped_early` come from training), and
+`fit.usable_fraction` and `fit.stopped_early` come from training), and
 `n_parameters` is the network's weights (runs before #68 logged it as
 `fit.parameters`).
 
@@ -2867,7 +2967,7 @@ Tune. Its root config, `configs/tune.yaml`, is `config.yaml` plus a
   why the run body moved there.)
 - **One metric, the selection rule.** A trial reports its validation scores
   to Tune after every validation, with its best validation so far as early
-  stopping ranks it (stable steps, then stable fraction, then skill horizon
+  stopping ranks it (usable fraction, then stable steps, then skill horizon
   with CRPS at lead 10 as tie-break), and the search maximizes that,
   `best_selection_score`. The search optimizes what models are
   chosen by, on validation only. A trial's best, not its latest score: a
@@ -2876,11 +2976,11 @@ Tune. Its root config, `configs/tune.yaml`, is `config.yaml` plus a
   by whatever its validation at the rung happened to score (trial 5 of the
   first search, below), and Optuna's TPE learned each trial's final epoch,
   since Ray hands the searcher a trial's last result, not the epoch the
-  trial keeps. With the stable fraction in it, the best can't be one lucky
+  trial keeps. With the usable fraction in it, the best can't be one lucky
   epoch either; and since a later validation can still lower a best whose
   neighbors aren't all in, a trial's result is its last report
   (`get_best_result(scope="last")`), not its highest. The result table
-  shows each trial's best score and stable fraction.
+  shows each trial's best score and usable fraction.
 - **Optuna proposes, ASHA prunes.** Optuna's TPE sampler (seeded) models
   which regions of the space score well, from the trials so far, and samples
   the next configuration there instead of uniformly at random. ASHA
