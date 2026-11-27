@@ -219,7 +219,7 @@ def test_fit_trains_validates_logs_and_keeps_the_boundary_exact(tmp_path):
     validated = []
     logged = []
     hooks = FitHooks(
-        validate=lambda m: (
+        validate=lambda m, index: (
             validated.append(m.predict(datasets["d1"][:2], 4))
             or {"selection_score": -float(len(validated))}
         ),

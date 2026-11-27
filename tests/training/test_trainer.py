@@ -217,33 +217,42 @@ def test_logs_step_and_epoch_metrics_at_increasing_steps():
 
 class ScriptedValidation:
     """Returns the scores in `script`, one per call, and remembers the gain
-    it was shown each time."""
+    and validation index it was shown each time."""
 
     def __init__(self, script):
         self.script = list(script)
         self.gains = []
+        self.indices = []
 
-    def __call__(self, network):
+    def __call__(self, network, index):
         self.gains.append(float(network.gain))
+        self.indices.append(index)
         return {"selection_score": self.script[len(self.gains) - 1], "crps_skill_horizon": 1.0}
 
 
 class ScriptedStability:
-    """Scores like `selection_scores` for a 10-step forecast, from `script`'s
-    (stable, skill) pairs, one per call; remembers the gain it was shown."""
+    """Scores like `selection_scores` for one 10-step rollout, from
+    `script`'s (usable, skill) pairs, one per call (a usable rollout stable,
+    an unusable one blowing up at step 5); remembers the gain it was shown."""
 
     def __init__(self, script):
         self.script = list(script)
         self.gains = []
 
-    def __call__(self, network):
+    def __call__(self, network, index=0):
         self.gains.append(float(network.gain))
         stable, skill = self.script[len(self.gains) - 1]
-        steps = 10.0 if stable else 5.0
+        steps, peak, usable = (10.0, 1.0, 1.0) if stable else (5.0, 5.0, 0.0)
         return {
-            "selection_score": selection_score(skill, 0.5, steps, 10, 1.0 if stable else 5.0),
-            "stable_steps": steps,
-            "forecast_steps": 10.0,
+            "selection_score": selection_score(skill, 0.5, steps, 10, peak, usable),
+            "multistart_crps_skill_horizon": float(skill),
+            "selection_tie_break": 0.5,
+            "rollout_stable_steps": steps,
+            "rollout_steps": 10.0,
+            "rollouts": 1.0,
+            "usable_rollouts": usable,
+            "rollout_0_stable_steps": steps,
+            "rollout_0_peak_ratio": peak,
         }
 
 
@@ -270,14 +279,15 @@ def test_early_stopping_keeps_a_stable_stretch_over_a_lone_stable_epoch():
     validate = ScriptedStability(STRETCH)
     judged, log = run(validate=validate, max_epochs=6, patience=10, neighbors=1)
 
-    # Alone, epoch 2's skill wins; with its neighbors (1 of 3 stable) it loses
-    # to epoch 6 (3 of 3, its window shifted inward at the end of the run).
+    # Alone, epoch 2's skill wins; with its neighbors (1 of 3 usable, short of
+    # the threshold) it loses to epoch 6 (3 of 3, its window shifted inward
+    # at the end of the run).
     assert alone.info["best_epoch"] == 2
-    assert "stable_fraction" not in alone.info
+    assert "usable_fraction" not in alone.info
     assert judged.info["best_epoch"] == 6
-    assert judged.info["stable_fraction"] == 1.0
+    assert judged.info["usable_fraction"] == 1.0
     assert float(judged.network.gain) == validate.gains[5]
-    assert {"best_selection_score", "best_epoch", "best_stable_fraction"} <= log.keys()
+    assert {"best_selection_score", "best_epoch", "best_usable_fraction"} <= log.keys()
 
 
 def test_every_validation_is_reported_with_the_runs_best_so_far():
@@ -291,10 +301,12 @@ def test_every_validation_is_reported_with_the_runs_best_so_far():
         report=reports.append,
     )
 
+    # Epochs 1-3 share their window (shifted inward at the start), whose
+    # pooled rollouts are unstable: on that tie epoch 2's own usable one wins.
     assert [r["best_epoch"] for r in reports] == [1, 2, 2]
     # Epoch 2's window grows from epochs 1-2 to 1-3: provisional until then.
-    assert [r["best_stable_fraction"] for r in reports] == pytest.approx([0.0, 0.5, 1 / 3])
-    assert [r["stable_steps"] for r in reports] == [5.0, 10.0, 5.0]
+    assert [r["best_usable_fraction"] for r in reports] == pytest.approx([0.0, 0.5, 1 / 3])
+    assert [r["rollout_stable_steps"] for r in reports] == [5.0, 10.0, 5.0]
 
 
 def test_early_stopping_counts_patience_from_the_best_validation_so_far():
@@ -302,8 +314,9 @@ def test_early_stopping_counts_patience_from_the_best_validation_so_far():
 
     result, _ = run(validate=validate, max_epochs=5, patience=2, neighbors=1)
 
-    # Epoch 1 stays best (2 of its 2, then 3, nearest stable): stop at 3,
-    # before epoch 5's skill is ever seen.
+    # Epoch 1 stays best (2 of its 2 nearest usable, then 2 of 3 like epoch
+    # 2's window, which it outranks on skill): stop at 3, before epoch 5's
+    # skill is ever seen.
     assert len(validate.gains) == 3
     assert result.info["stopped_early"] == 1.0
     assert result.info["best_epoch"] == 1
@@ -315,6 +328,7 @@ def test_validates_every_eval_every_epochs_and_after_the_last():
     result, _ = run(validate=validate, max_epochs=5, eval_every=2)
 
     assert len(validate.gains) == 3  # epochs 2, 4 and 5
+    assert validate.indices == [0, 1, 2]  # the validations', not the epochs'
     assert result.info["best_epoch"] == 5
 
 
@@ -347,7 +361,7 @@ class Interrupt(Exception):
 def test_resume_continues_exactly_where_an_interrupted_run_stopped(tmp_path):
     uninterrupted, _ = run(tmp_path / "a", validate=ScriptedValidation([1, 2, 3, 4]))
 
-    def crash_at_epoch_3(network, calls=[]):  # noqa: B006 -- counts calls
+    def crash_at_epoch_3(network, index, calls=[]):  # noqa: B006 -- counts calls
         calls.append(1)
         if len(calls) == 3:
             raise Interrupt
@@ -358,10 +372,14 @@ def test_resume_continues_exactly_where_an_interrupted_run_stopped(tmp_path):
     state = json.loads((tmp_path / "b" / STATE_FILE).read_text())
     assert state["epoch"] == 2
 
-    resumed, log = run(tmp_path / "b", validate=ScriptedValidation([3, 4]))
+    validate = ScriptedValidation([3, 4])
+    resumed, log = run(tmp_path / "b", validate=validate)
 
     assert resumed.info["resumed_at_epoch"] == 2
     assert float(resumed.network.gain) == float(uninterrupted.network.gain)
+    # The validations' count goes on from the interruption (what a
+    # validation's rollouts draw their seeds from).
+    assert validate.indices == [2, 3]
     assert min(step for step, _ in log.records) > state["step"]
 
 
@@ -379,7 +397,7 @@ def test_a_resumed_random_loss_draws_the_keys_an_uninterrupted_run_would(tmp_pat
         tmp_path / "a", loss=noisy_loss, max_epochs=3, validate=ScriptedValidation([1, 2, 3])
     )
 
-    def crash_at_epoch_2(network, calls=[]):  # noqa: B006 -- counts calls
+    def crash_at_epoch_2(network, index, calls=[]):  # noqa: B006 -- counts calls
         calls.append(1)
         if len(calls) == 2:
             raise Interrupt
@@ -435,7 +453,7 @@ def test_a_resumed_run_continues_the_weight_average(tmp_path):
         tmp_path / "a", validate=ScriptedValidation([1, 2, 3]), max_epochs=3, ema_decay=0.95
     )
 
-    def crash_at_epoch_2(network, calls=[]):  # noqa: B006 -- counts calls
+    def crash_at_epoch_2(network, index, calls=[]):  # noqa: B006 -- counts calls
         calls.append(1)
         if len(calls) == 2:
             raise Interrupt
@@ -474,16 +492,17 @@ def test_state_dir_keeps_only_the_current_weights(tmp_path):
 def test_state_dir_keeps_the_networks_whose_window_is_still_open(tmp_path):
     run(tmp_path, validate=ScriptedStability(STRETCH[:4]), max_epochs=4, neighbors=1)
 
-    # Epochs 1-3 have their final windows, and 2 is the best of them; epoch 4
-    # would gain a neighbor from a 5th validation.
+    # Epochs 1-3 have their final windows, and 3 is the best of them (its
+    # window, epochs 2-4, 2 of 3 usable against 1 of 3 for 1's and 2's);
+    # epoch 4 would gain a neighbor from a 5th validation.
     state = json.loads((tmp_path / STATE_FILE).read_text())
     assert state["candidate_files"] == {
-        "1": "candidate-epoch-0002.eqx",
+        "2": "candidate-epoch-0003.eqx",
         "3": "candidate-epoch-0004.eqx",
     }
     files = sorted(p.name for p in tmp_path.glob("*.eqx"))
     assert files == [
-        "candidate-epoch-0002.eqx",
+        "candidate-epoch-0003.eqx",
         "candidate-epoch-0004.eqx",
         "latest-epoch-0004.eqx",
     ]
@@ -495,10 +514,10 @@ def test_resume_keeps_a_network_whose_window_closes_after_the_interruption(tmp_p
     uninterrupted = ScriptedStability(script)
     expected, _ = run(tmp_path / "a", validate=uninterrupted, max_epochs=5, neighbors=1)
 
-    def crash_at_epoch_4(network, calls=ScriptedStability(script)):  # noqa: B008
+    def crash_at_epoch_4(network, index, calls=ScriptedStability(script)):  # noqa: B008
         if len(calls.gains) == 3:
             raise Interrupt
-        return calls(network)
+        return calls(network, index)
 
     with pytest.raises(Interrupt):
         run(tmp_path / "b", validate=crash_at_epoch_4, max_epochs=5, neighbors=1)

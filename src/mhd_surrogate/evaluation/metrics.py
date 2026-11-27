@@ -318,65 +318,71 @@ def selection_score(
     stable_steps: float,
     n_steps: int,
     peak_ratio: float,
-    stable_fraction: float = 0.0,
+    usable_fraction: float = 0.0,
+    threshold: float = 0.8,
     n_forecasts: int = 1,
+    own_usable: bool = True,
 ) -> float:
     """One number that ranks candidates like the selection rule (CLAUDE.md,
-    "Data analysis"): by stable steps (how long the forecast stays bounded,
-    `evaluation.stability`); then a stable forecast by stable fraction, by
-    skill horizon and, as a tie-break, by a CRPS (`capped_skill`'s, of the
-    multi-start skill), and an unstable one by its peak ratio, lower first.
-    A higher score is a better candidate under the rule; early stopping and
-    the hyperparameter search maximize it.
+    "Data analysis"): first by whether the `usable_fraction` of the rollouts
+    a candidate is judged with reaches `threshold` -- every one that does
+    above every one that doesn't, these by their fraction; a candidate none
+    of whose own rollouts is usable (`own_usable` False) doesn't count as
+    reaching it -- then by those
+    rollouts' stable steps (how long they stay bounded, `evaluation.usable`)
+    and, for a stable candidate, by skill horizon and, as a tie-break, a
+    CRPS (`capped_skill`'s, of the multi-start skill), for an unstable one
+    by its peak ratio, lower first. A higher score is a better candidate
+    under the rule; early stopping and the hyperparameter search maximize
+    it.
+
+    `stable_steps` and `peak_ratio` are the median over the rollouts the
+    candidate is judged with (`selection.RunSelection`: those of the
+    validations nearest it in its training run), `usable_fraction` their
+    share usable, of at most `n_forecasts`; `skill` and the CRPS the
+    candidate's own, and `own_usable` whether any of its own rollouts is
+    usable (`usable_fraction_bonus`). The default fraction 0 scores a
+    candidate by its stability and skill alone.
 
     The CRPS term c / (1 + c) lies in [0, 1) and grows with c, so it orders
     equal skill horizons without ever outweighing one step of skill (an
     infinite CRPS scores 1, at worst tying the next skill down). Skill minus
     that term lies in (-1, n_steps] for a skill of at most the `n_steps`
     steps the stable steps count (the multi-start skill is capped at its
-    leads, fewer than the scored forecast's), so weighting the stable steps
-    by n_steps + 1 makes one more stable step outweigh any skill and CRPS
-    (again tying at worst for an infinite CRPS). Scores are therefore
-    comparable only between forecasts of the same length, i.e. on the same
-    dataset.
+    leads, fewer than the rollouts'), so weighting the stable steps by
+    n_steps + 1 makes one more stable step outweigh any skill and CRPS
+    (again tying at worst for an infinite CRPS); these terms span less than
+    (n_steps + 1)^2, which the fraction's tier outweighs
+    (`usable_fraction_bonus`). Scores are therefore comparable only between
+    rollouts of the same length.
 
-    `peak_ratio` is how far the forecast strayed: its largest block mean of
-    energy or enstrophy over the truth's (`stability.stability_scores`'
-    peak ratios, the larger of the two; NaN for a forecast that produced
-    NaN). An unstable forecast is ranked by it instead of by skill: the
-    stable steps of most unstable forecasts are 0 or 100 while their peaks
-    range over decades (3x to 60,000x in the U-Net runs), and a forecast
-    that strays 3x is far closer to a usable one than one that blows up
-    1000x, whatever its short-range skill. Its term (`peak_ratio_term`)
-    lies in [0, n_steps], so one more stable step still outweighs it, and
-    an unstable forecast never outscores a stable one (tying at worst). A
-    stable forecast's peak ratio isn't used: below the truth's range it
-    means damping, which the stability check deliberately doesn't reward.
+    `peak_ratio` is how far the rollouts strayed: their largest block mean
+    of energy or enstrophy over the truth's (the larger of the two; NaN for
+    a rollout that produced NaN). An unstable candidate is ranked by it
+    instead of by skill: the stable steps of most unstable forecasts are 0
+    or 100 while their peaks range over decades (3x to 60,000x in the U-Net
+    runs), and a forecast that strays 3x is far closer to a usable one than
+    one that blows up 1000x, whatever its short-range skill. Its term
+    (`peak_ratio_term`) lies in [0, n_steps], so one more stable step still
+    outweighs it, and an unstable candidate never outscores a stable one
+    with the same fraction (tying at worst). A stable candidate's peak
+    ratio isn't used: below the truth's range it means damping, which the
+    stability check deliberately doesn't reward.
 
-    `stable_fraction` is the share of stable forecasts among the at most
-    `n_forecasts` the candidate is judged with (`selection.RunSelection`:
-    the members of the validations nearest it in its training run), and
-    counts only for a forecast stable over all `n_steps`: it orders
-    candidates that are, which the stable steps can't. The default 0 scores
-    a forecast alone. Distinct fractions of at most `n_forecasts` forecasts
-    differ by at least 1 / n_forecasts^2, and a stable forecast's skill and
-    CRPS terms span n_steps + 1, so weighting the fraction by (n_steps + 1)
-    n_forecasts^2 makes a larger one outweigh them (tying at worst); a
-    stable forecast with no bonus still scores at least any unstable one.
-    Scores with a fraction are comparable only for the same `n_forecasts`
+    Scores are comparable only for the same `n_forecasts` and `threshold`
     too, and only under the same rule: the score follows the rule as it
-    changes (the stable fraction, the peak ratio, the CRPS and the
-    multi-start skill each changed it), so runs scored before a change
-    don't compare with runs after."""
-    bonus = stable_fraction_bonus(stable_fraction, stable_steps, n_steps, n_forecasts)
+    changes (the stable fraction, the peak ratio, the CRPS, the multi-start
+    skill and the usable fraction each changed it), so runs scored before a
+    change don't compare with runs after."""
+    tier = usable_fraction_bonus(usable_fraction, threshold, n_steps, n_forecasts, own_usable)
     c = crps_at_tie_break_lead
     if math.isnan(c):
         return float("-inf")
     if stable_steps < n_steps:
-        return float(stable_steps) * (n_steps + 1) + peak_ratio_term(peak_ratio, n_steps)
+        return tier + float(stable_steps) * (n_steps + 1) + peak_ratio_term(peak_ratio, n_steps)
     return (
-        float(stable_steps) * (n_steps + 1)
-        + bonus
+        tier
+        + float(stable_steps) * (n_steps + 1)
         + float(skill)
         - (1.0 if math.isinf(c) else c / (1.0 + c))
     )
@@ -392,16 +398,39 @@ def peak_ratio_term(peak_ratio: float, n_steps: int) -> float:
     return n_steps / (1.0 + math.log10(max(peak_ratio, 1.0)))
 
 
-def stable_fraction_bonus(
-    stable_fraction: float, stable_steps: float, n_steps: int, n_forecasts: int
+def usable_fraction_bonus(
+    usable_fraction: float,
+    threshold: float,
+    n_steps: int,
+    n_forecasts: int,
+    own_usable: bool = True,
 ) -> float:
-    """What `selection_score` adds for a stable fraction: the fraction times
-    (n_steps + 1) n_forecasts^2 for a forecast stable over all `n_steps`,
-    0 for one that isn't."""
-    if not 0.0 <= stable_fraction <= 1.0:
-        raise ValueError(f"stable_fraction must be in [0, 1], got {stable_fraction}")
+    """What `selection_score` adds for a usable fraction, its first key:
+    W = (n_steps + 1)^2 n_forecasts^2 if the fraction reaches `threshold`,
+    whatever it is, so such candidates rank by stability and skill alone;
+    the fraction times W if it doesn't. Distinct fractions of at most
+    `n_forecasts` rollouts differ by at least 1 / n_forecasts^2 and a
+    fraction below 1 is at most 1 - 1 / n_forecasts, so the bonus orders
+    candidates below the threshold by fraction and puts every one that
+    reaches it above them, either way by more than the stability, skill and
+    CRPS terms span, (n_steps + 1)^2.
+
+    A candidate none of whose own rollouts is usable (`own_usable` False)
+    gets the fraction times W even at the threshold. Its fraction then says
+    that its neighbors' networks are usable, while its own rollouts are the
+    only direct evidence about its network, and the highest skill among the
+    candidates reaching the threshold is where a less stable network would
+    win. Its fraction still puts it above every candidate below the
+    threshold, so it is kept only if no candidate reaches the threshold
+    with a usable rollout of its own. (With none of its own usable, its
+    fraction is below 1.)"""
+    if not 0.0 <= usable_fraction <= 1.0:
+        raise ValueError(f"usable_fraction must be in [0, 1], got {usable_fraction}")
+    if not 0.0 < threshold <= 1.0:
+        raise ValueError(f"threshold must be in (0, 1], got {threshold}")
     if n_forecasts < 1:
         raise ValueError(f"n_forecasts must be >= 1, got {n_forecasts}")
-    if stable_steps < n_steps:
-        return 0.0
-    return stable_fraction * (n_steps + 1) * n_forecasts**2
+    if not own_usable and usable_fraction == 1.0:
+        raise ValueError("a usable fraction of 1 includes the candidate's own usable rollouts")
+    weight = float((n_steps + 1) ** 2 * n_forecasts**2)
+    return weight if usable_fraction >= threshold and own_usable else usable_fraction * weight

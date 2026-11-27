@@ -1,10 +1,12 @@
 """Per-step domain-mean quantities of a velocity series.
 
 Shared by the long-horizon diagnostics (`diagnostics.py`, scored once after
-training) and the stability check (`stability.py`, part of the selection
-score that early stopping uses every epoch). Kept in a module of their own
-so that training -- and the DVC `train` stage's dependencies -- only reach
-what early stopping needs, not the diagnostics.
+training), the stability check (`stability.py`, part of the selection
+score that early stopping uses every epoch) and the climatological drift
+band (`usable.py`, which needs the domain-mean velocity every epoch too).
+Kept in a module of their own so that training -- and the DVC `train`
+stage's dependencies -- only reach what early stopping needs, not the
+diagnostics.
 
 Each comes twice: in NumPy on the host (`kinetic_energy`, `enstrophy`, in
 float64 by their callers) and in JAX on the device
@@ -71,3 +73,14 @@ def device_energy_and_enstrophy(
     energy = 0.5 * jnp.mean(jnp.sum(frames**2, axis=1), axis=(1, 2))
     ens = 0.5 * jnp.mean(device_vorticity(frames, dx, dy) ** 2, axis=(1, 2))
     return energy, ens
+
+
+def device_domain_mean(frames: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """The spatial mean of (t, C, Nx, Ny) frames per step and channel as
+    two float32 parts, (reference, correction), (t, C) each, whose sum in
+    float64 is the mean: the domain-mean u_x is ~1 and varies by ~0.4% of
+    that over time, so one float32 mean (~1e-7 relative) would be off by
+    ~5e-5 of that variation; the correction, a mean of values around 0, is
+    good to ~1e-7 of it."""
+    reference = jnp.mean(jnp.mean(frames, axis=3), axis=2)
+    return reference, jnp.mean(frames - reference[..., None, None], axis=(2, 3))

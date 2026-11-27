@@ -63,6 +63,10 @@ stages:
       hash: md5
       md5: 3d0556d5c7871f432d7b16ae2700c3ad
       size: 825
+    - path: data/processed/climatology.json
+      hash: md5
+      md5: c03e634f037b73d8c5b92c42fb25850c
+      size: 741
     - path: data/processed/normalization_stats.json
       hash: md5
       md5: 603bc434b437b41486a9ecc5639b0df7
@@ -92,6 +96,10 @@ stages:
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
       size: 0
+    - path: src/mhd_surrogate/data/climatology.py
+      hash: md5
+      md5: 9df2bb2059d2ee3ddb8cdb7f7c3c597e
+      size: 7484
     - path: src/mhd_surrogate/data/grid.py
       hash: md5
       md5: 838dd3ea41d2816c0b63e6b6187b0729
@@ -110,32 +118,36 @@ stages:
       size: 0
     - path: src/mhd_surrogate/evaluation/metrics.py
       hash: md5
-      md5: 96ce37a66a7907f8d8940096d3c397a9
-      size: 19305
+      md5: 3fa4bf0918defd1204dbeeb95cfb33eb
+      size: 20884
     - path: src/mhd_surrogate/evaluation/protocol.py
       hash: md5
-      md5: 0da13cc07de5dccfd4cc2e07c13e0cc9
-      size: 24330
+      md5: ccfd3f56ff45aae8663159520c1fc831
+      size: 25462
     - path: src/mhd_surrogate/evaluation/quantities.py
       hash: md5
-      md5: 4b7e6dcf32eb99293b420aa635cd29fd
-      size: 3057
+      md5: ffb60fe7565c4c71933d71956da33c31
+      size: 3769
     - path: src/mhd_surrogate/evaluation/selection.py
       hash: md5
-      md5: 97886f88f773aafb6b4f29da7222617b
-      size: 12196
+      md5: d71aac5209cc0248e9cf3eed8d7e960d
+      size: 16889
     - path: src/mhd_surrogate/evaluation/stability.py
       hash: md5
       md5: 0dc0367193d28f150bd9de2cfb87a3dd
       size: 5487
+    - path: src/mhd_surrogate/evaluation/usable.py
+      hash: md5
+      md5: e6fd478b91651dd859b31dcc44816a29
+      size: 9922
     - path: src/mhd_surrogate/models/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
       size: 0
     - path: src/mhd_surrogate/models/base.py
       hash: md5
-      md5: 422a9f1f452c4556c0782ab4f0307fc4
-      size: 7831
+      md5: a2454972a25406c46c829008deecdbd5
+      size: 8081
     - path: src/mhd_surrogate/models/dmd.py
       hash: md5
       md5: 9264ddb4fa9088b140d3dad6b523a6a9
@@ -170,8 +182,8 @@ stages:
       size: 4221
     - path: src/mhd_surrogate/training/run.py
       hash: md5
-      md5: de62a7a48b6989bf4434f61536fcfb16
-      size: 8018
+      md5: 88bc97202c4285a55d42802cc9410d31
+      size: 9513
     - path: src/mhd_surrogate/training/startup.py
       hash: md5
       md5: 6294a36299cccb2b3df42388eea29701
@@ -214,14 +226,28 @@ stages:
         val_dataset: re16k_t400_6
         zarr_store: data/processed/re16k_t400.zarr
       configs/evaluation/default.yaml:
+        drift_band:
+          climatology: data/processed/climatology.json
+          window_steps: 837
+          stride: 20
+          block_steps: 100
+          slow_from: 300
+          max_offset: 1.0
+          max_std_ratio: 2.0
         multistart.leads: 237
         multistart.stride: 20
+        rollouts:
+          steps: 3000
+          monitor_starts:
+          - 0
+          - 320
         skill_threshold: 0.32
         stability:
           block_steps: 100
           max_ratio: 2.0
           neighbors: 2
         tie_break_lead: 10
+        usable_threshold: 0.8
       configs/model/hankel_dmd.yaml:
         delays: 4
         rank: 1000
@@ -282,6 +308,10 @@ stages:
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
       size: 0
+    - path: src/mhd_surrogate/data/climatology.py
+      hash: md5
+      md5: 9df2bb2059d2ee3ddb8cdb7f7c3c597e
+      size: 7484
     - path: src/mhd_surrogate/data/grid.py
       hash: md5
       md5: 838dd3ea41d2816c0b63e6b6187b0729
@@ -296,17 +326,17 @@ stages:
       size: 1480
     - path: src/mhd_surrogate/evaluation
       hash: md5
-      md5: f8c500a1c868e7b28d30be38a54a9a1a.dir
-      size: 118897
-      nfiles: 13
+      md5: 02e0ae4cc0ede5aae169f36f80934c18.dir
+      size: 136814
+      nfiles: 14
     - path: src/mhd_surrogate/models/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
       size: 0
     - path: src/mhd_surrogate/models/base.py
       hash: md5
-      md5: 422a9f1f452c4556c0782ab4f0307fc4
-      size: 7831
+      md5: a2454972a25406c46c829008deecdbd5
+      size: 8081
     - path: src/mhd_surrogate/models/dmd.py
       hash: md5
       md5: 9264ddb4fa9088b140d3dad6b523a6a9
@@ -337,8 +367,8 @@ stages:
       size: 4221
     - path: src/mhd_surrogate/training/scoring.py
       hash: md5
-      md5: 2398c55482333b854f25b0d2057f5a45
-      size: 8486
+      md5: 2ac75d7e1d45234278315c304561160b
+      size: 8490
     - path: src/mhd_surrogate/training/startup.py
       hash: md5
       md5: 6294a36299cccb2b3df42388eea29701
@@ -472,16 +502,16 @@ stages:
       size: 5809
     - path: src/mhd_surrogate/evaluation/metrics.py
       hash: md5
-      md5: 96ce37a66a7907f8d8940096d3c397a9
-      size: 19305
+      md5: 3fa4bf0918defd1204dbeeb95cfb33eb
+      size: 20884
     - path: src/mhd_surrogate/evaluation/protocol.py
       hash: md5
-      md5: 0da13cc07de5dccfd4cc2e07c13e0cc9
-      size: 24330
+      md5: ccfd3f56ff45aae8663159520c1fc831
+      size: 25462
     - path: src/mhd_surrogate/evaluation/quantities.py
       hash: md5
-      md5: 4b7e6dcf32eb99293b420aa635cd29fd
-      size: 3057
+      md5: ffb60fe7565c4c71933d71956da33c31
+      size: 3769
     - path: src/mhd_surrogate/evaluation/rollout.py
       hash: md5
       md5: 5034d62c5f1b15a0c1c423a3c3dc13f0
@@ -496,8 +526,8 @@ stages:
       size: 0
     - path: src/mhd_surrogate/models/base.py
       hash: md5
-      md5: 422a9f1f452c4556c0782ab4f0307fc4
-      size: 7831
+      md5: a2454972a25406c46c829008deecdbd5
+      size: 8081
     - path: src/mhd_surrogate/models/dmd.py
       hash: md5
       md5: 9264ddb4fa9088b140d3dad6b523a6a9
@@ -628,12 +658,12 @@ stages:
       size: 0
     - path: src/mhd_surrogate/evaluation/protocol.py
       hash: md5
-      md5: 0da13cc07de5dccfd4cc2e07c13e0cc9
-      size: 24330
+      md5: ccfd3f56ff45aae8663159520c1fc831
+      size: 25462
     - path: src/mhd_surrogate/evaluation/quantities.py
       hash: md5
-      md5: 4b7e6dcf32eb99293b420aa635cd29fd
-      size: 3057
+      md5: ffb60fe7565c4c71933d71956da33c31
+      size: 3769
     - path: src/mhd_surrogate/evaluation/rollout.py
       hash: md5
       md5: 5034d62c5f1b15a0c1c423a3c3dc13f0
@@ -648,8 +678,8 @@ stages:
       size: 0
     - path: src/mhd_surrogate/models/base.py
       hash: md5
-      md5: 422a9f1f452c4556c0782ab4f0307fc4
-      size: 7831
+      md5: a2454972a25406c46c829008deecdbd5
+      size: 8081
     - path: src/mhd_surrogate/models/dmd.py
       hash: md5
       md5: 9264ddb4fa9088b140d3dad6b523a6a9
@@ -727,3 +757,39 @@ stages:
       hash: md5
       md5: c9962a1f5ef99de6dfdfab0ea8fcc9ea
       size: 117
+  compute_climatology:
+    cmd: uv run scripts/data/compute_climatology.py
+    deps:
+    - path: data/processed/re16k_t400.zarr
+      hash: md5
+      md5: 2dc98618c845bdf17445bc3b15f59ca7.dir
+      size: 9441145296
+      nfiles: 293
+    - path: scripts/data/compute_climatology.py
+      hash: md5
+      md5: ccee29a7e60170b805845ad7c55569f9
+      size: 3482
+    - path: src/mhd_surrogate/data/climatology.py
+      hash: md5
+      md5: 9df2bb2059d2ee3ddb8cdb7f7c3c597e
+      size: 7484
+    params:
+      configs/data/re16k.yaml:
+        train_datasets:
+        - re16k_t400_0
+        - re16k_t400_1
+        - re16k_t400_2
+        - re16k_t400_3
+        - re16k_t400_4
+        - re16k_t400_9
+        - re16k_t400_10
+        zarr_store: data/processed/re16k_t400.zarr
+      configs/evaluation/default.yaml:
+        drift_band.block_steps: 100
+        drift_band.stride: 20
+        drift_band.window_steps: 837
+    outs:
+    - path: data/processed/climatology.json
+      hash: md5
+      md5: c03e634f037b73d8c5b92c42fb25850c
+      size: 741

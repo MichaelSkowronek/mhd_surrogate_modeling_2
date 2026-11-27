@@ -30,20 +30,28 @@ from mhd_surrogate.evaluation.selection import start_ensembles
 from mhd_surrogate.evaluation.stability import QUANTITIES, stability_scores
 
 
-def candidate_stable_fraction(model: ForecastModel, evaluation: Evaluation) -> float | None:
-    """The stable fraction the selection rule's check reads (CLAUDE.md,
-    "Data analysis"), given the model's `evaluation` on the validation
-    dataset. An iteratively trained model's is its training run's, around
-    the epoch it kept (its `fit_info`, from
-    `evaluation.selection.RunSelection`); None if its checkpoint predates
-    it, which fails the check. A closed-form fit is the same model on
-    every refit, so its forecast decides: the share of its members stable
-    (1 or 0 for a deterministic model)."""
+def candidate_fraction(model: ForecastModel, evaluation: Evaluation) -> tuple[str, float] | None:
+    """The fraction the selection rule's check reads (CLAUDE.md, "Data
+    analysis") and its name, given the model's `evaluation` on the
+    validation dataset. An iteratively trained model's is its training
+    run's, around the epoch it kept (its `fit_info`, from
+    `evaluation.selection.RunSelection`): its `usable_fraction`, or the
+    `stable_fraction` of a checkpoint trained before the rule judged
+    rollouts; None if it has neither, which fails the check. A closed-form
+    fit is the same model on every refit, so its forecast decides: the
+    share of its members stable over the validation forecast, its
+    `stable_fraction` (1 or 0 for a deterministic model), until the final
+    scoring rolls it out too."""
     if getattr(model, "iterative", False):
-        fraction = getattr(model, "fit_info", {}).get("stable_fraction")
-        return None if fraction is None else float(fraction)
+        info = getattr(model, "fit_info", {})
+        for name in ("usable_fraction", "stable_fraction"):
+            if info.get(name) is not None:
+                return name, float(info[name])
+        return None
     n_steps = len(evaluation.rmse)
-    return float(np.mean([s["stable_steps"] >= n_steps for s in evaluation.members]))
+    return "stable_fraction", float(
+        np.mean([s["stable_steps"] >= n_steps for s in evaluation.members])
+    )
 
 
 def train_eval_datasets(requested: list[str], train_datasets: list[str]) -> list[str]:

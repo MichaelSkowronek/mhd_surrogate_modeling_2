@@ -151,6 +151,26 @@ def start_seeds(n_starts: int, n_members: int, monitor: bool = False) -> list[li
     return [[SEEDS_PER_START * k + first + m for m in range(n_members)] for k in range(n_starts)]
 
 
+def rollout_seed(start_index: int, members: int, validation: int) -> int:
+    """The seed of validation `validation`'s rollout from the
+    `start_index`-th start (`skill_starts`' order): in that start's range
+    for the validations (`start_seeds`, `monitor`), past its `members`
+    skill members, and a new one at every validation, so that the rollouts
+    of the validations around an epoch are independent draws: failures
+    follow the seed (a step's noise comes from the seed and the step's
+    index; run 1's rollouts failed by seed, not by start), and with one
+    seed at every validation the usable fraction would measure that seed.
+    The skill's members keep theirs, so epochs compare on the same draws."""
+    room = SEEDS_PER_START - MONITOR_SEEDS - members
+    if start_index < 0 or validation < 0:
+        raise ValueError(
+            f"start_index and validation must be >= 0, got {start_index}, {validation}"
+        )
+    if room < 1:
+        raise ValueError(f"{members} members leave no validation seeds for rollouts")
+    return SEEDS_PER_START * start_index + MONITOR_SEEDS + members + validation % room
+
+
 def check_window(window: int, context_steps: int) -> None:
     """A model reading more than the context would see scored targets."""
     if not 0 <= window <= context_steps:

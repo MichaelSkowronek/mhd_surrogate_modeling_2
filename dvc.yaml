@@ -33,6 +33,27 @@ stages:
     outs:
       - data/processed/normalization_stats.json
 
+  # The real flow's climatology of its domain-mean velocity, from the
+  # training datasets only: the climatological drift band's reference
+  # (src/mhd_surrogate/data/climatology.py). Small and cached, like the
+  # stats.
+  compute_climatology:
+    cmd: uv run scripts/data/compute_climatology.py
+    deps:
+      - data/processed/re16k_t400.zarr
+      - scripts/data/compute_climatology.py
+      - src/mhd_surrogate/data/climatology.py
+    params:
+      - configs/data/re16k.yaml:
+          - train_datasets
+          - zarr_store
+      - configs/evaluation/default.yaml:
+          - drift_band.window_steps
+          - drift_band.stride
+          - drift_band.block_steps
+    outs:
+      - data/processed/climatology.json
+
   # The canonical model (see README "Data versioning (DVC)" -> "Training
   # stage"), in two stages: `train` fits it and stores the checkpoint,
   # `evaluate` scores the stored checkpoint into metrics.json. A change to
@@ -55,6 +76,7 @@ stages:
     deps:
       - data/processed/re16k_t400.zarr
       - data/processed/normalization_stats.json
+      - data/processed/climatology.json
       - configs/analysis/grid.yaml
       - scripts/training/train.py
       - src/mhd_surrogate/__init__.py
@@ -70,6 +92,7 @@ stages:
       - src/mhd_surrogate/evaluation/quantities.py
       - src/mhd_surrogate/evaluation/selection.py
       - src/mhd_surrogate/evaluation/stability.py
+      - src/mhd_surrogate/evaluation/usable.py
       - src/mhd_surrogate/training/__init__.py
       - src/mhd_surrogate/training/export.py
       - src/mhd_surrogate/training/mlflow_model.py
@@ -78,6 +101,7 @@ stages:
       - src/mhd_surrogate/training/startup.py
       - src/mhd_surrogate/training/tracking.py
       - src/mhd_surrogate/data/__init__.py
+      - src/mhd_surrogate/data/climatology.py
       - src/mhd_surrogate/data/grid.py
       - src/mhd_surrogate/data/normalization.py
       - src/mhd_surrogate/data/versioning.py
@@ -90,8 +114,9 @@ stages:
       - src/mhd_surrogate/utils/hydra_resolvers.py
     # The keys that change the fitted model: its own, the data it's fitted
     # on, and what early stopping scores on (the validation dataset and the
-    # selection rule, the multi-start skill's starts and leads too) for a
-    # model trained iteratively. Performance knobs (chunk sizes) are left out
+    # selection rule: the multi-start skill's starts and leads, the
+    # rollouts, the drift band -- with the climatology file above -- and
+    # the usable fraction's threshold) for a model trained iteratively. Performance knobs (chunk sizes) are left out
     # so tuning them doesn't retrain, and so are monitor_members,
     # member_batch and monitor_batch while the canonical model is
     # deterministic (they can't change its fit).
@@ -114,6 +139,9 @@ stages:
           - multistart.stride
           - multistart.leads
           - stability
+          - rollouts
+          - drift_band
+          - usable_threshold
     outs:
       - models/hankel_dmd/model
 
@@ -144,6 +172,7 @@ stages:
       - src/mhd_surrogate/training/startup.py
       - src/mhd_surrogate/training/tracking.py
       - src/mhd_surrogate/data/__init__.py
+      - src/mhd_surrogate/data/climatology.py
       - src/mhd_surrogate/data/grid.py
       - src/mhd_surrogate/data/normalization.py
       - src/mhd_surrogate/data/versioning.py

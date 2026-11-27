@@ -42,7 +42,7 @@ from mhd_surrogate.training.tracking import tracked_run  # noqa: E402
 from mhd_surrogate.training.tuning import (  # noqa: E402
     METRIC,
     MODE,
-    STABLE_FRACTION,
+    USABLE_FRACTION,
     close_stopped_runs,
     default_point,
     recording_asha,
@@ -97,8 +97,8 @@ def main(cfg: DictConfig) -> None:
         best = results.get_best_result(METRIC, MODE, scope="last")
         mlflow.log_params({f"best.{k}": v for k, v in best.config.items()})
         mlflow.log_metric("best.selection_score", best.metrics[METRIC])
-        if STABLE_FRACTION in best.metrics:
-            mlflow.log_metric("best.stable_fraction", best.metrics[STABLE_FRACTION])
+        if USABLE_FRACTION in best.metrics:
+            mlflow.log_metric("best.usable_fraction", best.metrics[USABLE_FRACTION])
         mlflow.set_tag("best_run_id", best.metrics["mlflow_run_id"])
         log.info("best trial: %s (MLflow run %s)", best.config, best.metrics["mlflow_run_id"])
 

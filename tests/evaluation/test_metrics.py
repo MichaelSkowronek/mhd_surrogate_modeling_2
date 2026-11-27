@@ -245,29 +245,72 @@ def test_selection_score_accepts_a_crps_rounded_a_hair_below_zero():
     assert selection_score(10, -1e-17, 20, 20, WITHIN) == pytest.approx(20 * 21 + 10)
 
 
-def test_selection_score_ranks_a_stable_forecasts_fraction_above_any_skill_and_crps():
+def test_selection_score_ranks_windows_at_the_usable_threshold_by_skill_alone():
     n_steps, m = 20, 5
 
     def score(fraction, skill, crps):
-        return selection_score(skill, crps, n_steps, n_steps, WITHIN, fraction, n_forecasts=m)
+        return selection_score(skill, crps, n_steps, n_steps, WITHIN, fraction, 0.8, n_forecasts=m)
 
-    # Fractions of up to 5 forecasts: 2/3 and 3/5 are the closest distinct pair.
-    ranked = [(1.0, 0, 9.0), (0.8, 20, 0.0), (0.8, 3, 0.1), (2 / 3, 0, 9.0), (3 / 5, 20, 0.0)]
+    # At or above the threshold the fraction no longer counts: skill decides.
+    assert score(0.8, 20, 0.0) > score(1.0, 3, 0.1)
+    assert score(1.0, 5, 0.2) == score(0.8, 5, 0.2)
+    # Below it, the fraction first (of up to 5 rollouts 2/3 and 3/5 are the
+    # closest distinct pair), then skill, and every window at the threshold
+    # above them.
+    ranked = [(0.8, 0, 9.0), (3 / 4, 20, 0.0), (3 / 4, 0, 9.0), (2 / 3, 20, 0.0), (3 / 5, 20, 0.0)]
     scores = [score(*candidate) for candidate in ranked]
-
     assert scores == sorted(scores, reverse=True)
-    assert score(2 / 3, 0, math.inf) >= score(3 / 5, n_steps, 0.0)  # ties at worst
+    assert score(0.8, 0, math.inf) >= score(3 / 4, n_steps, 0.0)  # ties at worst
+    assert score(2 / 3, 0, math.inf) >= score(3 / 5, n_steps, 0.0)
 
 
-def test_selection_score_ignores_the_fraction_of_an_unstable_forecast():
-    with_fraction = selection_score(7, 0.5, 19, 20, BLOWN_UP, stable_fraction=1.0, n_forecasts=5)
+def test_with_a_threshold_of_one_only_every_rollout_usable_ranks_by_skill():
+    def score(fraction, skill):
+        return selection_score(skill, 0.0, 20, 20, WITHIN, fraction, 1.0, n_forecasts=5)
 
-    assert with_fraction == selection_score(7, 0.5, 19, 20, BLOWN_UP)
-    # A stable forecast without a bonus still scores at least any unstable one.
+    assert score(1.0, 0) > score(4 / 5, 20) > score(3 / 4, 20)
+
+
+def test_a_candidate_none_of_whose_own_rollouts_is_usable_does_not_reach_the_threshold():
+    n_steps, m = 20, 10
+
+    def score(fraction, skill, own_usable=True):
+        return selection_score(
+            skill, 0.0, n_steps, n_steps, WITHIN, fraction, 0.8, m, own_usable=own_usable
+        )
+
+    # At the threshold with its own two failed: below every window reaching
+    # it with a usable rollout of its own, whatever its skill...
+    assert score(0.8, 20, own_usable=False) < score(0.8, 0)
+    # ...but above every window below the threshold.
+    assert score(0.8, 0, own_usable=False) > score(0.7, 20)
+    # Below the threshold its fraction counts as before.
+    assert score(0.7, 5, own_usable=False) == score(0.7, 5)
+
+
+def test_a_fraction_of_one_includes_the_candidates_own_usable_rollouts():
+    with pytest.raises(ValueError, match="own usable rollouts"):
+        selection_score(7, 0.5, 20, 20, WITHIN, 1.0, 0.8, 10, own_usable=False)
+
+
+def test_the_usable_fraction_ranks_before_stability():
+    # A larger fraction outranks the median's stability (both below 0.8).
+    unstable = selection_score(7, 0.5, 19, 20, BLOWN_UP, 3 / 5, n_forecasts=5)
+    stable = selection_score(20, 0.0, 20, 20, WITHIN, 2 / 5, n_forecasts=5)
+    assert unstable > stable
+    # With the same fraction (or none) stability first: a stable median
+    # scores at least any unstable one.
     assert selection_score(0, math.inf, 20, 20, WITHIN) >= selection_score(20, 0.0, 19, 20, 1.0)
+    same = selection_score(0, math.inf, 20, 20, WITHIN, 2 / 5, n_forecasts=5)
+    assert same >= selection_score(20, 0.0, 19, 20, 1.0, 2 / 5, n_forecasts=5)
 
 
-@pytest.mark.parametrize("fraction, n_forecasts", [(-0.1, 1), (1.1, 1), (0.5, 0)])
-def test_selection_score_rejects_an_impossible_fraction_or_count(fraction, n_forecasts):
+@pytest.mark.parametrize(
+    "fraction, threshold, n_forecasts",
+    [(-0.1, 0.8, 1), (1.1, 0.8, 1), (0.5, 0.8, 0), (0.5, 0.0, 1), (0.5, 1.5, 1)],
+)
+def test_selection_score_rejects_an_impossible_fraction_threshold_or_count(
+    fraction, threshold, n_forecasts
+):
     with pytest.raises(ValueError):
-        selection_score(7, 0.5, 20, 20, WITHIN, stable_fraction=fraction, n_forecasts=n_forecasts)
+        selection_score(7, 0.5, 20, 20, WITHIN, fraction, threshold, n_forecasts)

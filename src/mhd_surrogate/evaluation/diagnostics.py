@@ -36,13 +36,16 @@ from mhd_surrogate.analysis.fields import divergence
 from mhd_surrogate.analysis.spectral import interpolated_peak, spectrum_sum, welch_spectrum
 from mhd_surrogate.evaluation.quantities import (
     DEFAULT_CHUNK_T,
+    device_domain_mean,
     device_energy_and_enstrophy,
     device_gradient,
     enstrophy,
     kinetic_energy,
 )
 
-__all__ = ["DEFAULT_CHUNK_T", "enstrophy", "kinetic_energy"]  # re-exported
+# Re-exported; device_domain_mean lives in quantities.py since the rollouts
+# early stopping scores need it too (evaluation/usable.py).
+__all__ = ["DEFAULT_CHUNK_T", "device_domain_mean", "enstrophy", "kinetic_energy"]
 # Welch segment length in steps, as in the EDA's temporal spectra
 # (scripts/analysis/check_spatial_mean_spectrum.py); overlap defaults to half.
 NPERSEG = 200
@@ -103,17 +106,6 @@ def device_spectrum_sum(frames: jax.Array, axis: int, spacing: float) -> jax.Arr
     transform = jnp.fft.rfft(detrended * window.reshape(shape).astype(np.float32), axis=axis)
     power = jnp.moveaxis(jnp.abs(transform) ** 2, axis, -1) * factor.astype(np.float32)
     return jnp.sum(jnp.mean(power, axis=2), axis=0)
-
-
-def device_domain_mean(frames: jax.Array) -> tuple[jax.Array, jax.Array]:
-    """The spatial mean of (t, C, Nx, Ny) frames per step and channel as
-    two float32 parts, (reference, correction), (t, C) each, whose sum in
-    float64 is the mean: the domain-mean u_x is ~1 and varies by ~0.4% of
-    that over time, so one float32 mean (~1e-7 relative) would be off by
-    ~5e-5 of that variation; the correction, a mean of values around 0, is
-    good to ~1e-7 of it."""
-    reference = jnp.mean(jnp.mean(frames, axis=3), axis=2)
-    return reference, jnp.mean(frames - reference[..., None, None], axis=(2, 3))
 
 
 @partial(jax.jit, static_argnames=("dx", "dy"))
